@@ -19,7 +19,17 @@ import type { AuditResult } from "@/lib/lighthouse/types";
 // wired in (no real fork / Chrome launch during unit tests).
 vi.mock("@/lib/queue/runAuditWorker", () => ({ runAuditInWorker: vi.fn() }));
 
+// Mock the persistence seam so the queue's DB/disk side effects don't touch the
+// real SQLite file or write report files during unit tests.
+vi.mock("@/lib/db/persistence", () => ({
+  recordBatch: vi.fn(),
+  recordRun: vi.fn().mockResolvedValue(undefined),
+  recordFailedRun: vi.fn(),
+  updateBatchStatus: vi.fn(),
+}));
+
 const { runAuditInWorker } = await import("@/lib/queue/runAuditWorker");
+const persistence = await import("@/lib/db/persistence");
 const { AuditQueue, getAuditQueue } = await import("@/lib/queue/AuditQueue");
 
 import {
@@ -32,6 +42,9 @@ import {
 } from "@/lib/queue/types";
 
 const mockRunAudit = vi.mocked(runAuditInWorker);
+const mockRecordBatch = vi.mocked(persistence.recordBatch);
+const mockRecordRun = vi.mocked(persistence.recordRun);
+const mockRecordFailedRun = vi.mocked(persistence.recordFailedRun);
 
 const OPTIONS: CreateBatchInput["options"] = {
   formFactor: "mobile",
@@ -91,6 +104,9 @@ function awaitBatch(
 describe("AuditQueue", () => {
   beforeEach(() => {
     mockRunAudit.mockReset();
+    mockRecordBatch.mockClear();
+    mockRecordRun.mockClear();
+    mockRecordFailedRun.mockClear();
   });
 
   it("createBatch returns an all-queued snapshot with correct counts and ids", () => {
@@ -342,5 +358,33 @@ describe("AuditQueue", () => {
     const fresh = queue.getBatch(batch.id)!;
     expect(fresh.status).not.toBe("completed");
     expect(fresh.jobs[0].status).not.toBe("error");
+  });
+
+  it("wires the queue into persistence (recordBatch/recordRun on success, recordFailedRun on failure)", async () => {
+    const queue = new AuditQueue();
+
+    // Successful single-URL batch → recordBatch + recordRun.
+    mockRunAudit.mockResolvedValue(makeResult("https://a.test/", 90));
+    const okBatch = queue.createBatch({
+      urls: ["https://a.test/"],
+      options: OPTIONS,
+      concurrency: 1,
+    });
+    expect(mockRecordBatch).toHaveBeenCalledTimes(1);
+    const ok = awaitBatch(queue, okBatch.id);
+    await ok.done;
+    expect(mockRecordRun).toHaveBeenCalledTimes(1);
+    expect(mockRecordFailedRun).not.toHaveBeenCalled();
+
+    // Rejecting job → recordFailedRun.
+    mockRunAudit.mockRejectedValue(new Error("boom"));
+    const errBatch = queue.createBatch({
+      urls: ["https://err.test/"],
+      options: OPTIONS,
+      concurrency: 1,
+    });
+    const err = awaitBatch(queue, errBatch.id);
+    await err.done;
+    expect(mockRecordFailedRun).toHaveBeenCalledTimes(1);
   });
 });

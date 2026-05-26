@@ -32,6 +32,12 @@ import { EventEmitter } from "node:events";
 import PQueue from "p-queue";
 import { nanoid } from "nanoid";
 
+import {
+  recordBatch,
+  recordFailedRun,
+  recordRun,
+  updateBatchStatus,
+} from "@/lib/db/persistence";
 import type { AuditResult } from "@/lib/lighthouse/types";
 import { runAuditInWorker } from "@/lib/queue/runAuditWorker";
 import {
@@ -174,6 +180,9 @@ export class AuditQueue implements AuditQueueApi {
 
     this.batches.set(batchId, batch);
 
+    // Index the freshly-created batch (pure side effect; never throws).
+    recordBatch(batch);
+
     // Enqueue one task per job. Each task is self-contained and never rejects
     // (failures are caught and recorded), so one bad URL can't poison the queue.
     //
@@ -240,6 +249,11 @@ export class AuditQueue implements AuditQueueApi {
     if (batch.status === "queued") {
       batch.status = "running";
       batch.startedAt = job.startedAt;
+      // Mirror the queued→running transition to the persistence index.
+      updateBatchStatus(batchId, {
+        status: "running",
+        startedAt: job.startedAt,
+      });
     }
     this.emit(batchId, {
       type: "job-started",
@@ -257,6 +271,10 @@ export class AuditQueue implements AuditQueueApi {
       job.status = "done";
       job.finishedAt = now();
       job.result = toResultLite(result);
+      // Persist the run (report files + indexed row) BEFORE announcing the job
+      // as done, so the report files exist by the time the UI reacts. recordRun
+      // never throws, so no extra try/catch is required.
+      await recordRun(batch, job, result);
       this.emit(batchId, {
         type: "job-completed",
         batchId,
@@ -267,6 +285,8 @@ export class AuditQueue implements AuditQueueApi {
       job.status = "error";
       job.finishedAt = now();
       job.error = { message: errorMessage(err) };
+      // Index the failed run BEFORE announcing the failure.
+      recordFailedRun(batch, job);
       this.emit(batchId, {
         type: "job-failed",
         batchId,
@@ -295,6 +315,11 @@ export class AuditQueue implements AuditQueueApi {
     const hasError = batch.jobs.some((j) => j.status === "error");
     batch.status = hasError ? "completed_with_errors" : "completed";
     batch.finishedAt = now();
+    // Persist the terminal status / finishedAt for the History view.
+    updateBatchStatus(batch.id, {
+      status: batch.status,
+      finishedAt: batch.finishedAt,
+    });
     this.emit(batch.id, { type: "batch-completed", batch: cloneBatch(batch) });
   }
 }

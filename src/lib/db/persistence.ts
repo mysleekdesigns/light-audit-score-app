@@ -1,0 +1,317 @@
+/**
+ * Persistence layer — the seam between the audit queue, the report/history API,
+ * and the History UI (PRD §6 Phase 4).
+ *
+ * Responsibilities:
+ *  - `recordBatch` / `updateBatchStatus` — index a batch and track its lifecycle.
+ *  - `recordRun` — on a successful job: write the raw LHR JSON **and** a rendered
+ *    standalone Lighthouse HTML report to `./data/reports/`, then index the run
+ *    row (median scores as sortable columns, metrics/options as JSON, report
+ *    filenames). `recordFailedRun` indexes a failed job (scores/reports null).
+ *  - `listHistory` — every persisted run, newest first, for the History table.
+ *  - `getRunReport` — a run's stored report file paths, for `GET /api/reports/:runId`.
+ *
+ * Design notes:
+ *  - **Never throws.** Persistence is a side effect of auditing; a DB/disk error
+ *    must not fail an audit that already succeeded in-memory. Every export is
+ *    wrapped so failures are logged and swallowed (reads degrade to empty).
+ *  - **HTML is best-effort.** The JSON report (raw LHR) is always written; the
+ *    HTML report is generated via Lighthouse's `ReportGenerator` (dynamic import,
+ *    same as the legacy report route) and any failure there leaves `reportHtml`
+ *    null without affecting the JSON path or the row.
+ *  - **Sync where it can be.** `better-sqlite3` is synchronous, so DB writes/reads
+ *    are sync; only file IO + the HTML generator make `recordRun` async.
+ */
+
+import { promises as fs } from "node:fs";
+
+import { desc, eq } from "drizzle-orm";
+
+import { getDb } from "@/lib/db/client";
+import {
+  getReportsDir,
+  reportHtmlFilename,
+  reportHtmlPath,
+  reportJsonFilename,
+  reportJsonPath,
+} from "@/lib/db/paths";
+import { batches, runs, type RunRow } from "@/lib/db/schema";
+import type {
+  AuditResult,
+  CategoryScores,
+  CoreWebVitals,
+  FormFactor,
+} from "@/lib/lighthouse/types";
+import type { AuditJob, Batch, BatchStatus } from "@/lib/queue/types";
+
+/** A persisted run flattened for the History table (newest-first listing). */
+export interface HistoryRow {
+  /** Run id (== report runId). */
+  id: string;
+  batchId: string;
+  url: string;
+  finalUrl: string | null;
+  status: "done" | "error";
+  errorMessage: string | null;
+  formFactor: FormFactor;
+  /** Number of runs the median was taken over (null for failures). */
+  runs: number | null;
+  /** Median category scores (0–100), assembled from the row's score columns. */
+  scores: CategoryScores;
+  /** Whether a stored JSON / HTML report exists for this run. */
+  hasJsonReport: boolean;
+  hasHtmlReport: boolean;
+  /** ISO fetchTime from the median LHR (null for failures). */
+  fetchTime: string | null;
+  /** ISO timestamp the row was persisted. */
+  createdAt: string;
+}
+
+/** A run's stored report file locations, for the report endpoint. */
+export interface RunReport {
+  id: string;
+  url: string;
+  /** Absolute path to the raw LHR JSON, or null if not stored. */
+  jsonPath: string | null;
+  /** Absolute path to the standalone HTML report, or null if not stored. */
+  htmlPath: string | null;
+}
+
+/** Log + swallow a persistence failure (never propagate to the caller). */
+function warn(op: string, err: unknown): void {
+  const message = err instanceof Error ? err.message : String(err);
+  console.warn(`[persistence] ${op} failed: ${message}`);
+}
+
+/** Round a 0–100 score to an int column value, mapping null/undefined/NaN → null. */
+function toScoreInt(value: number | null | undefined): number | null {
+  if (value === null || value === undefined || Number.isNaN(value)) return null;
+  return Math.round(value);
+}
+
+/** Current ISO timestamp. */
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+// --- Batch lifecycle -------------------------------------------------------
+
+/** Index a freshly-created batch. Idempotent (no-op if the id already exists). */
+export function recordBatch(batch: Batch): void {
+  try {
+    getDb()
+      .insert(batches)
+      .values({
+        id: batch.id,
+        status: batch.status,
+        options: JSON.stringify(batch.options),
+        concurrency: batch.concurrency,
+        total: batch.jobs.length,
+        createdAt: batch.createdAt,
+        startedAt: batch.startedAt ?? null,
+        finishedAt: batch.finishedAt ?? null,
+      })
+      .onConflictDoNothing()
+      .run();
+  } catch (err) {
+    warn("recordBatch", err);
+  }
+}
+
+/** Patch a batch's lifecycle status / timestamps. */
+export function updateBatchStatus(
+  batchId: string,
+  patch: { status: BatchStatus; startedAt?: string; finishedAt?: string },
+): void {
+  try {
+    const set: Partial<{
+      status: string;
+      startedAt: string;
+      finishedAt: string;
+    }> = { status: patch.status };
+    if (patch.startedAt !== undefined) set.startedAt = patch.startedAt;
+    if (patch.finishedAt !== undefined) set.finishedAt = patch.finishedAt;
+    getDb().update(batches).set(set).where(eq(batches.id, batchId)).run();
+  } catch (err) {
+    warn("updateBatchStatus", err);
+  }
+}
+
+// --- Run persistence -------------------------------------------------------
+
+/**
+ * Persist a successful run: write the JSON (raw LHR) and best-effort HTML report
+ * files, then index the run row. Never throws.
+ */
+export async function recordRun(
+  batch: Batch,
+  job: AuditJob,
+  result: AuditResult,
+): Promise<void> {
+  try {
+    await fs.mkdir(getReportsDir(), { recursive: true });
+
+    // Raw LHR JSON — exactly what `GET /api/reports/:runId` (default) serves.
+    await fs.writeFile(
+      reportJsonPath(job.id),
+      JSON.stringify(result.median.lhr),
+      "utf8",
+    );
+
+    // Standalone HTML report — best effort; failure leaves reportHtml null.
+    let htmlFilename: string | null = null;
+    try {
+      const html = await generateHtmlReport(result.median.lhr);
+      await fs.writeFile(reportHtmlPath(job.id), html, "utf8");
+      htmlFilename = reportHtmlFilename(job.id);
+    } catch (err) {
+      warn("recordRun:html", err);
+    }
+
+    const scores = result.median.scores;
+    getDb()
+      .insert(runs)
+      .values({
+        id: job.id,
+        batchId: batch.id,
+        idx: job.index,
+        url: result.requestedUrl || job.url,
+        finalUrl: result.finalUrl ?? null,
+        status: "done",
+        errorMessage: null,
+        formFactor: result.options.formFactor,
+        throttling: result.options.throttling,
+        runs: result.runs,
+        lighthouseVersion: result.lighthouseVersion,
+        scorePerformance: toScoreInt(scores.performance),
+        scoreAccessibility: toScoreInt(scores.accessibility),
+        scoreBestPractices: toScoreInt(scores["best-practices"]),
+        scoreSeo: toScoreInt(scores.seo),
+        options: JSON.stringify(result.options),
+        metrics: JSON.stringify(result.median.metrics),
+        reportJson: reportJsonFilename(job.id),
+        reportHtml: htmlFilename,
+        fetchTime: result.fetchTime ?? null,
+        createdAt: nowIso(),
+      })
+      .onConflictDoNothing()
+      .run();
+  } catch (err) {
+    warn("recordRun", err);
+  }
+}
+
+/** Index a failed run (no scores, no report files). Never throws. */
+export function recordFailedRun(batch: Batch, job: AuditJob): void {
+  try {
+    getDb()
+      .insert(runs)
+      .values({
+        id: job.id,
+        batchId: batch.id,
+        idx: job.index,
+        url: job.url,
+        finalUrl: null,
+        status: "error",
+        errorMessage: job.error?.message ?? "Unknown error",
+        formFactor: batch.options.formFactor,
+        throttling: batch.options.throttling,
+        runs: null,
+        lighthouseVersion: null,
+        scorePerformance: null,
+        scoreAccessibility: null,
+        scoreBestPractices: null,
+        scoreSeo: null,
+        options: JSON.stringify(batch.options),
+        metrics: null,
+        reportJson: null,
+        reportHtml: null,
+        fetchTime: null,
+        createdAt: nowIso(),
+      })
+      .onConflictDoNothing()
+      .run();
+  } catch (err) {
+    warn("recordFailedRun", err);
+  }
+}
+
+// --- Reads -----------------------------------------------------------------
+
+/** Every persisted run, newest first. Returns `[]` on any error. */
+export function listHistory(): HistoryRow[] {
+  try {
+    const rows = getDb()
+      .select()
+      .from(runs)
+      .orderBy(desc(runs.createdAt))
+      .all();
+    return rows.map(rowToHistory);
+  } catch (err) {
+    warn("listHistory", err);
+    return [];
+  }
+}
+
+/** A run's stored report file paths, or `undefined` if unknown. */
+export function getRunReport(runId: string): RunReport | undefined {
+  try {
+    const row = getDb().select().from(runs).where(eq(runs.id, runId)).get();
+    if (!row) return undefined;
+    return {
+      id: row.id,
+      url: row.url,
+      jsonPath: row.reportJson ? reportJsonPath(row.id) : null,
+      htmlPath: row.reportHtml ? reportHtmlPath(row.id) : null,
+    };
+  } catch (err) {
+    warn("getRunReport", err);
+    return undefined;
+  }
+}
+
+// --- Internals -------------------------------------------------------------
+
+/** Flatten a `runs` row into a {@link HistoryRow}. */
+function rowToHistory(row: RunRow): HistoryRow {
+  const scores: CategoryScores = {
+    performance: row.scorePerformance,
+    accessibility: row.scoreAccessibility,
+    "best-practices": row.scoreBestPractices,
+    seo: row.scoreSeo,
+  };
+  return {
+    id: row.id,
+    batchId: row.batchId,
+    url: row.url,
+    finalUrl: row.finalUrl,
+    status: row.status === "error" ? "error" : "done",
+    errorMessage: row.errorMessage,
+    formFactor: row.formFactor === "desktop" ? "desktop" : "mobile",
+    runs: row.runs,
+    scores,
+    hasJsonReport: row.reportJson !== null,
+    hasHtmlReport: row.reportHtml !== null,
+    fetchTime: row.fetchTime,
+    createdAt: row.createdAt,
+  };
+}
+
+/**
+ * Render a standalone Lighthouse HTML report from a raw LHR. Dynamic import so
+ * Lighthouse's report generator stays out of the module graph until needed
+ * (`lighthouse` is in `serverExternalPackages`, so never bundled). Mirrors the
+ * generation that `GET /api/reports/:runId?format=html` previously did inline.
+ */
+async function generateHtmlReport(lhr: unknown): Promise<string> {
+  const { ReportGenerator } = await import(
+    "lighthouse/report/generator/report-generator.js"
+  );
+  return ReportGenerator.generateReport(
+    lhr as Parameters<typeof ReportGenerator.generateReport>[0],
+    "html",
+  ) as string;
+}
+
+// Re-export for consumers that want to assemble metrics from a raw row later.
+export type { CoreWebVitals };

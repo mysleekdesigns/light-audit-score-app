@@ -1,19 +1,19 @@
 # PRD — Local Lighthouse Auditing Tool
 
-> **Status:** Phase 3 complete — the Audit UI is live end-to-end. The New Audit page
-> drives the Phase-2 API through a typed client·hook·contract seam: a `NewAuditForm`
-> (URL textarea with live parse via `parseUrls`, device/runs/concurrency/category controls,
-> accuracy warning) POSTs `createBatch`, then `useBatchStream` (an `EventSource` hook with
-> auto-reconnect + self-healing snapshots) feeds a live grid of per-URL cards. Cards move
-> queued→running (skeletons)→done with gauge-style **score rings** (0–49/50–89/90–100 colour
-> bands) and a Core Web Vitals strip; a side `Sheet` shows full metrics, opportunities, and
-> the "Open full HTML report" link; sonner toasts fire on completion/failure. **Verified in
-> a real headless browser (CDP):** pasted 3 URLs, clicked Run, watched scores stream in
-> live (example.com 100/96/92/80, matching the CLI within ±5). Lint, typecheck, build, and
-> **89 unit tests** all green (Phase-3 added `scores`/`parseUrls` helpers + tests). A
-> pre-existing Turbopack build break around the forked worker was fixed (see Phase 3 note).
-> Phases 1–2 (engine, median-of-N, queue, forked-process audits, API/SSE) remain complete
-> underneath. Next up: **Phase 4 — Persistence & history**.
+> **Status:** Phase 4 complete — every run now persists to local SQLite + report files and
+> survives a restart. A Drizzle schema (`batches`, `runs`) with `drizzle-kit` migrations is
+> applied on first DB access by an HMR-safe `better-sqlite3` client; the queue records the
+> batch on create and, on each job, writes the raw LHR JSON **and** a standalone Lighthouse
+> HTML report to `./data/reports/` plus an indexed `runs` row (median scores as sortable
+> columns, metrics/options as JSON). `GET /api/reports/:runId` now serves those files from
+> disk (in-memory fallback for in-flight runs); a new `GET /api/history` + a sortable/filterable
+> **History** page (server-rendered, in-browser sort/filter, score-coloured cells, report links)
+> list past runs. **Verified for real:** audited example.com via the API (100/96/92/80),
+> confirmed the DB row + 211 KB JSON / 397 KB HTML reports on disk, then **restarted the
+> server** and confirmed history + both reports reopened byte-identically from disk. Lint,
+> typecheck, build, and **103 unit tests** all green (Phase-4 added the `db/persistence` layer
+> + API/route tests). Phases 1–3 (engine, median-of-N, forked-process queue, API/SSE, live
+> Audit UI) remain complete underneath. Next up: **Phase 5 — Site discovery (crawl + sitemap)**.
 
 ## 1. Overview
 
@@ -221,14 +221,32 @@ Results are durably persisted to SQLite + disk, so nothing is lost on restart.
 > is unchanged and the env var doubles as an explicit override hook.
 
 ### Phase 4 — Persistence & history
-- [ ] Drizzle schema: `batches`, `runs` (per URL: scores, metrics, options, timestamp,
+- [x] Drizzle schema: `batches`, `runs` (per URL: scores, metrics, options, timestamp,
       report file paths); migrations via `drizzle-kit`
-- [ ] Save median LHR as JSON **and** the Lighthouse HTML report to `./data/reports/`;
+- [x] Save median LHR as JSON **and** the Lighthouse HTML report to `./data/reports/`;
       index row in SQLite
-- [ ] Wire queue → DB writes; serve stored reports via `/api/reports/:runId`
-- [ ] History page: sortable/filterable table of past runs (by URL, date, score)
-- **Verify**: run audits, restart the dev server, confirm history + reports persist and
-      reopen correctly.
+- [x] Wire queue → DB writes; serve stored reports via `/api/reports/:runId`
+- [x] History page: sortable/filterable table of past runs (by URL, date, score)
+- [x] **Verify**: ran a real audit through `POST /api/audits` (example.com → 100/96/92/80,
+      matching Phases 1–3); confirmed the SQLite row + `./data/reports/<runId>.{json,html}`
+      (211 KB JSON / 397 KB HTML) were written, then **killed and restarted the server**
+      (fresh, empty in-memory queue) and confirmed `/api/history`, the `/history` page (SSR),
+      and `GET /api/reports/<runId>?format=html|json` all still returned the run and reopened
+      the byte-identical reports **from disk** (not the in-memory fallback).
+
+> **Phase 4 design notes.** (1) **Self-healing migrations.** The runtime DB client
+> (`src/lib/db/client.ts`, an HMR-safe `globalThis` singleton like the queue) opens SQLite in
+> WAL mode and applies the generated `drizzle/` migrations on first access, so a fresh checkout
+> persists with no manual migrate step. (2) **Disk reports written parent-side.** The queue
+> hands the full lhr-bearing `AuditResult` to `recordRun`, which writes the raw LHR JSON and a
+> best-effort standalone HTML report (via Lighthouse's `ReportGenerator`, dynamic-imported so it
+> stays out of the bundle — `lighthouse` is in `serverExternalPackages`) under `./data/reports/`,
+> then indexes the run. (3) **Persistence never throws.** Every `src/lib/db/persistence.ts`
+> export guards + logs internally, so a DB/disk failure can't flip an audit that already
+> succeeded in-memory. (4) **Reports serve from disk with an in-memory fallback.**
+> `GET /api/reports/:runId` reads the persisted file (surviving restarts); only runs not yet
+> persisted fall back to `getJobResult`. (5) `./data/` (DB + reports) is gitignored; the
+> `drizzle/` migrations are committed.
 
 ### Phase 5 — Site discovery (crawl + sitemap)
 - [ ] `src/lib/crawl/discover.ts`: fetch `sitemap.xml` (+ sitemap index) via
