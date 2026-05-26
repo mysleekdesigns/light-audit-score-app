@@ -1,5 +1,11 @@
 # PRD — Local Lighthouse Auditing Tool
 
+> **Status:** Phase 0 complete — Next.js 16 (App Router, TS) + Tailwind v4 + shadcn/ui
+> scaffold in place; dark "precision instrument" app shell (header, New Audit / History
+> nav) serves on `npm run dev`; all PRD engine/DB deps installed and `next.config.ts`
+> configured with `serverExternalPackages`. Lint, typecheck, production build, and tests
+> all green. Next up: **Phase 1 — Core Lighthouse engine**.
+
 ## 1. Overview
 
 A **locally-run web app** to reliably test the Lighthouse scores of websites, with the
@@ -118,14 +124,14 @@ Results are durably persisted to SQLite + disk, so nothing is lost on restart.
 ## 6. Phased plan with checklists
 
 ### Phase 0 — Scaffold & foundation
-- [ ] `create-next-app` (App Router, TypeScript, Tailwind, ESLint, `src/` dir)
-- [ ] Init `shadcn/ui`; add base components (button, card, input, textarea, table,
+- [x] `create-next-app` (App Router, TypeScript, Tailwind, ESLint, `src/` dir)
+- [x] Init `shadcn/ui`; add base components (button, card, input, textarea, table,
       badge, progress, tabs, dialog, sonner/toast, select, tooltip)
-- [ ] Configure `next.config.ts` (`serverExternalPackages`, Node runtime defaults)
-- [ ] Add deps: `lighthouse`, `chrome-launcher`, `p-queue`, `better-sqlite3`,
+- [x] Configure `next.config.ts` (`serverExternalPackages`, Node runtime defaults)
+- [x] Add deps: `lighthouse`, `chrome-launcher`, `p-queue`, `better-sqlite3`,
       `drizzle-orm`, `drizzle-kit`, `cheerio`, `fast-xml-parser`, `zod`, `nanoid`
-- [ ] App shell: header, nav (New Audit / History), dark mode, base layout
-- **Verify**: `npm run dev` serves the shell; shadcn components render.
+- [x] App shell: header, nav (New Audit / History), dark mode, base layout
+- **Verify**: `npm run dev` serves the shell; shadcn components render. ✅
 
 ### Phase 1 — Core Lighthouse engine (headless, UI-independent)
 - [ ] `src/lib/lighthouse/runAudit.ts`: launch isolated Chrome, run `lighthouse()`,
