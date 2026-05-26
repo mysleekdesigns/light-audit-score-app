@@ -1,10 +1,13 @@
 # PRD — Local Lighthouse Auditing Tool
 
-> **Status:** Phase 0 complete — Next.js 16 (App Router, TS) + Tailwind v4 + shadcn/ui
-> scaffold in place; dark "precision instrument" app shell (header, New Audit / History
-> nav) serves on `npm run dev`; all PRD engine/DB deps installed and `next.config.ts`
-> configured with `serverExternalPackages`. Lint, typecheck, production build, and tests
-> all green. Next up: **Phase 1 — Core Lighthouse engine**.
+> **Status:** Phase 1 complete — the headless Lighthouse engine works end-to-end. A
+> validated options model (zod: form factor / throttling / categories / runs 1–5),
+> `runSingleAudit` (fresh isolated Chrome per run, parsed scores + Core Web Vitals +
+> opportunities + raw LHR, guaranteed Chrome/temp-dir teardown), and median-of-N via
+> `computeMedianRun` (with per-run score spread) are in `src/lib/lighthouse/`. A
+> standalone CLI (`npm run audit -- <url>`) produced scores that **exactly matched**
+> `npx lighthouse` on `example.com` and `www.wikipedia.org`. Lint, typecheck, build,
+> and 30 unit tests all green. Next up: **Phase 2 — Job queue, batch orchestration & API**.
 
 ## 1. Overview
 
@@ -134,14 +137,28 @@ Results are durably persisted to SQLite + disk, so nothing is lost on restart.
 - **Verify**: `npm run dev` serves the shell; shadcn components render. ✅
 
 ### Phase 1 — Core Lighthouse engine (headless, UI-independent)
-- [ ] `src/lib/lighthouse/runAudit.ts`: launch isolated Chrome, run `lighthouse()`,
+- [x] `src/lib/lighthouse/runAudit.ts`: launch isolated Chrome, run `lighthouse()`,
       return parsed result (scores, Core Web Vitals, opportunities, raw LHR)
-- [ ] Median-of-N: run N times, `computeMedianRun`, return median + per-run scores
-- [ ] Options model: form factor, throttling, categories, runs (zod schema + defaults)
-- [ ] Robust teardown: always kill Chrome / clean temp `user-data-dir`, even on error
-- [ ] `scripts/audit-cli.ts`: standalone runner (`tsx scripts/audit-cli.ts <url>`)
-- **Verify**: run the CLI against 2–3 real URLs; confirm scores match a manual
-  `npx lighthouse <url>` run within normal variance.
+- [x] Median-of-N: run N times, `computeMedianRun`, return median + per-run scores
+- [x] Options model: form factor, throttling, categories, runs (zod schema + defaults)
+- [x] Robust teardown: always kill Chrome / clean temp `user-data-dir`, even on error
+- [x] `scripts/audit-cli.ts`: standalone runner — run via `npm run audit -- <url>`
+      (see deviation note below; the same script is `scripts/audit-cli.ts`)
+- [x] **Verify**: ran the CLI against `example.com` and `www.wikipedia.org`; category
+      scores **exactly matched** a manual `npx lighthouse <url>` run (well within the
+      documented ±5 variance). Teardown leaves no temp `user-data-dir` or stray Chrome.
+
+> **Phase 1 deviation — runner is `node`, not `tsx`.** `tsx` transpiles with
+> esbuild's hardcoded `keepNames: true`, which injects `__name(...)` wrappers into
+> Lighthouse's source. Lighthouse serializes some of those functions (e.g.
+> `computeBenchmarkIndex`) and evaluates them in the browser page, where `__name`
+> is undefined → `ReferenceError: __name is not defined`. Node 24's native TS
+> type-stripping does no such transform, so the CLI runs under
+> `node --import ./scripts/alias-hooks.mjs scripts/audit-cli.ts` (wired as
+> `npm run audit`). `scripts/alias-hooks.mjs` is a tiny `module.registerHooks`
+> resolver that maps the `@/*` path alias for native Node. Engine library code is
+> unaffected (it will run inside Next's Node runtime, which doesn't use esbuild
+> keepNames).
 
 ### Phase 2 — Job queue, batch orchestration & API
 - [ ] `src/lib/queue/AuditQueue.ts`: `p-queue` singleton on `globalThis`, configurable

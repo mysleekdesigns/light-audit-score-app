@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "audit": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/alias-hooks.mjs scripts/audit-cli.ts"
   },
   "dependencies": {
     "better-sqlite3": "^12.10.0",
