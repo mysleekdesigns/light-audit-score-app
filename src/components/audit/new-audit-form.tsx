@@ -1,10 +1,11 @@
 "use client";
 
-import { useId, useMemo, useState } from "react";
+import { useCallback, useId, useMemo, useState } from "react";
 import { ListPlus, Play, Radar, TriangleAlert } from "lucide-react";
 
 import { parseUrls } from "@/lib/parseUrls";
 import type { CreateBatchRequest } from "@/lib/client/auditClient";
+import { CrawlPanel } from "@/components/audit/crawl-panel";
 import type {
   FormFactor,
   LighthouseCategory,
@@ -22,7 +23,6 @@ import {
 import { CATEGORY_LABELS } from "@/lib/scores";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -76,7 +76,12 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
   const runsId = useId();
   const concurrencyId = useId();
 
+  const [tab, setTab] = useState<"paste" | "crawl">("paste");
   const [text, setText] = useState("");
+  // URLs the crawl panel currently has selected. The panel owns discovery; this
+  // form only needs the resolved selected set so it can submit the active tab's
+  // URLs through the same CreateBatchRequest the paste tab uses.
+  const [crawlUrls, setCrawlUrls] = useState<string[]>([]);
   const [formFactor, setFormFactor] = useState<FormFactor>("mobile");
   const [runs, setRuns] = useState(3);
   const [concurrency, setConcurrency] = useState(DEFAULT_CONCURRENCY);
@@ -84,9 +89,21 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
     ...LIGHTHOUSE_CATEGORIES,
   ]);
 
-  const { urls, invalid } = useMemo(() => parseUrls(text), [text]);
+  const { urls: pastedUrls, invalid } = useMemo(() => parseUrls(text), [text]);
+
+  // The active tab is the single source of truth for what gets submitted.
+  const urls = tab === "paste" ? pastedUrls : crawlUrls;
 
   const canSubmit = urls.length > 0 && !isRunning;
+
+  // Stable callback so the crawl panel's reporting effect doesn't re-fire.
+  const handleCrawlUrlsChange = useCallback((next: string[]) => {
+    setCrawlUrls(next);
+  }, []);
+
+  function handleTabChange(value: string) {
+    if (value === "paste" || value === "crawl") setTab(value);
+  }
 
   function handleDeviceChange(value: string) {
     if (value === "mobile" || value === "desktop") setFormFactor(value);
@@ -126,21 +143,15 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Tabs defaultValue="paste" className="gap-4">
+          <Tabs value={tab} onValueChange={handleTabChange} className="gap-4">
             <TabsList>
               <TabsTrigger value="paste">
                 <ListPlus data-icon="inline-start" />
                 Paste list
               </TabsTrigger>
-              <TabsTrigger value="crawl" disabled>
+              <TabsTrigger value="crawl">
                 <Radar data-icon="inline-start" />
                 Crawl site
-                <Badge
-                  variant="secondary"
-                  className="ml-1 font-mono text-[0.6rem]"
-                >
-                  Phase 5
-                </Badge>
               </TabsTrigger>
             </TabsList>
 
@@ -163,7 +174,8 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
                 className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1"
               >
                 <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">
-                  {urls.length} {urls.length === 1 ? "URL" : "URLs"} queued
+                  {pastedUrls.length}{" "}
+                  {pastedUrls.length === 1 ? "URL" : "URLs"} queued
                 </p>
                 {invalid.length > 0 ? (
                   <p className="font-mono text-xs uppercase tracking-[0.18em] text-score-average">
@@ -179,16 +191,10 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
             </TabsContent>
 
             <TabsContent value="crawl">
-              <div className="flex flex-col items-start gap-2 rounded-md border border-dashed border-border/70 bg-muted/20 p-6">
-                <Radar className="size-5 text-muted-foreground" />
-                <p className="text-sm font-medium text-foreground">
-                  Site discovery arrives in Phase 5
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  Sitemap parsing + shallow same-origin crawl will populate this
-                  list automatically.
-                </p>
-              </div>
+              <CrawlPanel
+                onUrlsChange={handleCrawlUrlsChange}
+                disabled={isRunning}
+              />
             </TabsContent>
           </Tabs>
         </CardContent>
@@ -323,7 +329,9 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
           <p className="text-center font-mono text-[0.65rem] uppercase tracking-[0.18em] text-muted-foreground">
             {urls.length > 0
               ? `${urls.length} ${urls.length === 1 ? "target" : "targets"} ready`
-              : "Paste at least one URL to begin"}
+              : tab === "paste"
+                ? "Paste at least one URL to begin"
+                : "Discover and select at least one URL to begin"}
           </p>
         </CardFooter>
       </Card>

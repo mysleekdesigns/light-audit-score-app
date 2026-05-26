@@ -1,19 +1,20 @@
 # PRD — Local Lighthouse Auditing Tool
 
-> **Status:** Phase 4 complete — every run now persists to local SQLite + report files and
-> survives a restart. A Drizzle schema (`batches`, `runs`) with `drizzle-kit` migrations is
-> applied on first DB access by an HMR-safe `better-sqlite3` client; the queue records the
-> batch on create and, on each job, writes the raw LHR JSON **and** a standalone Lighthouse
-> HTML report to `./data/reports/` plus an indexed `runs` row (median scores as sortable
-> columns, metrics/options as JSON). `GET /api/reports/:runId` now serves those files from
-> disk (in-memory fallback for in-flight runs); a new `GET /api/history` + a sortable/filterable
-> **History** page (server-rendered, in-browser sort/filter, score-coloured cells, report links)
-> list past runs. **Verified for real:** audited example.com via the API (100/96/92/80),
-> confirmed the DB row + 211 KB JSON / 397 KB HTML reports on disk, then **restarted the
-> server** and confirmed history + both reports reopened byte-identically from disk. Lint,
-> typecheck, build, and **103 unit tests** all green (Phase-4 added the `db/persistence` layer
-> + API/route tests). Phases 1–3 (engine, median-of-N, forked-process queue, API/SSE, live
-> Audit UI) remain complete underneath. Next up: **Phase 5 — Site discovery (crawl + sitemap)**.
+> **Status:** Phase 5 complete — the New Audit page can now **discover** a site's pages, not
+> just take a pasted list. A server-side `POST /api/discover` route (Node runtime) validates a
+> zod `DiscoverRequest` and runs a modular crawl engine (`src/lib/crawl/`): `robots.ts` parses
+> `robots.txt` (Allow/Disallow/Sitemap, longest-match), `sitemap.ts` parses `sitemap.xml` +
+> recursive sitemap indexes via `fast-xml-parser`, and `discover.ts` orchestrates a bounded
+> same-origin BFS crawl (`cheerio`, max-depth/max-pages, per-request timeout, robots-respecting,
+> best-effort warnings). A new **"Crawl site"** tab (domain + depth + max-pages + sitemap/crawl
+> toggles) previews/edits the discovered URLs, then feeds the selected set through the *same*
+> `POST /api/audits` batch path the paste tab uses — the queue/contract are unchanged.
+> **Verified for real:** started the dev server, crawled it (`http://localhost:3000`, depth 1)
+> → discovered exactly `/` + `/history` (same-origin, robots-clean), submitted both to the
+> queue → `completed` 2/2 (perf 71/76 · seo 100/100). Lint, typecheck, build, and **163 unit
+> tests** all green (Phase-5 added 60 hermetic crawl/route tests). Phases 1–4 (engine,
+> median-of-N, forked-process queue, API/SSE, live Audit UI, SQLite persistence + History page)
+> remain complete underneath. Next up: **Phase 6 — Comparison & trends**.
 
 ## 1. Overview
 
@@ -249,13 +250,36 @@ Results are durably persisted to SQLite + disk, so nothing is lost on restart.
 > `drizzle/` migrations are committed.
 
 ### Phase 5 — Site discovery (crawl + sitemap)
-- [ ] `src/lib/crawl/discover.ts`: fetch `sitemap.xml` (+ sitemap index) via
+- [x] `src/lib/crawl/discover.ts`: fetch `sitemap.xml` (+ sitemap index) via
       `fast-xml-parser`; optional shallow BFS crawl with `cheerio`, bounded by
       max-depth and max-pages, same-origin only, respect `robots.txt`
-- [ ] New Audit UI: "Crawl a site" mode (domain + depth + max pages + sitemap toggle),
+- [x] New Audit UI: "Crawl a site" mode (domain + depth + max pages + sitemap toggle),
       preview/edit discovered URLs before auditing
-- [ ] Feed discovered URLs into the existing batch queue
-- **Verify**: crawl a small known site; discovered URL set is correct and audits run.
+- [x] Feed discovered URLs into the existing batch queue
+- [x] **Verify**: started the dev server and crawled it as a known small site via
+      `POST /api/discover` (`http://localhost:3000`, depth 1) — discovered set was exactly
+      correct (`/` at depth 0 + `/history` at depth 1, same-origin only, no cross-origin
+      links leaked, `robotsBlocked:false`, accurate "no sitemap" warning). Fed those two
+      discovered URLs straight into `POST /api/audits` and both audited successfully
+      (`completed`, done 2/2, perf 71/76 · seo 100/100, 0 errors). Bad input → structured
+      400 (`invalid_request` + per-field issues); `GET` → structured 405.
+
+> **Phase 5 design notes.** (1) **Discovery is server-side.** A `POST /api/discover`
+> route (Node runtime, `force-dynamic`) validates a `DiscoverRequest` with zod (same
+> trimmed http/https-only rule as `audits-schema`, toggles defaulted, depth/pages clamped)
+> and calls `discover()` — arbitrary cross-origin fetches + `robots.txt` can't run from the
+> browser. `src/lib/crawl/types.ts` is the shared contract both the engine and the UI client
+> code against. (2) **Modular engine.** `robots.ts` (parse `User-agent`/`Allow`/`Disallow`/
+> `Sitemap`, longest-match Allow-over-Disallow for our `LighthouseAuditBot` UA, missing
+> robots = allow-all), `sitemap.ts` (`fast-xml-parser`, urlset + recursive sitemap-index
+> bounded to ≤20 docs), `discover.ts` (orchestrates: same-origin filter, robots-gated BFS
+> crawl with `cheerio`, sitemap wins on cross-source dedupe, per-request 10s `AbortController`
+> + total fetch bounds; best-effort — fetch failures become `warnings`, never throw).
+> (3) **Page cap = batch cap.** `MAX_PAGES` is capped at 50 to match the batch's `MAX_URLS`,
+> so a fully-selected discovery set always submits without tripping that limit. (4) **Feeds
+> the existing queue unchanged.** The crawl tab previews/edits discovered URLs and submits the
+> selected set through the *same* `onSubmit(CreateBatchRequest)` → `POST /api/audits` path the
+> paste tab uses — no change to the queue, the batch contract, or `NewAuditFormProps`.
 
 ### Phase 6 — Comparison & trends
 - [ ] Compare view: pick two runs of the same URL → score/metric diff (deltas, up/down)
