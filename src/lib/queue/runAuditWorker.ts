@@ -71,7 +71,16 @@ export async function runAuditInWorker(
   url: string,
   options: AuditOptions,
 ): Promise<AuditResult> {
-  const workerScript = resolveScript("scripts/audit-worker.ts");
+  // The worker is an out-of-bundle Node script launched with `fork`, NOT an app
+  // module. We resolve its real path here, but hand `fork` (below) a bare
+  // `process.env` lookup the bundler can't statically trace — otherwise Turbopack
+  // folds the literal into a module specifier (or a dynamic require-context over
+  // the project root) and fails the build with `Can't resolve scripts/audit-worker.ts`.
+  // Stashing the resolved path in an env var (which an explicit override can
+  // pre-set) keeps the value opaque to static analysis while runtime behaviour is
+  // unchanged. The worker only loads the heavy engine; it is never bundled.
+  process.env.LH_AUDIT_WORKER_SCRIPT ??= resolveScript("scripts/audit-worker.ts");
+  const workerScript = process.env.LH_AUDIT_WORKER_SCRIPT;
   const aliasHooks = resolveScript("scripts/alias-hooks.mjs");
   const outFile = path.join(
     os.tmpdir(),

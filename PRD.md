@@ -1,20 +1,19 @@
 # PRD — Local Lighthouse Auditing Tool
 
-> **Status:** Phase 2 complete — batch orchestration + API work end-to-end. An
-> in-process `AuditQueue` (`p-queue` singleton on `globalThis`, bounded/configurable
-> concurrency, `EventEmitter` progress) runs a batch of per-URL jobs and broadcasts
-> `ProgressEvent`s; route handlers expose `POST /api/audits`, `GET /api/audits/:id`,
-> `GET /api/audits/:id/stream` (SSE), and `GET /api/reports/:runId` (LHR JSON +
-> `?format=html`), all with zod validation and structured error envelopes. **Key
-> finding:** concurrent in-process `lighthouse()` calls collide on Lighthouse's
-> process-global performance marks (`The "start lh:runner:gather" performance mark
-> has not been set`), so each job now runs in its **own forked Node process**
-> (`scripts/audit-worker.ts` via `runAuditInWorker`) — see the Phase 2 deviation note.
-> Verified live: `curl` POST of a 3-URL batch at concurrency 3 streamed SSE progress
-> and completed with **zero errors** (example.com 100/80, wikipedia 99/100, iana
-> 81/92). Lint, typecheck, build, and 68 unit tests all green. Phase 1 (the headless
-> engine + median-of-N + standalone CLI) remains complete underneath. Next up:
-> **Phase 3 — Audit UI (paste list + live results)**.
+> **Status:** Phase 3 complete — the Audit UI is live end-to-end. The New Audit page
+> drives the Phase-2 API through a typed client·hook·contract seam: a `NewAuditForm`
+> (URL textarea with live parse via `parseUrls`, device/runs/concurrency/category controls,
+> accuracy warning) POSTs `createBatch`, then `useBatchStream` (an `EventSource` hook with
+> auto-reconnect + self-healing snapshots) feeds a live grid of per-URL cards. Cards move
+> queued→running (skeletons)→done with gauge-style **score rings** (0–49/50–89/90–100 colour
+> bands) and a Core Web Vitals strip; a side `Sheet` shows full metrics, opportunities, and
+> the "Open full HTML report" link; sonner toasts fire on completion/failure. **Verified in
+> a real headless browser (CDP):** pasted 3 URLs, clicked Run, watched scores stream in
+> live (example.com 100/96/92/80, matching the CLI within ±5). Lint, typecheck, build, and
+> **89 unit tests** all green (Phase-3 added `scores`/`parseUrls` helpers + tests). A
+> pre-existing Turbopack build break around the forked worker was fixed (see Phase 3 note).
+> Phases 1–2 (engine, median-of-N, queue, forked-process audits, API/SSE) remain complete
+> underneath. Next up: **Phase 4 — Persistence & history**.
 
 ## 1. Overview
 
@@ -198,16 +197,28 @@ Results are durably persisted to SQLite + disk, so nothing is lost on restart.
 > `chrome-launcher` are now imported only in the child, never in the Next bundle.
 
 ### Phase 3 — Audit UI (paste list + live results)
-- [ ] New Audit page: URL textarea (one per line / CSV), settings panel (device, runs,
+- [x] New Audit page: URL textarea (one per line / CSV), settings panel (device, runs,
       concurrency, categories) with the accuracy warning
-- [ ] Live progress: per-URL cards (status, progress), category **score rings** (color
+- [x] Live progress: per-URL cards (status, progress), category **score rings** (color
       thresholds 0–49 red / 50–89 orange / 90–100 green) + Core Web Vitals (LCP, CLS,
       TBT, FCP, SI, TTI)
-- [ ] Results detail drawer/page: full metrics, opportunities & diagnostics, button to
+- [x] Results detail drawer/page: full metrics, opportunities & diagnostics, button to
       open the stored full HTML report
-- [ ] SSE client hook with reconnect; toasts on completion/failure
-- **Verify**: in-browser, audit a list of 3–5 URLs concurrently; scores/metrics render
-      live and match Phase 1 CLI output.
+- [x] SSE client hook with reconnect; toasts on completion/failure
+- [x] **Verify**: in-browser (headless Chrome via CDP), pasted 3 URLs and clicked Run;
+      cards streamed queued→running (skeletons)→done with live score rings + Core Web
+      Vitals, the COMPLETE strip hit 3/3, and the detail drawer opened with full metrics,
+      opportunities and the "Open full HTML report" link. Scores matched the Phase 1/2
+      CLI (example.com 100/96/92/80, LCP 0.8 s, TBT 0 ms) within ±5 variance.
+
+> **Phase 3 build fix — Turbopack + `child_process.fork`.** Next 16 makes Turbopack the
+> default `next build` bundler, which constant-folded the Phase-2 worker path
+> (`fork(path.resolve(process.cwd(), "scripts/audit-worker.ts"))`) into a module specifier
+> and failed the build (`Can't resolve scripts/audit-worker.ts` — reproduced on the
+> Phase-2 commit, so it predated this phase). Fixed in `runAuditWorker.ts` by handing
+> `fork` an opaque `process.env.LH_AUDIT_WORKER_SCRIPT` lookup (defaulted via `??=` to the
+> resolved path) so the analyzer leaves the out-of-bundle worker alone; runtime behaviour
+> is unchanged and the env var doubles as an explicit override hook.
 
 ### Phase 4 — Persistence & history
 - [ ] Drizzle schema: `batches`, `runs` (per URL: scores, metrics, options, timestamp,
