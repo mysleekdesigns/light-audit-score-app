@@ -1,13 +1,20 @@
 # PRD — Local Lighthouse Auditing Tool
 
-> **Status:** Phase 1 complete — the headless Lighthouse engine works end-to-end. A
-> validated options model (zod: form factor / throttling / categories / runs 1–5),
-> `runSingleAudit` (fresh isolated Chrome per run, parsed scores + Core Web Vitals +
-> opportunities + raw LHR, guaranteed Chrome/temp-dir teardown), and median-of-N via
-> `computeMedianRun` (with per-run score spread) are in `src/lib/lighthouse/`. A
-> standalone CLI (`npm run audit -- <url>`) produced scores that **exactly matched**
-> `npx lighthouse` on `example.com` and `www.wikipedia.org`. Lint, typecheck, build,
-> and 30 unit tests all green. Next up: **Phase 2 — Job queue, batch orchestration & API**.
+> **Status:** Phase 2 complete — batch orchestration + API work end-to-end. An
+> in-process `AuditQueue` (`p-queue` singleton on `globalThis`, bounded/configurable
+> concurrency, `EventEmitter` progress) runs a batch of per-URL jobs and broadcasts
+> `ProgressEvent`s; route handlers expose `POST /api/audits`, `GET /api/audits/:id`,
+> `GET /api/audits/:id/stream` (SSE), and `GET /api/reports/:runId` (LHR JSON +
+> `?format=html`), all with zod validation and structured error envelopes. **Key
+> finding:** concurrent in-process `lighthouse()` calls collide on Lighthouse's
+> process-global performance marks (`The "start lh:runner:gather" performance mark
+> has not been set`), so each job now runs in its **own forked Node process**
+> (`scripts/audit-worker.ts` via `runAuditInWorker`) — see the Phase 2 deviation note.
+> Verified live: `curl` POST of a 3-URL batch at concurrency 3 streamed SSE progress
+> and completed with **zero errors** (example.com 100/80, wikipedia 99/100, iana
+> 81/92). Lint, typecheck, build, and 68 unit tests all green. Phase 1 (the headless
+> engine + median-of-N + standalone CLI) remains complete underneath. Next up:
+> **Phase 3 — Audit UI (paste list + live results)**.
 
 ## 1. Overview
 
@@ -161,14 +168,34 @@ Results are durably persisted to SQLite + disk, so nothing is lost on restart.
 > keepNames).
 
 ### Phase 2 — Job queue, batch orchestration & API
-- [ ] `src/lib/queue/AuditQueue.ts`: `p-queue` singleton on `globalThis`, configurable
+- [x] `src/lib/queue/AuditQueue.ts`: `p-queue` singleton on `globalThis`, configurable
       concurrency, event emitter for progress
-- [ ] Batch model: a batch = many URL jobs; per-job status
+- [x] Batch model: a batch = many URL jobs; per-job status
       (queued/running/done/error) + result
-- [ ] Route handlers: `POST /api/audits` (create batch), `GET /api/audits/:id`,
+- [x] Route handlers: `POST /api/audits` (create batch), `GET /api/audits/:id`,
       `GET /api/audits/:id/stream` (SSE), `GET /api/reports/:runId`
-- [ ] zod validation + structured error responses; concurrency guardrails
-- **Verify**: `curl` POST a batch of URLs, watch SSE progress, fetch final JSON.
+- [x] zod validation + structured error responses; concurrency guardrails
+- [x] **Verify**: `curl` POST a 3-URL batch at concurrency 3; SSE streamed
+      snapshot → 3× `job-completed` → `batch-completed`; `GET /api/audits/:id`
+      returned the final JSON and `GET /api/reports/:runId` returned the full LHR
+      JSON (60 audits) + a 313 KB standalone HTML report. All 3 URLs succeeded.
+
+> **Phase 2 deviation — each job runs in its own forked process.** The PRD §5
+> design assumed bounded concurrency over jobs that each get a fresh isolated
+> *Chrome*. That isn't sufficient: Lighthouse stores its `lh:runner:*` performance
+> marks in **process-global** state, so two `lighthouse()` calls running
+> concurrently in the same Node process corrupt each other (`The "start
+> lh:runner:gather" performance mark has not been set`) — verified: at
+> concurrency 2 one of two URLs reliably failed; at concurrency 1 both succeeded.
+> The fix (matching how Unlighthouse achieves real concurrency, PRD §3) is
+> process isolation: the queue calls `runAuditInWorker` (`src/lib/queue/runAuditWorker.ts`),
+> which `fork`s `scripts/audit-worker.ts` per job under the **same launcher the
+> Phase 1 CLI uses** (`node --import ./scripts/alias-hooks.mjs …` — native TS +
+> `@/` alias, not tsx, to avoid the `__name` bug). The child runs the unchanged
+> `runAudit` (N sequential runs for one URL), writes the full `AuditResult` to a
+> temp file, and signals completion over IPC; the parent reads it and always
+> removes the temp file (timeout-guarded at 5 min/job). Bonus: `lighthouse` /
+> `chrome-launcher` are now imported only in the child, never in the Next bundle.
 
 ### Phase 3 — Audit UI (paste list + live results)
 - [ ] New Audit page: URL textarea (one per line / CSV), settings panel (device, runs,
