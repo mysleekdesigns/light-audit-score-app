@@ -1,20 +1,23 @@
 # PRD — Local Lighthouse Auditing Tool
 
-> **Status:** Phase 5 complete — the New Audit page can now **discover** a site's pages, not
-> just take a pasted list. A server-side `POST /api/discover` route (Node runtime) validates a
-> zod `DiscoverRequest` and runs a modular crawl engine (`src/lib/crawl/`): `robots.ts` parses
-> `robots.txt` (Allow/Disallow/Sitemap, longest-match), `sitemap.ts` parses `sitemap.xml` +
-> recursive sitemap indexes via `fast-xml-parser`, and `discover.ts` orchestrates a bounded
-> same-origin BFS crawl (`cheerio`, max-depth/max-pages, per-request timeout, robots-respecting,
-> best-effort warnings). A new **"Crawl site"** tab (domain + depth + max-pages + sitemap/crawl
-> toggles) previews/edits the discovered URLs, then feeds the selected set through the *same*
-> `POST /api/audits` batch path the paste tab uses — the queue/contract are unchanged.
-> **Verified for real:** started the dev server, crawled it (`http://localhost:3000`, depth 1)
-> → discovered exactly `/` + `/history` (same-origin, robots-clean), submitted both to the
-> queue → `completed` 2/2 (perf 71/76 · seo 100/100). Lint, typecheck, build, and **163 unit
-> tests** all green (Phase-5 added 60 hermetic crawl/route tests). Phases 1–4 (engine,
-> median-of-N, forked-process queue, API/SSE, live Audit UI, SQLite persistence + History page)
-> remain complete underneath. Next up: **Phase 6 — Comparison & trends**.
+> **Status:** Phase 6 complete — the tool can now **compare runs and surface trends**. Two new
+> views read the Phase-4 persistence seam: **`/compare`** groups history by URL and shows a
+> per-URL score-trend chart + sparklines (shadcn `chart`/Recharts) and a two-run diff of
+> category scores (higher = better) and Core Web Vitals (lower = better) with up/down direction;
+> **`/batches`** groups runs by batch and shows average scores, best/worst page, and pass/fail
+> counts against client-configurable thresholds. The only shared seam change: `HistoryRow` now
+> carries parsed median `metrics` and a new `listBatches()` exposes batch metadata; all
+> comparison/summary math is in pure, unit-tested helpers (`src/lib/compare/`,
+> `src/lib/batch-summary/`). **Verified for real:** audited one local URL twice with a degrading
+> change between (clean → broken A11y/SEO markup); `/compare` showed the Accessibility line
+> plunging **89 → 13** with the diff reading A11y −76 / SEO −16 (regressed) and Best Practices
+> +8 (improved), and `/batches` tallied the degraded batch as A11y **0/1** · SEO **0/1** · Perf
+> **1/1** at threshold 90 — confirmed via the shipped helpers on the real DB rows **and** a
+> headless-browser screenshot of the hydrated UI. Lint, typecheck, build, and **209 unit tests**
+> all green (Phase-6 added 42 compare/batch-summary helper tests + 5 persistence-seam tests).
+> Phases 1–5 (engine, median-of-N, forked-process queue, API/SSE, live Audit UI, SQLite
+> persistence + History, crawl/sitemap discovery) remain complete underneath. Next up:
+> **Phase 7 — Polish & docs**.
 
 ## 1. Overview
 
@@ -282,10 +285,37 @@ Results are durably persisted to SQLite + disk, so nothing is lost on restart.
 > paste tab uses — no change to the queue, the batch contract, or `NewAuditFormProps`.
 
 ### Phase 6 — Comparison & trends
-- [ ] Compare view: pick two runs of the same URL → score/metric diff (deltas, up/down)
-- [ ] Trend sparklines per URL over time (shadcn charts / Recharts)
-- [ ] Batch summary: averages, best/worst pages, pass/fail vs configurable thresholds
-- **Verify**: audit one URL twice with a change between; diff and trend reflect it.
+- [x] Compare view: pick two runs of the same URL → score/metric diff (deltas, up/down)
+- [x] Trend sparklines per URL over time (shadcn charts / Recharts)
+- [x] Batch summary: averages, best/worst pages, pass/fail vs configurable thresholds
+- [x] **Verify**: audited one URL (a local page) twice with a real change between (degraded
+      its A11y/SEO markup), then confirmed both the **diff** and the **trend** reflect it.
+      `/compare` (URL `http://localhost:8099/`, 2 runs): the score-trend chart shows the
+      Accessibility line plunging **89 → 13**; the run diff (baseline = clean run, comparison =
+      degraded run) reads **A11y 89→13 −76 regressed, SEO 83→67 −16 regressed, Best Practices
+      92→100 +8 improved, Performance 100→100 ±0**, plus the Core Web Vitals delta table
+      (lower-is-better semantics). `/batches` summarised each batch's average scores, best/worst
+      page, and pass/fail counts against configurable thresholds (degraded batch: A11y **0/1**,
+      SEO **0/1**, Perf **1/1** at threshold 90). Verified the *shipped* diff/trend helpers
+      against the *real persisted* rows, then in a headless browser against the hydrated UI.
+
+> **Phase 6 design notes.** (1) **Two new URL-/batch-centric views, fed by the Phase-4 seam.**
+> `/compare` (server component → `<CompareConsole>`) groups `listHistory()` rows by URL: a
+> per-URL **score-trend** line chart + per-category sparklines (shadcn `chart`/Recharts), and a
+> two-run **diff** of category scores (higher = better) and Core Web Vitals (lower = better),
+> each delta shown with an up/down arrow **and** an `sr-only` direction word so colour is never
+> the sole signal. `/batches` (server component → `<BatchSummaryConsole>`) groups runs by
+> `batchId` and, per batch, shows average scores (gauges), best/worst page by an overall-score
+> mean, and pass/fail counts against **client-configurable** per-category thresholds (default 90;
+> persisting them is Phase 7). (2) **Seam additions (the only shared edits).** `HistoryRow` now
+> carries parsed median `metrics: CoreWebVitals | null` (so the CWV diff needs no extra fetch),
+> and a new `listBatches(): BatchInfo[]` exposes batch metadata — both still never-throw, both
+> unit-tested. All comparison/summary math lives in pure, React-free helpers
+> (`src/lib/compare/diff.ts`, `src/lib/batch-summary/summary.ts`) with 42 new unit tests. (3)
+> **Charts are client-only.** Recharts (`^3.8.0`, via `npx shadcn add chart`) renders inside
+> `"use client"` components; the pages stay server components reading the DB directly, exactly
+> like the History page. (4) **Failed/unscored runs** are excluded from trends/averages and
+> count as *fail* in the batch pass/fail tally (an errored page hasn't met the bar).
 
 ### Phase 7 — Polish & docs
 - [ ] Export: download batch results as JSON/CSV; bulk-open reports

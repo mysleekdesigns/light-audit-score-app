@@ -35,8 +35,9 @@ import {
   reportJsonFilename,
   reportJsonPath,
 } from "@/lib/db/paths";
-import { batches, runs, type RunRow } from "@/lib/db/schema";
+import { batches, runs, type BatchRow, type RunRow } from "@/lib/db/schema";
 import type {
+  AuditOptions,
   AuditResult,
   CategoryScores,
   CoreWebVitals,
@@ -58,6 +59,8 @@ export interface HistoryRow {
   runs: number | null;
   /** Median category scores (0–100), assembled from the row's score columns. */
   scores: CategoryScores;
+  /** Median Core Web Vitals (parsed from the row's JSON; null for failures). */
+  metrics: CoreWebVitals | null;
   /** Whether a stored JSON / HTML report exists for this run. */
   hasJsonReport: boolean;
   hasHtmlReport: boolean;
@@ -65,6 +68,22 @@ export interface HistoryRow {
   fetchTime: string | null;
   /** ISO timestamp the row was persisted. */
   createdAt: string;
+}
+
+/** A persisted batch's metadata (for the batch-summary view), newest first. */
+export interface BatchInfo {
+  id: string;
+  status: BatchStatus;
+  /** Resolved options the batch ran with. */
+  options: AuditOptions;
+  /** Resolved (clamped) concurrency the batch ran at. */
+  concurrency: number;
+  /** Number of jobs in the batch. */
+  total: number;
+  /** ISO timestamps for the batch lifecycle. */
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
 }
 
 /** A run's stored report file locations, for the report endpoint. */
@@ -253,6 +272,21 @@ export function listHistory(): HistoryRow[] {
   }
 }
 
+/** Every persisted batch, newest first. Returns `[]` on any error. */
+export function listBatches(): BatchInfo[] {
+  try {
+    const rows = getDb()
+      .select()
+      .from(batches)
+      .orderBy(desc(batches.createdAt))
+      .all();
+    return rows.map(rowToBatchInfo);
+  } catch (err) {
+    warn("listBatches", err);
+    return [];
+  }
+}
+
 /** A run's stored report file paths, or `undefined` if unknown. */
 export function getRunReport(runId: string): RunReport | undefined {
   try {
@@ -272,6 +306,17 @@ export function getRunReport(runId: string): RunReport | undefined {
 
 // --- Internals -------------------------------------------------------------
 
+/** Safely JSON-parse a nullable text column, returning `null` on absence/error. */
+function safeParse<T>(value: string | null, op: string): T | null {
+  if (value === null) return null;
+  try {
+    return JSON.parse(value) as T;
+  } catch (err) {
+    warn(op, err);
+    return null;
+  }
+}
+
 /** Flatten a `runs` row into a {@link HistoryRow}. */
 function rowToHistory(row: RunRow): HistoryRow {
   const scores: CategoryScores = {
@@ -290,10 +335,30 @@ function rowToHistory(row: RunRow): HistoryRow {
     formFactor: row.formFactor === "desktop" ? "desktop" : "mobile",
     runs: row.runs,
     scores,
+    metrics: safeParse<CoreWebVitals>(row.metrics, "rowToHistory:metrics"),
     hasJsonReport: row.reportJson !== null,
     hasHtmlReport: row.reportHtml !== null,
     fetchTime: row.fetchTime,
     createdAt: row.createdAt,
+  };
+}
+
+/** Flatten a `batches` row into a {@link BatchInfo}. */
+function rowToBatchInfo(row: BatchRow): BatchInfo {
+  return {
+    id: row.id,
+    status: row.status as BatchStatus,
+    options: (safeParse<AuditOptions>(row.options, "rowToBatchInfo:options") ?? {
+      formFactor: "mobile",
+      throttling: "simulated",
+      categories: [],
+      runs: 1,
+    }) as AuditOptions,
+    concurrency: row.concurrency,
+    total: row.total,
+    createdAt: row.createdAt,
+    startedAt: row.startedAt,
+    finishedAt: row.finishedAt,
   };
 }
 

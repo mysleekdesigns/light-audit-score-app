@@ -12,6 +12,16 @@ const NAV = [
     label: "History",
     match: (p: string) => p.startsWith("/history"),
   },
+  {
+    href: "/compare",
+    label: "Compare",
+    match: (p: string) => p.startsWith("/compare"),
+  },
+  {
+    href: "/batches",
+    label: "Batches",
+    match: (p: string) => p.startsWith("/batches"),
+  },
 ] as const;
 
 /** Minimal lighthouse-beam mark: a focal point throwing a measured arc. */

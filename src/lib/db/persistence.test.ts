@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resetDbForTests } from "@/lib/db/client";
 import {
   getRunReport,
+  listBatches,
   listHistory,
   recordBatch,
   recordFailedRun,
@@ -213,5 +214,53 @@ describe("persistence", () => {
   it("getRunReport returns undefined for an unknown run", () => {
     recordBatch(makeBatch("batch-empty", []));
     expect(getRunReport("nope")).toBeUndefined();
+  });
+
+  it("parses median Core Web Vitals into the history row", async () => {
+    const job = makeJob("run-cwv", 0, "https://cwv.test/");
+    const batch = makeBatch("batch-cwv", [job]);
+    recordBatch(batch);
+    await recordRun(batch, job, makeResult("https://cwv.test/"));
+
+    const [row] = listHistory();
+    expect(row.metrics).not.toBeNull();
+    expect(row.metrics!["largest-contentful-paint"]).toEqual({
+      numericValue: 800,
+      displayValue: "0.8 s",
+      score: 1,
+    });
+    expect(row.metrics!["total-blocking-time"]).toBeNull();
+  });
+
+  it("leaves metrics null for a failed run", () => {
+    const job: AuditJob = {
+      ...makeJob("run-nm", 0, "https://nm.test/"),
+      status: "error",
+      error: { message: "boom" },
+    };
+    const batch = makeBatch("batch-nm", [job]);
+    recordBatch(batch);
+    recordFailedRun(batch, job);
+
+    expect(listHistory()[0].metrics).toBeNull();
+  });
+
+  it("lists persisted batches newest-first with parsed options", async () => {
+    const b1 = makeBatch("b-old", [makeJob("ro", 0, "https://o.test/")]);
+    recordBatch(b1);
+    await new Promise((r) => setTimeout(r, 5));
+    const b2 = makeBatch("b-new", [makeJob("rn", 0, "https://n.test/")]);
+    recordBatch(b2);
+
+    const list = listBatches();
+    expect(list.map((b) => b.id)).toEqual(["b-new", "b-old"]);
+    expect(list[0].options.formFactor).toBe("mobile");
+    expect(list[0].options.categories).toContain("performance");
+    expect(list[0].total).toBe(1);
+    expect(list[0].concurrency).toBe(3);
+  });
+
+  it("listBatches returns [] when there are no batches", () => {
+    expect(listBatches()).toEqual([]);
   });
 });
