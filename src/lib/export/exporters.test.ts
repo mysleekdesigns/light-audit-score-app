@@ -33,6 +33,7 @@ function makeRow(overrides: Partial<HistoryRow> = {}): HistoryRow {
       "speed-index": { numericValue: 1200, displayValue: "1.2 s", score: 1 },
       interactive: { numericValue: 900, displayValue: "0.9 s", score: 1 },
     },
+    environment: null,
     hasJsonReport: true,
     hasHtmlReport: true,
     fetchTime: "2026-05-26T10:00:00.000Z",

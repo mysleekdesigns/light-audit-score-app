@@ -78,6 +78,14 @@ function makeResult(url: string, perf: number): AuditResult {
       lhr: { __lhrSentinel: true, url, fetchTime: `t-${perf}` },
     },
     perRunScores: [{ performance: perf }],
+    perRunEnvironments: [
+      {
+        benchmarkIndex: 1500,
+        hostUserAgent: "test",
+        throttlingMethod: "simulate",
+        cpuSlowdownMultiplier: 4,
+      },
+    ],
     fetchTime: `t-${perf}`,
     lighthouseVersion: "13.0.0",
     runWarnings: [],

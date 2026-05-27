@@ -33,6 +33,7 @@ function makeRow(overrides: Partial<HistoryRow> = {}): HistoryRow {
       seo: 100,
     },
     metrics: null,
+    environment: null,
     hasJsonReport: true,
     hasHtmlReport: true,
     fetchTime: "2026-05-01T10:00:00.000Z",

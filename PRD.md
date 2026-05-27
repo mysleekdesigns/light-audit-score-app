@@ -1,6 +1,26 @@
 # PRD — Local Lighthouse Auditing Tool
 
-> **Status:** Phase 9 complete — the **Calibration & "Match DevTools" parity** layer is in. On top
+> **Status:** Phase 10 complete — **all 11 phases (0–10) are done.** The **Environment visibility &
+> drift warnings** layer closes out the build: every live result card + the batch-summary cards now
+> show an **environment badge** (`benchmarkIndex` "CPU/Memory Power" + the effective throttling method
+> + CPU multiplier, formatted by pure `src/lib/lighthouse/environment-format.ts`), and a pure,
+> unit-tested **drift detector** (`src/lib/lighthouse/drift.ts` → `assessDrift`) flags three signals
+> when Performance is in scope — host-power drift (applied multiplier vs `recommendCpuMultiplier`),
+> a wide `benchmarkIndex` spread across a batch's runs, and concurrency contention — rendered by a
+> shared **`DriftWarning`** with a one-click "Calibrate →" link. The engine now collects
+> `perRunEnvironments` parallel to `perRunScores`, so the detail sheet surfaces each run's
+> `benchmarkIndex` alongside its scores (closing §8's "surface per-run spread" for the CPU dimension),
+> and the median run's environment is **persisted** (new nullable `runs` columns `benchmark_index` /
+> `host_user_agent` / `throttling_method` / `cpu_slowdown_multiplier`, migration `0001`, self-healed at
+> runtime; legacy rows degrade to `environment: null`). **Verified for real**: a live
+> mobile·simulated·1-run·concurrency-2 batch (example.com `benchmarkIndex 3900.5` / iana `3904`) drove
+> the SSR `/batches` page to render the badge, the "Host power 3901–3904 across 2 runs" spread, and a
+> drift warning firing both the host-power signal ("…more powerful than the 4× CPU throttle targets…
+> Calibrate to ~9×") and the concurrency signal ("Ran at concurrency 2 … Re-run with accuracy mode") —
+> with a working Calibrate link. README gained a "Calibration & DevTools parity" section. Lint,
+> typecheck, build, and **298 unit tests** all green (Phase 10 added 22 drift/environment-format tests).
+>
+> **Status (prior, retained for context):** Phase 9 complete — the **Calibration & "Match DevTools" parity** layer is in. On top
 > of Phase 8's engine knobs, the tool now turns them into one-click parity with the Chrome DevTools
 > Lighthouse panel. **Calibrate** (`src/lib/lighthouse/calibrate.ts`, pure + unit-tested) maps a
 > run's `benchmarkIndex` to a device class and a recommended `cpuSlowdownMultiplier` via the official
@@ -494,18 +514,46 @@ Results are durably persisted to SQLite + disk, so nothing is lost on restart.
       preset are unit-tested. The side-by-side panel comparison is a manual same-machine check.*
 
 ### Phase 10 — Environment visibility & drift warnings
-- [ ] **Environment badge** on each result card + the batch summary: show `benchmarkIndex`
+- [x] **Environment badge** on each result card + the batch summary: show `benchmarkIndex`
       ("CPU/Memory Power") and the effective throttling method + multiplier the run used.
-- [ ] **Drift warning**: flag runs whose `benchmarkIndex` indicates an over/under-powered or
+      *Done: a shared, presentational `EnvironmentBadge` (`src/components/audit/environment-badge.tsx`,
+      `compact` chip / `full` readout) formats `benchmarkIndex` + device class + effective method +
+      multiplier via pure `src/lib/lighthouse/environment-format.ts`; it rides the live result cards
+      and detail sheet (`AuditResultLite` already carries `environment`) and the batch-summary cards
+      (median run's environment now persisted — see below).*
+- [x] **Drift warning**: flag runs whose `benchmarkIndex` indicates an over/under-powered or
       CPU-contended host (e.g. a wide benchmarkIndex spread across a batch), with a one-click link
       to Calibrate and a note when `concurrency > 1` likely depressed Performance.
-- [ ] Surface the **per-run `benchmarkIndex` spread** alongside the existing per-run score spread,
+      *Done: pure, unit-tested `assessDrift()` (`src/lib/lighthouse/drift.ts`) detects three signals —
+      host-power drift (applied vs `recommendCpuMultiplier`), a wide benchmarkIndex spread across runs,
+      and concurrency contention — scoped to when Performance is in scope; the shared `DriftWarning`
+      (`src/components/audit/drift-warning.tsx`) renders them with a one-click "Calibrate →" link.*
+- [x] Surface the **per-run `benchmarkIndex` spread** alongside the existing per-run score spread,
       closing the §8 "surface per-run spread" risk for the CPU dimension too.
-- [ ] Extend `README.md` accuracy notes with the calibration workflow and "Match DevTools"
+      *Done: the engine now collects `perRunEnvironments` parallel to `perRunScores`
+      (`AuditResult`/`median.ts`); the detail sheet shows a per-run table (each run's category scores
+      **and** its `benchmarkIndex`) + a `benchmarkIndexSpread` min–max summary; the batch summary shows
+      the cross-run "Host power min–max" readout.*
+- [x] Extend `README.md` accuracy notes with the calibration workflow and "Match DevTools"
       guidance (when to use simulated vs applied throttling, why concurrency affects Performance).
-- **Verify**: a batch run on a deliberately busy machine shows the badge + drift warning;
+      *Done: new "Calibration & DevTools parity" section (benchmarkIndex & the 4× default, the Calibrate
+      workflow, the Match-DevTools preset, simulated vs applied, why concurrency affects Performance,
+      the badge/drift warning).*
+- [x] **Verify**: a batch run on a deliberately busy machine shows the badge + drift warning;
       running Calibrate updates the recommended multiplier, and a solo accuracy-mode re-run clears
       the warning. Lint, typecheck, build, and the unit suite stay green.
+      *Verified for real: a live mobile·simulated·1-run·**concurrency-2** batch of example.com +
+      iana.org persisted the median run's environment to the new `runs` columns (example.com
+      `benchmarkIndex 3900.5`, iana `3904`, both `simulate`/`4×`; legacy pre-migration rows degrade to
+      `environment: null`). The SSR `/batches` page then rendered, from those real rows, the
+      environment badge ("Simulated 4×"), the "Host power 3901–3904 across 2 runs" spread, and the drift
+      warning reading "**This host (benchmark 3902, high-end desktop) is more powerful than the 4× CPU
+      throttle targets, so Performance reads optimistically. Calibrate to ~9× …**" + "**Ran at
+      concurrency 2 … Re-run with accuracy mode (concurrency 1) …**" with a working "Calibrate →" link —
+      i.e. both the host-power and concurrency signals fired on this fast host. Concurrency-1 / calibrated
+      clearing is unit-tested in `drift.test.ts`; the literal side-by-side DevTools-panel comparison is a
+      manual same-machine step. Lint, typecheck, build, and **298 unit tests** all green (Phase 10 added
+      22 drift + environment-format tests).*
 
 > **Phases 8–10 design notes.** Earlier phases optimised for **throughput** (parallel Chrome via
 > p-queue) and **reproducibility** (median-of-N, cold isolated profiles). Both are correct, but

@@ -2,6 +2,8 @@
 
 import { ExternalLink, FileJson, TriangleAlert } from "lucide-react";
 
+import { DriftWarning } from "@/components/audit/drift-warning";
+import { EnvironmentBadge } from "@/components/audit/environment-badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,12 +26,18 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { reportHtmlUrl, reportJsonUrl } from "@/lib/client/auditClient";
 import {
+  assessDrift,
+  benchmarkIndexSpread,
+} from "@/lib/lighthouse/drift";
+import { formatBenchmarkIndex } from "@/lib/lighthouse/environment-format";
+import {
   LIGHTHOUSE_CATEGORIES,
   type Opportunity,
 } from "@/lib/lighthouse/types";
 import type { AuditJob, AuditResultLite } from "@/lib/queue/types";
 import {
   CATEGORY_LABELS,
+  CATEGORY_SHORT_LABELS,
   formatScore,
   METRIC_DISPLAY_ORDER,
   METRIC_META,
@@ -178,6 +186,121 @@ function OpportunitiesPanel({ result }: { result: AuditResultLite }) {
   );
 }
 
+/** Categories Lighthouse scores out of 100, in display order, for the per-run table. */
+const RUN_CATEGORY_ORDER = LIGHTHOUSE_CATEGORIES;
+
+function EnvironmentSection({ result }: { result: AuditResultLite }) {
+  const assessment = assessDrift({
+    benchmarkIndices: result.perRunEnvironments.map((env) => env.benchmarkIndex),
+    cpuSlowdownMultiplier: result.environment.cpuSlowdownMultiplier,
+    concurrency: 1,
+    performanceInScope: result.options.categories.includes("performance"),
+  });
+
+  return (
+    <section className="flex flex-col gap-3">
+      <SectionLabel>Environment</SectionLabel>
+      <EnvironmentBadge
+        variant="full"
+        environment={result.environment}
+        drifted={assessment.severity !== "none"}
+      />
+      <DriftWarning assessment={assessment} calibrateHref="/" />
+    </section>
+  );
+}
+
+/**
+ * Per-run breakdown: each run's category scores + its `benchmarkIndex`, plus a
+ * one-line benchmarkIndex spread summary. Closes §8's "surface per-run spread"
+ * for both the score and CPU dimensions. Only meaningful when runs > 1.
+ */
+function PerRunSpread({ result }: { result: AuditResultLite }) {
+  const spread = benchmarkIndexSpread(
+    result.perRunEnvironments.map((env) => env.benchmarkIndex),
+  );
+
+  return (
+    <section className="flex flex-col gap-3">
+      <SectionLabel>Per-run spread · {result.runs} runs</SectionLabel>
+      <div className="overflow-hidden rounded-md border border-border/60">
+        <table className="w-full border-collapse text-left">
+          <caption className="sr-only">
+            Per-run category scores and host CPU benchmark index
+          </caption>
+          <thead>
+            <tr className="border-b border-border/60 bg-muted/30">
+              <th
+                scope="col"
+                className="px-3 py-2 font-mono text-[0.6rem] font-medium uppercase tracking-[0.14em] text-muted-foreground"
+              >
+                Run
+              </th>
+              {RUN_CATEGORY_ORDER.map((category) => (
+                <th
+                  key={category}
+                  scope="col"
+                  className="px-2 py-2 text-right font-mono text-[0.6rem] font-medium uppercase tracking-[0.14em] text-muted-foreground"
+                >
+                  {CATEGORY_SHORT_LABELS[category]}
+                </th>
+              ))}
+              <th
+                scope="col"
+                className="px-3 py-2 text-right font-mono text-[0.6rem] font-medium uppercase tracking-[0.14em] text-muted-foreground"
+                title="Host CPU/Memory Power (Lighthouse benchmarkIndex) for this run"
+              >
+                CPU
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border/50">
+            {result.perRunScores.map((scores, i) => {
+              const env = result.perRunEnvironments[i];
+              return (
+                <tr key={i} className="bg-card">
+                  <th
+                    scope="row"
+                    className="px-3 py-2 font-mono text-xs tabular-nums text-muted-foreground"
+                  >
+                    {String(i + 1).padStart(2, "0")}
+                  </th>
+                  {RUN_CATEGORY_ORDER.map((category) => {
+                    const score = scores[category] ?? null;
+                    return (
+                      <td
+                        key={category}
+                        className={cn(
+                          "px-2 py-2 text-right font-mono text-sm tabular-nums",
+                          scoreColorClass(score),
+                        )}
+                      >
+                        {formatScore(score)}
+                      </td>
+                    );
+                  })}
+                  <td className="px-3 py-2 text-right font-mono text-sm tabular-nums text-foreground">
+                    {formatBenchmarkIndex(env?.benchmarkIndex ?? null)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {spread ? (
+        <p className="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-muted-foreground tabular-nums">
+          Benchmark spread{" "}
+          <span className="text-foreground">
+            {formatBenchmarkIndex(spread.min)}–{formatBenchmarkIndex(spread.max)}
+          </span>{" "}
+          across {spread.count} {spread.count === 1 ? "run" : "runs"}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 function DoneBody({ job, result }: { job: AuditJob; result: AuditResultLite }) {
   return (
     <>
@@ -208,10 +331,21 @@ function DoneBody({ job, result }: { job: AuditJob; result: AuditResultLite }) {
 
           <Separator className="bg-border/60" />
 
+          <EnvironmentSection result={result} />
+
+          <Separator className="bg-border/60" />
+
           <section className="flex flex-col gap-3">
             <SectionLabel>Metrics · median run</SectionLabel>
             <MetricsList result={result} />
           </section>
+
+          {result.runs > 1 ? (
+            <>
+              <Separator className="bg-border/60" />
+              <PerRunSpread result={result} />
+            </>
+          ) : null}
 
           <Separator className="bg-border/60" />
 

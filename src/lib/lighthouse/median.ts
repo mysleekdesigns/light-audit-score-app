@@ -14,6 +14,7 @@ import {
   type CategoryScores,
   type LighthouseResult,
   type RunAudit,
+  type RunEnvironment,
   type SingleRunResult,
 } from "@/lib/lighthouse/types";
 
@@ -71,6 +72,9 @@ export const runAudit: RunAudit = async (url, options) => {
   }
 
   const perRunScores: CategoryScores[] = runs.map((run) => run.scores);
+  const perRunEnvironments: RunEnvironment[] = runs.map(
+    (run) => run.environment,
+  );
   const median = selectMedianRun(runs);
 
   // Re-parse the median LHR so median.{scores,metrics,opportunities} are
@@ -93,6 +97,7 @@ export const runAudit: RunAudit = async (url, options) => {
       lhr: median.lhr,
     },
     perRunScores,
+    perRunEnvironments,
     fetchTime: parsedMedian.fetchTime,
     lighthouseVersion: parsedMedian.lighthouseVersion,
     runWarnings,

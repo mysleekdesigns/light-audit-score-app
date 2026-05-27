@@ -24,6 +24,7 @@ function makeRow(overrides: Partial<HistoryRow> & { id: string }): HistoryRow {
     runs: overrides.runs ?? 3,
     scores: overrides.scores ?? {},
     metrics: overrides.metrics ?? null,
+    environment: overrides.environment ?? null,
     hasJsonReport: overrides.hasJsonReport ?? true,
     hasHtmlReport: overrides.hasHtmlReport ?? true,
     fetchTime: overrides.fetchTime ?? null,

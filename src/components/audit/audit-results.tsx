@@ -11,11 +11,13 @@ import { memo } from "react";
 import { Radio } from "lucide-react";
 
 import { CoreWebVitalsStrip } from "@/components/audit/core-web-vitals";
+import { EnvironmentBadge } from "@/components/audit/environment-badge";
 import { ScoreRings } from "@/components/audit/score-rings";
 import { JobStatusBadge } from "@/components/audit/status-badge";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { assessDrift } from "@/lib/lighthouse/drift";
 import { cn } from "@/lib/utils";
 import type { StreamConnection } from "@/hooks/useBatchStream";
 import type { AuditJob, Batch } from "@/lib/queue/types";
@@ -105,6 +107,21 @@ const AuditJobCard = memo(function AuditJobCard({
   const interactive = job.status === "done" || job.status === "error";
   const index = String(job.index + 1).padStart(2, "0");
 
+  // Card-level drift: flag host-power / per-run CPU spread only. Concurrency
+  // contention is a batch-wide concern surfaced elsewhere, so pin concurrency 1.
+  const drifted =
+    job.status === "done" && job.result
+      ? assessDrift({
+          benchmarkIndices: job.result.perRunEnvironments.map(
+            (env) => env.benchmarkIndex,
+          ),
+          cpuSlowdownMultiplier: job.result.environment.cpuSlowdownMultiplier,
+          concurrency: 1,
+          performanceInScope:
+            job.result.options.categories.includes("performance"),
+        }).severity !== "none"
+      : false;
+
   const body = (
     <>
       <div className="flex items-start justify-between gap-3">
@@ -121,6 +138,11 @@ const AuditJobCard = memo(function AuditJobCard({
 
       {job.status === "done" && job.result ? (
         <div className="flex flex-col gap-4">
+          <EnvironmentBadge
+            variant="compact"
+            environment={job.result.environment}
+            drifted={drifted}
+          />
           <ScoreRings scores={job.result.median.scores} size={56} />
           <CoreWebVitalsStrip metrics={job.result.median.metrics} />
         </div>

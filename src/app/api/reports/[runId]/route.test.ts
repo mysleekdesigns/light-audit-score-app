@@ -66,6 +66,14 @@ function makeResult(url: string): AuditResult {
       lhr: { requestedUrl: url, fetchTime: "2026-05-26T00:00:00.000Z" },
     },
     perRunScores: [{ performance: 91 }],
+    perRunEnvironments: [
+      {
+        benchmarkIndex: 1500,
+        hostUserAgent: "test",
+        throttlingMethod: "simulate",
+        cpuSlowdownMultiplier: 4,
+      },
+    ],
     fetchTime: "2026-05-26T00:00:00.000Z",
     lighthouseVersion: "13.3.0",
     runWarnings: [],

@@ -18,7 +18,7 @@
  * client, the persistence layer, and drizzle-kit at generate time.
  */
 
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 /** One audit batch (a set of per-URL jobs sharing one options set). */
 export const batches = sqliteTable("batches", {
@@ -72,6 +72,17 @@ export const runs = sqliteTable("runs", {
   options: text("options").notNull(),
   /** Full `CoreWebVitals` (median run) as JSON; null for failed runs. */
   metrics: text("metrics"),
+  /**
+   * Host / effective-throttling environment of the median run (PRD §6 Phase 10):
+   * `benchmark_index` is Lighthouse's "CPU/Memory Power" (real — can be fractional),
+   * `throttling_method` the *effective* method ("simulate" | "devtools" | …), and
+   * `cpu_slowdown_multiplier` the multiplier actually applied. Null for failed runs
+   * (and on rows written before this migration).
+   */
+  benchmarkIndex: real("benchmark_index"),
+  hostUserAgent: text("host_user_agent"),
+  throttlingMethod: text("throttling_method"),
+  cpuSlowdownMultiplier: real("cpu_slowdown_multiplier"),
   /** Report filenames under `./data/reports/` (null when absent). */
   reportJson: text("report_json"),
   reportHtml: text("report_html"),

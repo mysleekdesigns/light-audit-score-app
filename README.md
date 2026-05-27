@@ -116,8 +116,10 @@ npm run typecheck   # tsc --noEmit
   removed). Lighthouse reports each as 0–1; we normalise to **0–100** (rounded).
 - **Colour bands.** 0–49 = poor (red), 50–89 = average (orange), 90–100 = good (green).
 - **Configurable levers.** Form factor (**mobile** default / desktop — desktop uses Lighthouse's
-  `desktopConfig`) and throttling (**simulated** default / applied — mapped to Lighthouse's
-  `simulate` / `devtools` `throttlingMethod`). These are the biggest score levers.
+  `desktopConfig`), throttling method (**simulated** default / applied — mapped to Lighthouse's
+  `simulate` / `devtools` `throttlingMethod`), and the **CPU slowdown multiplier** (default = let
+  Lighthouse pick its own **4×**). These are the biggest score levers — see *Calibration & DevTools
+  parity* below for when and how to change them.
 
 ## Accuracy notes
 
@@ -134,6 +136,78 @@ npm run typecheck   # tsc --noEmit
   other. To get real, safe concurrency, the queue forks an isolated Node process per audit job
   (`scripts/audit-worker.ts`, under the same launcher as the CLI), each running its own sequential
   median-of-N for one URL. This is how concurrency is achieved without runs poisoning one another.
+
+## Calibration & DevTools parity
+
+Local lab scores are only comparable to the Chrome DevTools Lighthouse panel — or to a real
+phone — when the **host machine** matched what the throttling targeted. The biggest hidden gap is
+not the throttling *method*; it's that CPU throttling is expressed *relative to your host*. This
+section explains how to read and close that gap. (For the full rationale see [`PRD.md`](./PRD.md)
+§3's host-parity finding and §6 Phases 8–10.)
+
+### benchmarkIndex ("CPU/Memory Power") and the 4× default
+
+Every run records a **`benchmarkIndex`** — Lighthouse's "CPU/Memory Power" score for the machine it
+ran on (higher = faster host; an Apple-Silicon Mac lands around ~4000, a high-end desktop ~1750).
+Lighthouse's default **4× CPU multiplier** is *not* an absolute "mid-tier phone" setting: it is tuned
+so a **high-end desktop** (benchmarkIndex ≈ 1750) lands on the **mid-tier mobile** target. On a
+*faster* host, 4× under-throttles, so Performance reads optimistically; on a *slower* or
+over-multiplied host it reads pessimistically. This is why the same site can score differently across
+machines even with identical settings.
+
+### The Calibrate workflow
+
+The **Calibrate** button on the New Audit form re-targets mid-tier mobile for *your* host. It reuses
+the latest completed run's `benchmarkIndex` (no separate benchmark pass), maps it to a device class,
+and recommends a `cpuSlowdownMultiplier` of `round(benchmarkIndex / 437.5)` — the anchor that
+reproduces Lighthouse's own bracket table (high-end desktop → 4×, high-end mobile → 2×, mid-tier
+mobile → 1×). The recommendation is clamped into the engine's allowed band and persisted as your
+default. So: run once, click Calibrate, and subsequent runs throttle to *mid-tier mobile from this
+machine* rather than from a hypothetical high-end desktop.
+
+### "Match DevTools" preset
+
+The **Match DevTools** button makes a run directly comparable to the DevTools Lighthouse panel on the
+same machine. It sets **mobile · simulated throttling · 1 run · concurrency 1 · accuracy mode on**,
+and **resets the CPU multiplier to Lighthouse's own 4×** (clearing any calibrated value) — because
+the panel itself uses simulated throttling with a constant 4× by default. Use this when you want to
+reconcile a local number against DevTools; use Calibrate when you want the *most representative*
+mid-tier-mobile number for your hardware instead.
+
+### Simulated vs applied throttling
+
+- **Simulated** (default) — Lighthouse runs the page **once, unthrottled**, then *estimates* throttled
+  metrics from that single trace (the "Lantern" model). It's fast, low-variance, and matches what the
+  DevTools panel and PageSpeed Insights do by default. Pick this for comparability.
+- **Applied** (`devtools`) — Lighthouse applies **real** CPU and network throttling to Chrome *during*
+  the run. It's slower and noisier, but closer to how a real throttled device behaves. Pick this when
+  you specifically want measured-under-throttle behaviour rather than an estimate.
+
+### Why concurrency affects Performance
+
+Simulated throttling derives its entire estimate from that initial **unthrottled** trace. Running
+several headless Chrome instances in parallel (the throughput default is **3**) makes them contend for
+CPU *during that trace*, which inflates the measured TBT/LCP and therefore **deflates** the Performance
+score versus a solo run. To get trustworthy Performance numbers, enable **accuracy mode**: it forces
+*effective* concurrency to 1 whenever Performance is in scope (other URLs still queue), without
+changing your configured `concurrency` for non-Performance work. Accessibility, SEO, and Best Practices
+do not depend on CPU throttling and are unaffected by concurrency.
+
+### Environment badge & drift warning
+
+Each result card and the batch summary show an **environment badge**: the host's `benchmarkIndex` plus
+the effective throttling method and CPU multiplier the run used. Alongside it, a **drift warning**
+flags when a Performance score is likely distorted by the machine rather than by the page. It fires on
+any of three signals:
+
+- **Host-power drift** — the applied multiplier is far from what this host needs (e.g. a fast Mac left
+  at 4×), with a one-click link to Calibrate.
+- **CPU contention** — a wide `benchmarkIndex` spread across a batch's runs, meaning the host was busy
+  or thermally throttling while some ran, so those scores are unstable.
+- **Concurrency contention** — the batch ran at `concurrency > 1`, which depresses Performance as
+  described above; the warning suggests an accuracy-mode (concurrency 1) re-run.
+
+Drift only matters for Performance, so the warning is suppressed when Performance is not in scope.
 
 ## Architecture (brief)
 

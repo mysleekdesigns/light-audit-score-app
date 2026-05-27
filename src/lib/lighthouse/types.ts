@@ -167,6 +167,13 @@ export interface AuditResult {
   };
   /** Per-run category scores (length === runs) for surfacing spread/variance. */
   perRunScores: CategoryScores[];
+  /**
+   * Per-run host/throttling environment (length === runs), parallel to
+   * `perRunScores`. Surfaces the per-run `benchmarkIndex` spread (PRD §6 Phase 10)
+   * so CPU-contention / thermal drift during a multi-run audit is visible, the way
+   * `perRunScores` surfaces score variance.
+   */
+  perRunEnvironments: RunEnvironment[];
   /** ISO timestamp of the median run. */
   fetchTime: string;
   lighthouseVersion: string;

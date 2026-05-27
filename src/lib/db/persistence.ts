@@ -42,6 +42,7 @@ import type {
   CategoryScores,
   CoreWebVitals,
   FormFactor,
+  RunEnvironment,
 } from "@/lib/lighthouse/types";
 import type { AuditJob, Batch, BatchStatus } from "@/lib/queue/types";
 
@@ -61,6 +62,13 @@ export interface HistoryRow {
   scores: CategoryScores;
   /** Median Core Web Vitals (parsed from the row's JSON; null for failures). */
   metrics: CoreWebVitals | null;
+  /**
+   * Host / effective-throttling environment of the median run (PRD §6 Phase 10):
+   * `benchmarkIndex` ("CPU/Memory Power"), the effective throttling method, and the
+   * applied CPU multiplier. Null for failed runs and for rows persisted before the
+   * Phase 10 migration (so the environment badge / drift warning degrade gracefully).
+   */
+  environment: RunEnvironment | null;
   /** Whether a stored JSON / HTML report exists for this run. */
   hasJsonReport: boolean;
   hasHtmlReport: boolean;
@@ -208,6 +216,10 @@ export async function recordRun(
         scoreSeo: toScoreInt(scores.seo),
         options: JSON.stringify(result.options),
         metrics: JSON.stringify(result.median.metrics),
+        benchmarkIndex: result.environment.benchmarkIndex,
+        hostUserAgent: result.environment.hostUserAgent || null,
+        throttlingMethod: result.environment.throttlingMethod || null,
+        cpuSlowdownMultiplier: result.environment.cpuSlowdownMultiplier,
         reportJson: reportJsonFilename(job.id),
         reportHtml: htmlFilename,
         fetchTime: result.fetchTime ?? null,
@@ -243,6 +255,10 @@ export function recordFailedRun(batch: Batch, job: AuditJob): void {
         scoreSeo: null,
         options: JSON.stringify(batch.options),
         metrics: null,
+        benchmarkIndex: null,
+        hostUserAgent: null,
+        throttlingMethod: null,
+        cpuSlowdownMultiplier: null,
         reportJson: null,
         reportHtml: null,
         fetchTime: null,
@@ -317,6 +333,22 @@ function safeParse<T>(value: string | null, op: string): T | null {
   }
 }
 
+/**
+ * Reconstruct a {@link RunEnvironment} from a `runs` row's environment columns.
+ * Returns `null` when the row carries no environment data — failed runs, or rows
+ * persisted before the Phase 10 migration (so the UI can hide the badge rather
+ * than render an empty one).
+ */
+function rowToEnvironment(row: RunRow): RunEnvironment | null {
+  if (row.benchmarkIndex === null && row.throttlingMethod === null) return null;
+  return {
+    benchmarkIndex: row.benchmarkIndex,
+    hostUserAgent: row.hostUserAgent ?? "",
+    throttlingMethod: row.throttlingMethod ?? "",
+    cpuSlowdownMultiplier: row.cpuSlowdownMultiplier,
+  };
+}
+
 /** Flatten a `runs` row into a {@link HistoryRow}. */
 function rowToHistory(row: RunRow): HistoryRow {
   const scores: CategoryScores = {
@@ -336,6 +368,7 @@ function rowToHistory(row: RunRow): HistoryRow {
     runs: row.runs,
     scores,
     metrics: safeParse<CoreWebVitals>(row.metrics, "rowToHistory:metrics"),
+    environment: rowToEnvironment(row),
     hasJsonReport: row.reportJson !== null,
     hasHtmlReport: row.reportHtml !== null,
     fetchTime: row.fetchTime,

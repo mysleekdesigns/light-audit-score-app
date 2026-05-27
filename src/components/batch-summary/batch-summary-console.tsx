@@ -23,6 +23,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { DriftWarning } from "@/components/audit/drift-warning";
+import { EnvironmentBadge } from "@/components/audit/environment-badge";
 import { ScoreRing } from "@/components/audit/score-ring";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -50,6 +52,8 @@ import {
   timestampSlug,
 } from "@/lib/export/download";
 import { rowsToCsv, rowsToJson } from "@/lib/export/exporters";
+import { assessDrift, benchmarkIndexSpread } from "@/lib/lighthouse/drift";
+import { formatBenchmarkIndex } from "@/lib/lighthouse/environment-format";
 import { LIGHTHOUSE_CATEGORIES } from "@/lib/lighthouse/types";
 import type { CategoryThresholds } from "@/lib/settings/defaults";
 import {
@@ -230,6 +234,38 @@ function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
     [rows, thresholds],
   );
 
+  // Host-environment readout for the whole batch (PRD §6 Phase 10): all runs
+  // share `options`, so we derive a representative env — mean benchmarkIndex
+  // across runs for the power reading, first non-null run's throttling
+  // method/multiplier — and a drift assessment over the per-run indices.
+  const env = useMemo(() => {
+    const benchmarkIndices = rows.map((row) => row.environment?.benchmarkIndex ?? null);
+    const spread = benchmarkIndexSpread(benchmarkIndices);
+    const firstEnv = rows.find((row) => row.environment)?.environment ?? null;
+    const performanceInScope = batch.options.categories.includes("performance");
+
+    const assessment = assessDrift({
+      benchmarkIndices,
+      cpuSlowdownMultiplier: batch.options.cpuSlowdownMultiplier,
+      concurrency: batch.concurrency,
+      performanceInScope,
+    });
+
+    const representative = firstEnv
+      ? {
+          benchmarkIndex: spread?.mean ?? null,
+          hostUserAgent: "",
+          throttlingMethod: firstEnv.throttlingMethod,
+          cpuSlowdownMultiplier:
+            firstEnv.cpuSlowdownMultiplier ??
+            batch.options.cpuSlowdownMultiplier ??
+            null,
+        }
+      : null;
+
+    return { spread, assessment, representative };
+  }, [rows, batch.options, batch.concurrency]);
+
   const doneCount = useMemo(
     () => rows.filter((row) => row.status === "done").length,
     [rows],
@@ -292,7 +328,17 @@ function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
               <span className="text-score-poor">{errorCount}</span> error
             </span>
           ) : null}
+          {env.representative ? (
+            <EnvironmentBadge
+              environment={env.representative}
+              variant="compact"
+              drifted={env.assessment.severity !== "none"}
+            />
+          ) : null}
         </div>
+
+        {/* Drift warning — full-width alert; renders null when there's no drift. */}
+        <DriftWarning assessment={env.assessment} calibrateHref="/" />
       </CardHeader>
 
       <CardContent className="flex flex-col gap-6">
@@ -305,7 +351,19 @@ function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
           <>
             {/* Averages — one score ring per category present across done runs. */}
             <section className="flex flex-col gap-3" aria-label="Average scores">
-              <span className={SECTION_LABEL}>Average scores</span>
+              <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                <span className={SECTION_LABEL}>Average scores</span>
+                {env.spread && env.spread.count > 1 ? (
+                  <span className="font-mono text-[0.65rem] uppercase tracking-[0.12em] text-muted-foreground tabular-nums">
+                    Host power{" "}
+                    <span className="text-foreground">
+                      {formatBenchmarkIndex(env.spread.min)}–
+                      {formatBenchmarkIndex(env.spread.max)}
+                    </span>{" "}
+                    across {env.spread.count} runs
+                  </span>
+                ) : null}
+              </div>
               <div className="flex flex-wrap items-start gap-6">
                 {LIGHTHOUSE_CATEGORIES.map((category) => (
                   <ScoreRing
