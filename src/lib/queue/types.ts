@@ -37,6 +37,30 @@ export function clampConcurrency(n: number): number {
   return Math.min(MAX_CONCURRENCY, Math.max(MIN_CONCURRENCY, Math.floor(n)));
 }
 
+/**
+ * The concurrency a batch will *actually* run at (PRD §6 Phase 9 — accuracy mode).
+ *
+ * "Accuracy mode" forces a single Lighthouse at a time **when Performance is in
+ * scope**. Simulated throttling derives its whole estimate from the page's
+ * initial *unthrottled* load trace, so CPU contention from parallel Chrome
+ * instances inflates TBT/TTI/LCP and silently **deflates** Performance versus a
+ * solo DevTools-panel run (PRD §3 host-parity finding; Lighthouse
+ * `docs/variability.md`: "DO NOT collect multiple Lighthouse reports at the same
+ * time on the same machine"). For batches that don't score Performance
+ * (a11y/SEO/best-practices only), parallelism is harmless, so we keep the
+ * requested concurrency. Always returns a value within the clamped band.
+ */
+export function resolveEffectiveConcurrency(
+  options: AuditOptions,
+  requestedConcurrency: number,
+  accuracyMode = false,
+): number {
+  if (accuracyMode && options.categories.includes("performance")) {
+    return MIN_CONCURRENCY;
+  }
+  return clampConcurrency(requestedConcurrency);
+}
+
 // --- Job / batch model -----------------------------------------------------
 
 /** Lifecycle of a single per-URL audit job. */
@@ -136,6 +160,13 @@ export interface CreateBatchInput {
   urls: string[];
   options: AuditOptions;
   concurrency: number;
+  /**
+   * When true, the queue forces effective concurrency to 1 if Performance is in
+   * scope, for DevTools-panel parity (see {@link resolveEffectiveConcurrency}).
+   * Optional; treated as `false` when omitted. Never mutates the caller's saved
+   * concurrency — it only affects this batch's effective run.
+   */
+  accuracyMode?: boolean;
 }
 
 /**

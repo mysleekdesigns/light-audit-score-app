@@ -340,6 +340,39 @@ describe("AuditQueue", () => {
     expect(queue.concurrency).toBe(MAX_CONCURRENCY);
   });
 
+  it("accuracy mode forces effective concurrency to 1 when Performance is in scope", () => {
+    mockRunAudit.mockResolvedValue(makeResult("https://a.test/", 90));
+    const queue = new AuditQueue();
+
+    // Performance in scope + accuracyMode → effective concurrency 1, regardless
+    // of the requested value.
+    const perfBatch = queue.createBatch({
+      urls: ["https://a.test/"],
+      options: { ...OPTIONS, categories: ["performance"] },
+      concurrency: 8,
+      accuracyMode: true,
+    });
+    expect(perfBatch.concurrency).toBe(1);
+    expect(queue.concurrency).toBe(1);
+
+    // Accuracy mode but Performance NOT in scope → requested concurrency kept.
+    const nonPerfBatch = queue.createBatch({
+      urls: ["https://b.test/"],
+      options: { ...OPTIONS, categories: ["seo", "accessibility"] },
+      concurrency: 4,
+      accuracyMode: true,
+    });
+    expect(nonPerfBatch.concurrency).toBe(4);
+
+    // No accuracy mode → requested concurrency kept even with Performance.
+    const plainBatch = queue.createBatch({
+      urls: ["https://c.test/"],
+      options: { ...OPTIONS, categories: ["performance"] },
+      concurrency: 6,
+    });
+    expect(plainBatch.concurrency).toBe(6);
+  });
+
   it("defaults concurrency to DEFAULT_CONCURRENCY when constructed bare", () => {
     const queue = new AuditQueue();
     expect(queue.concurrency).toBe(DEFAULT_CONCURRENCY);

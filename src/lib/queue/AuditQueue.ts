@@ -50,6 +50,7 @@ import {
   type ProgressEvent,
   type ProgressListener,
   clampConcurrency,
+  resolveEffectiveConcurrency,
 } from "@/lib/queue/types";
 
 /**
@@ -152,7 +153,14 @@ export class AuditQueue implements AuditQueueApi {
    * batch's (clamped) concurrency. Returns the initial all-`queued` snapshot.
    */
   createBatch(input: CreateBatchInput): Batch {
-    const concurrency = clampConcurrency(input.concurrency);
+    // Accuracy mode (PRD §6 Phase 9) forces concurrency to 1 when Performance is
+    // in scope so parallel Chromes can't contend during the simulated-throttling
+    // trace and deflate scores. `batch.concurrency` records what actually ran.
+    const concurrency = resolveEffectiveConcurrency(
+      input.options,
+      input.concurrency,
+      input.accuracyMode,
+    );
     // The PQueue is shared across batches; the most recent batch's concurrency
     // wins. Single-user tool, so batches don't realistically overlap.
     this.queue.concurrency = concurrency;

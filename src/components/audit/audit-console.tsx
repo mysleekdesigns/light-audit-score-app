@@ -11,7 +11,7 @@
  *  - raises sonner toasts on submit failure and on batch completion.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { AuditDetailSheet } from "@/components/audit/audit-detail-sheet";
@@ -72,6 +72,22 @@ export function AuditConsole() {
     }
   }
 
+  // Latest completed run's host benchmark, for the form's Calibrate affordance
+  // (PRD §6 Phase 9 — reuse a real run's `benchmarkIndex`, no server benchmark).
+  // Newest finished job wins: scan done jobs and keep the one with the latest
+  // `finishedAt` that actually reported a benchmark.
+  const latestBenchmarkIndex = useMemo<number | null>(() => {
+    if (!batch) return null;
+    let best: { at: number; index: number } | null = null;
+    for (const job of batch.jobs) {
+      const index = job.result?.environment?.benchmarkIndex;
+      if (job.status !== "done" || typeof index !== "number") continue;
+      const at = job.finishedAt ? Date.parse(job.finishedAt) : 0;
+      if (!best || at >= best.at) best = { at, index };
+    }
+    return best?.index ?? null;
+  }, [batch]);
+
   // A batch is "in flight" while we have one that hasn't reached a terminal state.
   const running = submitting || (batchId !== null && !isComplete);
 
@@ -85,7 +101,11 @@ export function AuditConsole() {
 
   return (
     <div className="flex flex-col gap-8">
-      <NewAuditForm onSubmit={handleSubmit} isRunning={running} />
+      <NewAuditForm
+        onSubmit={handleSubmit}
+        isRunning={running}
+        latestBenchmarkIndex={latestBenchmarkIndex}
+      />
 
       {batch ? (
         <AuditResults

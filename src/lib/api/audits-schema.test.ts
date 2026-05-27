@@ -21,7 +21,23 @@ describe("parseCreateBatchBody — valid bodies", () => {
       urls: ["https://example.com"],
       options: DEFAULT_OPTIONS,
       concurrency: DEFAULT_CONCURRENCY,
+      accuracyMode: false,
     });
+  });
+
+  it("defaults accuracyMode to false and accepts an explicit true", () => {
+    const off = parseCreateBatchBody({ urls: ["https://example.com"] });
+    expect(off.ok).toBe(true);
+    if (!off.ok) return;
+    expect(off.value.accuracyMode).toBe(false);
+
+    const on = parseCreateBatchBody({
+      urls: ["https://example.com"],
+      accuracyMode: true,
+    });
+    expect(on.ok).toBe(true);
+    if (!on.ok) return;
+    expect(on.value.accuracyMode).toBe(true);
   });
 
   it("accepts http and https URLs", () => {

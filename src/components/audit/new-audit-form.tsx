@@ -1,11 +1,19 @@
 "use client";
 
 import { useCallback, useId, useMemo, useState } from "react";
-import { ListPlus, Play, Radar, TriangleAlert } from "lucide-react";
+import {
+  Crosshair,
+  Gauge,
+  ListPlus,
+  Play,
+  Radar,
+  TriangleAlert,
+} from "lucide-react";
 
 import { parseUrls } from "@/lib/parseUrls";
 import type { CreateBatchRequest } from "@/lib/client/auditClient";
 import { CrawlPanel } from "@/components/audit/crawl-panel";
+import { RunConfigCard } from "@/components/audit/run-config-card";
 import type {
   FormFactor,
   LighthouseCategory,
@@ -21,7 +29,12 @@ import {
   MAX_CONCURRENCY,
   MIN_CONCURRENCY,
 } from "@/lib/queue/types";
+import { calibrationFor } from "@/lib/lighthouse/calibrate";
 import { CATEGORY_LABELS } from "@/lib/scores";
+import {
+  clampCpuMultiplier,
+  MATCH_DEVTOOLS_PRESET,
+} from "@/lib/settings/defaults";
 import { useAuditDefaults } from "@/hooks/useAuditDefaults";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -36,6 +49,7 @@ import {
 } from "@/components/ui/card";
 import {
   Field,
+  FieldContent,
   FieldDescription,
   FieldGroup,
   FieldLabel,
@@ -50,9 +64,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { Toggle } from "@/components/ui/toggle";
 import {
   ToggleGroup,
   ToggleGroupItem,
@@ -66,18 +82,50 @@ function range(from: number, to: number): number[] {
 const RUN_OPTIONS = range(MIN_RUNS, MAX_RUNS);
 const CONCURRENCY_OPTIONS = range(MIN_CONCURRENCY, MAX_CONCURRENCY);
 
+/**
+ * Sentinel `<Select>` value standing in for "no pinned multiplier" — Lighthouse
+ * applies its own 4× (exactly the DevTools panel default). Select values must be
+ * strings, so we map this to `cpuSlowdownMultiplier: undefined` on the way out.
+ */
+const CPU_AUTO = "auto";
+/** Discrete CPU-multiplier choices offered in the picker (all within the engine band). */
+const CPU_OPTIONS = [1, 2, 4, 6, 8, 10] as const;
+
+/** Map the form's CPU multiplier (possibly undefined) to its `<Select>` value. */
+function cpuSelectValue(multiplier: number | undefined): string {
+  return typeof multiplier === "number" ? String(multiplier) : CPU_AUTO;
+}
+
+/** Map a `<Select>` value back to a clamped multiplier, or `undefined` for Auto. */
+function cpuFromSelectValue(value: string): number | undefined {
+  if (value === CPU_AUTO) return undefined;
+  return clampCpuMultiplier(Number(value));
+}
+
 export interface NewAuditFormProps {
   /** Called with a ready-to-send batch request when the user runs the audit. */
   onSubmit: (request: CreateBatchRequest) => void;
   /** When true, the form locks and the submit button shows a running state. */
   isRunning?: boolean;
+  /**
+   * `benchmarkIndex` of the most recent completed run (newest done job wins), or
+   * null when no run has reported one yet. Drives the Calibrate affordance and
+   * the Run-config readout (PRD §6 Phase 9). The form never fetches this itself.
+   */
+  latestBenchmarkIndex?: number | null;
 }
 
-export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps) {
+export function NewAuditForm({
+  onSubmit,
+  isRunning = false,
+  latestBenchmarkIndex = null,
+}: NewAuditFormProps) {
   const deviceId = useId();
   const throttlingId = useId();
   const runsId = useId();
   const concurrencyId = useId();
+  const cpuId = useId();
+  const accuracyId = useId();
 
   // Persisted run defaults (device / runs / concurrency / categories). The first
   // render must match SSR, so we keep the hardcoded initial state below and only
@@ -91,13 +139,17 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
   // URLs through the same CreateBatchRequest the paste tab uses.
   const [crawlUrls, setCrawlUrls] = useState<string[]>([]);
   const [formFactor, setFormFactor] = useState<FormFactor>("mobile");
-  // Local-only this phase: throttling is NOT persisted to defaults yet (Phase 9).
   const [throttling, setThrottling] = useState<Throttling>("simulated");
   const [runs, setRuns] = useState(3);
   const [concurrency, setConcurrency] = useState(DEFAULT_CONCURRENCY);
   const [categories, setCategories] = useState<LighthouseCategory[]>([
     ...LIGHTHOUSE_CATEGORIES,
   ]);
+  // Phase 9: CPU multiplier (undefined = Lighthouse's 4× default) + accuracy mode.
+  const [cpuSlowdownMultiplier, setCpuSlowdownMultiplier] = useState<
+    number | undefined
+  >(undefined);
+  const [accuracyMode, setAccuracyMode] = useState(false);
 
   // Seed device / runs / concurrency / categories from the persisted defaults
   // exactly once, the render after the hook has read localStorage (`loaded`
@@ -109,9 +161,12 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
   if (loaded && !hydrated) {
     setHydrated(true);
     setFormFactor(defaults.formFactor);
+    setThrottling(defaults.throttling);
     setRuns(defaults.runs);
     setConcurrency(defaults.concurrency);
     setCategories([...defaults.categories]);
+    setCpuSlowdownMultiplier(defaults.cpuSlowdownMultiplier);
+    setAccuracyMode(defaults.accuracyMode);
   }
 
   const { urls: pastedUrls, invalid } = useMemo(() => parseUrls(text), [text]);
@@ -120,6 +175,13 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
   const urls = tab === "paste" ? pastedUrls : crawlUrls;
 
   const canSubmit = urls.length > 0 && !isRunning;
+
+  // Calibration is pure + cheap, but memoised so the derived recommendation is a
+  // stable reference for the readout card across unrelated re-renders.
+  const calibration = useMemo(
+    () => calibrationFor(latestBenchmarkIndex),
+    [latestBenchmarkIndex],
+  );
 
   // Stable callback so the crawl panel's reporting effect doesn't re-fire.
   const handleCrawlUrlsChange = useCallback((next: string[]) => {
@@ -139,9 +201,12 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
   }
 
   function handleThrottlingChange(value: string) {
-    // Guard the union before committing. No `update(...)` — persisting throttling
-    // to defaults is Phase 9, so this choice lives only for the current session.
-    if (value === "simulated" || value === "applied") setThrottling(value);
+    // Guard the union before committing, then persist (Phase 9: throttling is now
+    // a remembered default).
+    if (value === "simulated" || value === "applied") {
+      setThrottling(value);
+      update({ throttling: value });
+    }
   }
 
   function handleRunsChange(value: string) {
@@ -154,6 +219,46 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
     const next = Number(value);
     setConcurrency(next);
     update({ concurrency: next });
+  }
+
+  function handleCpuChange(value: string) {
+    const next = cpuFromSelectValue(value);
+    setCpuSlowdownMultiplier(next);
+    update({ cpuSlowdownMultiplier: next });
+  }
+
+  function handleAccuracyModeChange(next: boolean) {
+    setAccuracyMode(next);
+    update({ accuracyMode: next });
+  }
+
+  /**
+   * Calibrate: reuse the latest completed run's `benchmarkIndex` (no server
+   * benchmark) and adopt the recommended multiplier as the new default. The
+   * trigger is disabled when no calibration is available, so this is safe.
+   */
+  function handleCalibrate() {
+    if (!calibration) return;
+    const next = clampCpuMultiplier(calibration.recommendedMultiplier);
+    setCpuSlowdownMultiplier(next);
+    update({ cpuSlowdownMultiplier: next });
+  }
+
+  /**
+   * Match DevTools: apply the canonical panel preset (mobile · simulated · 1 run ·
+   * concurrency 1 · accuracy on · Auto 4×) to both local state and the persisted
+   * defaults, so the next run is directly comparable to a DevTools-panel run.
+   */
+  function handleMatchDevTools() {
+    const preset = MATCH_DEVTOOLS_PRESET;
+    if (preset.formFactor) setFormFactor(preset.formFactor);
+    if (preset.throttling) setThrottling(preset.throttling);
+    if (typeof preset.runs === "number") setRuns(preset.runs);
+    if (typeof preset.concurrency === "number") setConcurrency(preset.concurrency);
+    if (typeof preset.accuracyMode === "boolean") setAccuracyMode(preset.accuracyMode);
+    // The preset deliberately clears any pinned multiplier (back to Auto 4×).
+    setCpuSlowdownMultiplier(preset.cpuSlowdownMultiplier);
+    update(preset);
   }
 
   function handleCategoriesChange(value: string[]) {
@@ -174,8 +279,11 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
         throttling,
         categories,
         runs,
+        // Omitted (undefined) → Lighthouse's own 4×, exactly the panel default.
+        cpuSlowdownMultiplier,
       },
       concurrency,
+      accuracyMode,
     });
   }
 
@@ -302,6 +410,35 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
             </Field>
 
             <Field>
+              <FieldLabel htmlFor={cpuId}>CPU slowdown</FieldLabel>
+              <Select
+                value={cpuSelectValue(cpuSlowdownMultiplier)}
+                onValueChange={handleCpuChange}
+                disabled={isRunning}
+              >
+                <SelectTrigger id={cpuId} className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value={CPU_AUTO}>
+                      Auto (Lighthouse 4×)
+                    </SelectItem>
+                    {CPU_OPTIONS.map((n) => (
+                      <SelectItem key={n} value={String(n)}>
+                        {n}× slowdown
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <FieldDescription>
+                Throttling is relative to this host. A faster machine needs a
+                higher multiplier to hit mid-tier mobile — Calibrate sets it.
+              </FieldDescription>
+            </Field>
+
+            <Field>
               <FieldLabel htmlFor={runsId}>Runs per URL</FieldLabel>
               <Select
                 value={String(runs)}
@@ -366,6 +503,73 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
               </ToggleGroup>
               <FieldDescription>
                 At least one category stays selected.
+              </FieldDescription>
+            </FieldSet>
+
+            <Field orientation="horizontal">
+              <FieldContent>
+                <FieldLabel htmlFor={accuracyId}>Accuracy mode</FieldLabel>
+                <FieldDescription>
+                  Forces one audit at a time when Performance is in scope —
+                  slower, but no CPU contention skewing the score.
+                </FieldDescription>
+              </FieldContent>
+              <Toggle
+                id={accuracyId}
+                variant="outline"
+                size="sm"
+                pressed={accuracyMode}
+                onPressedChange={handleAccuracyModeChange}
+                disabled={isRunning}
+                aria-label="Accuracy mode"
+                className="shrink-0 font-mono text-[0.65rem] uppercase tracking-[0.18em] data-[state=on]:bg-score-good/15 data-[state=on]:text-score-good data-[state=on]:border-score-good/40"
+              >
+                {accuracyMode ? "On" : "Off"}
+              </Toggle>
+            </Field>
+
+            <Separator />
+
+            {/* Calibration & parity (PRD §6 Phase 9). */}
+            <FieldSet>
+              <FieldLegend variant="label">Parity</FieldLegend>
+              <RunConfigCard
+                throttling={throttling}
+                cpuSlowdownMultiplier={cpuSlowdownMultiplier}
+                calibration={calibration}
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCalibrate}
+                  disabled={isRunning || !calibration}
+                  title={
+                    calibration
+                      ? `Apply the recommended ${calibration.recommendedMultiplier}× for this host`
+                      : "Run an audit first to read this host's benchmark"
+                  }
+                >
+                  <Gauge data-icon="inline-start" />
+                  Calibrate
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleMatchDevTools}
+                  disabled={isRunning}
+                  title="Mobile · simulated · 1 run · concurrency 1 · accuracy on"
+                >
+                  <Crosshair data-icon="inline-start" />
+                  Match DevTools
+                </Button>
+              </div>
+              <FieldDescription>
+                {calibration
+                  ? "Calibrate retargets mid-tier mobile from the last run's host benchmark."
+                  : "Calibrate unlocks after your first run reports a host benchmark."}
               </FieldDescription>
             </FieldSet>
 

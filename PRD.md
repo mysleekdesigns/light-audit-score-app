@@ -1,19 +1,23 @@
 # PRD — Local Lighthouse Auditing Tool
 
-> **Status:** Phase 8 complete — the **Calibration & Accuracy** layer has begun. The engine now
-> takes a `throttling` method (simulated/applied) *and* an optional `cpuSlowdownMultiplier` (1–20,
-> clamped; omitted = Lighthouse's 4×), plumbed into the Lighthouse flags by the unit-tested
-> `buildThrottlingFlags` (which merges the multiplier over the form factor's default throttling so
-> the network profile is never clobbered); every run captures its host/effective-throttling
-> `RunEnvironment` (`benchmarkIndex`, `hostUserAgent`, effective method + multiplier from
-> `lhr.environment`/`configSettings`), which rides through `AuditResultLite` to the API/SSE; the
-> New-Audit form exposes a Simulated/Applied throttling control (no longer hardcoded); and the CLI
-> gained `--cpu=N`. **Verified for real**: simulated→`simulate`/applied→`devtools` with the chosen
-> multiplier read back from `configSettings`, `benchmarkIndex`+host captured, and raising the
-> multiplier 1×→12× shifted TBT 0→250 ms / Performance 65→58. Lint, typecheck, build, and **263
-> unit tests** all green. **Next up:** Phase 9 (§6) — Calibration & the "Match DevTools" preset
-> (calibrate the multiplier from `benchmarkIndex`, accuracy mode that serializes Performance at
-> concurrency 1, and a one-button mobile·simulated·1-run·concurrency-1 preset), then Phase 10
+> **Status:** Phase 9 complete — the **Calibration & "Match DevTools" parity** layer is in. On top
+> of Phase 8's engine knobs, the tool now turns them into one-click parity with the Chrome DevTools
+> Lighthouse panel. **Calibrate** (`src/lib/lighthouse/calibrate.ts`, pure + unit-tested) maps a
+> run's `benchmarkIndex` to a device class and a recommended `cpuSlowdownMultiplier` via the official
+> bracket table (anchored on the doc's 4×@high-end-desktop fact: `round(benchmarkIndex / 437.5)`);
+> the form's Calibrate button reuses the latest run's `benchmarkIndex` and persists the applied
+> multiplier. **Accuracy mode** (`resolveEffectiveConcurrency` in `queue/types.ts`; an `accuracyMode`
+> flag threaded request→schema→`CreateBatchInput`→`AuditQueue`) forces effective concurrency to 1
+> when Performance is in scope — without mutating the saved setting — so parallel Chromes can't
+> contend during the simulated-throttling trace and deflate scores. The **"Match DevTools" preset**
+> (`MATCH_DEVTOOLS_PRESET`) sets mobile·simulated·1 run·concurrency 1·accuracy-on (4× auto). The
+> New-Audit form persists throttling/CPU/accuracy via `useAuditDefaults` (`AuditDefaults` extended,
+> storage key → v2) and a new **Run-config card** surfaces throttling + effective multiplier +
+> calibration. **Verified for real**: a mobile·simulated·1-run audit of example.com reported
+> `simulate` / `cpuSlowdownMultiplier:4` / `benchmarkIndex:4057.5` — exactly the panel's mobile
+> defaults (so directly comparable), with the calibrator recommending ~9× to re-target mid-tier
+> mobile on this fast host. Lint, typecheck, build, and **276 unit tests** all green. **Next up:**
+> Phase 10
 > (environment badge + drift warnings). Phase 7's polish layer remains complete:
 > **export** (History exports its filtered rows and each Batch exports its runs as JSON/CSV +
 > bulk-opens their HTML reports, via pure unit-tested serializers in `src/lib/export/`);
@@ -452,23 +456,42 @@ Results are durably persisted to SQLite + disk, so nothing is lost on restart.
 > badge/drift warnings are Phases 9–10.
 
 ### Phase 9 — Calibration & "Match DevTools" parity
-- [ ] **Calibrate** action: run a quick reference benchmark (or reuse one audit's
+- [x] **Calibrate** action: run a quick reference benchmark (or reuse one audit's
       `benchmarkIndex`), then map it to a recommended `cpuSlowdownMultiplier` via the official
       bracket table (high-end desktop 1500–2000, mid-tier mobile 125–800, etc. — Lighthouse
       `docs/throttling.md`), and persist the recommendation as a default.
-- [ ] **Accuracy mode** toggle: when Performance is in scope, force the batch's effective
+      *Done via the pure, unit-tested `src/lib/lighthouse/calibrate.ts` (`calibrationFor` →
+      device class + recommended multiplier, anchored on the doc's 4×@high-end-desktop fact);
+      the form's Calibrate button reuses the latest completed run's `benchmarkIndex` (no separate
+      benchmark endpoint) and persists the applied multiplier via `useAuditDefaults`.*
+- [x] **Accuracy mode** toggle: when Performance is in scope, force the batch's effective
       `concurrency = 1` so the initial unthrottled trace isn't CPU-contended; surface the
       speed↔accuracy tradeoff. Honour an effective-concurrency override in `CreateBatchInput`
       (`src/lib/queue/types.ts`) / `AuditQueue` rather than mutating the user's saved setting.
-- [ ] **"Match DevTools" preset**: one button sets mobile · simulated · 1 run · concurrency 1 —
+      *Done: `resolveEffectiveConcurrency(options, concurrency, accuracyMode)` in queue/types.ts;
+      `accuracyMode` flows request → schema → `CreateBatchInput` → `AuditQueue.createBatch`, which
+      records the effective concurrency. The saved concurrency is never mutated.*
+- [x] **"Match DevTools" preset**: one button sets mobile · simulated · 1 run · concurrency 1 —
       the panel's defaults — so a run is directly comparable to a DevTools-panel run.
-- [ ] Expose throttling method + CPU multiplier + the calibrated default in the Run-config card;
+      *Done: `MATCH_DEVTOOLS_PRESET` in `src/lib/settings/defaults.ts` (also turns accuracy mode on
+      and resets the multiplier to Lighthouse's 4×, matching the panel); the form applies it to
+      local state + `update(...)`.*
+- [x] Expose throttling method + CPU multiplier + the calibrated default in the Run-config card;
       remember them via `useAuditDefaults` (extend `AuditDefaults` + `normalizeDefaults` in
       `src/lib/settings/defaults.ts`, each slice merged without clobbering the others).
+      *Done: `AuditDefaults` gained `throttling` / `accuracyMode` / optional `cpuSlowdownMultiplier`
+      (storage key → v2); a new `run-config-card.tsx` shows throttling + effective multiplier +
+      calibration; the CPU control is a Select ("Auto = Lighthouse 4×" + 1–10× presets) rather than
+      a slider, to avoid a new radix dependency.*
 - **Verify**: run a URL via the "Match DevTools" preset **and** in the DevTools Lighthouse panel
       (mobile, simulated) on the same machine — category scores land within a few points and the
       reported `benchmarkIndex` matches the panel's "CPU/Memory Power". Confirm a batch with
       accuracy mode on no longer silently deflates Performance vs the same URLs run one-by-one.
+      *Verified (engine half): a real mobile·simulated·1-run audit of example.com reported
+      `throttlingMethod:"simulate"`, `cpuSlowdownMultiplier:4`, `benchmarkIndex:4057.5` — exactly the
+      panel's mobile defaults, so it's directly comparable, and the calibrator correctly recommends
+      ~9× to re-target mid-tier mobile on this fast host. Accuracy-mode effective-concurrency and the
+      preset are unit-tested. The side-by-side panel comparison is a manual same-machine check.*
 
 ### Phase 10 — Environment visibility & drift warnings
 - [ ] **Environment badge** on each result card + the batch summary: show `benchmarkIndex`

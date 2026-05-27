@@ -69,6 +69,9 @@ export const createBatchBodySchema = z.object({
     .number("concurrency must be a number.")
     .optional()
     .transform((n) => (n === undefined ? DEFAULT_CONCURRENCY : clampConcurrency(n))),
+  // Accuracy mode (PRD §6 Phase 9): when true the queue forces effective
+  // concurrency to 1 if Performance is in scope, for DevTools-panel parity.
+  accuracyMode: z.boolean().optional().default(false),
 });
 
 /** Discriminated result of {@link parseCreateBatchBody}. */
@@ -98,6 +101,6 @@ export function parseCreateBatchBody(raw: unknown): ParseCreateBatchResult {
   }
   // `result.data` already satisfies CreateBatchInput (urls/options/concurrency
   // resolved); the explicit shape keeps the contract obvious to readers.
-  const { urls, options, concurrency } = result.data;
-  return { ok: true, value: { urls, options, concurrency } };
+  const { urls, options, concurrency, accuracyMode } = result.data;
+  return { ok: true, value: { urls, options, concurrency, accuracyMode } };
 }

@@ -14,8 +14,11 @@
 import {
   type FormFactor,
   type LighthouseCategory,
+  type Throttling,
   LIGHTHOUSE_CATEGORIES,
+  MAX_CPU_MULTIPLIER,
   MAX_RUNS,
+  MIN_CPU_MULTIPLIER,
   MIN_RUNS,
 } from "@/lib/lighthouse/types";
 import {
@@ -31,12 +34,24 @@ export type CategoryThresholds = Record<LighthouseCategory, number>;
 export interface AuditDefaults {
   /** Default emulated device for a new audit. */
   formFactor: FormFactor;
+  /** Default throttling method (simulated = Lantern, applied = DevTools). */
+  throttling: Throttling;
   /** Default median-of-N runs (MIN_RUNS..MAX_RUNS). */
   runs: number;
   /** Default queue concurrency (clamped to the allowed band). */
   concurrency: number;
+  /**
+   * When true, force effective concurrency to 1 if Performance is in scope, for
+   * DevTools-panel parity (PRD §6 Phase 9). Does not change `concurrency` itself.
+   */
+  accuracyMode: boolean;
   /** Default selected categories (non-empty; canonical order). */
   categories: LighthouseCategory[];
+  /**
+   * Default CPU slowdown multiplier (MIN_CPU_MULTIPLIER..MAX_CPU_MULTIPLIER).
+   * Omitted = Lighthouse's own 4× — exactly what the DevTools panel uses.
+   */
+  cpuSlowdownMultiplier?: number;
   /** Per-category pass thresholds for the Batch Summary view. */
   thresholds: CategoryThresholds;
 }
@@ -49,20 +64,41 @@ export const DEFAULT_THRESHOLDS: CategoryThresholds = {
   seo: GOOD_THRESHOLD,
 };
 
-/** Factory defaults: mobile / 3 runs / default concurrency / all categories / 90s. */
+/** Factory defaults: mobile / simulated / 3 runs / default concurrency / all categories / 90s. */
 export const DEFAULT_AUDIT_DEFAULTS: AuditDefaults = {
   formFactor: "mobile",
+  throttling: "simulated",
   runs: 3,
   concurrency: DEFAULT_CONCURRENCY,
+  accuracyMode: false,
   categories: [...LIGHTHOUSE_CATEGORIES],
+  // cpuSlowdownMultiplier intentionally omitted → Lighthouse's 4× default.
   thresholds: { ...DEFAULT_THRESHOLDS },
+};
+
+/**
+ * The Chrome DevTools Lighthouse panel's defaults, as a patch over
+ * {@link AuditDefaults} (PRD §6 Phase 9). A run created from these — mobile ·
+ * simulated · 1 run · concurrency 1 · accuracy mode — is directly comparable to a
+ * panel run on the same machine. `cpuSlowdownMultiplier` is reset to `undefined`
+ * so Lighthouse's own 4× applies (exactly what the panel uses), clearing any
+ * previously-calibrated multiplier when the preset is applied.
+ */
+export const MATCH_DEVTOOLS_PRESET: Partial<AuditDefaults> = {
+  formFactor: "mobile",
+  throttling: "simulated",
+  runs: 1,
+  concurrency: 1,
+  accuracyMode: true,
+  cpuSlowdownMultiplier: undefined,
 };
 
 /**
  * `localStorage` key. Versioned so a future shape change can't crash on a stale
  * blob — bump the suffix and old data is simply ignored (normaliser falls back).
+ * v2 added throttling / accuracyMode / cpuSlowdownMultiplier (Phase 9).
  */
-export const SETTINGS_STORAGE_KEY = "lighthouse:audit-defaults:v1";
+export const SETTINGS_STORAGE_KEY = "lighthouse:audit-defaults:v2";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -78,6 +114,16 @@ export function clampScore(value: unknown, fallback: number): number {
 export function clampRuns(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   return Math.min(MAX_RUNS, Math.max(MIN_RUNS, Math.round(value)));
+}
+
+/**
+ * Clamp a CPU-multiplier value to an integer in MIN..MAX_CPU_MULTIPLIER, or
+ * `undefined` for any non-number — so an absent/garbage value degrades to "use
+ * Lighthouse's 4× default" rather than a forced multiplier.
+ */
+export function clampCpuMultiplier(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return Math.min(MAX_CPU_MULTIPLIER, Math.max(MIN_CPU_MULTIPLIER, Math.round(value)));
 }
 
 /** Keep only valid categories, in canonical order, never empty (→ all). */
@@ -107,15 +153,20 @@ export function normalizeDefaults(raw: unknown): AuditDefaults {
   const source = isRecord(raw) ? raw : {};
   const formFactor: FormFactor =
     source.formFactor === "desktop" ? "desktop" : "mobile";
+  const throttling: Throttling =
+    source.throttling === "applied" ? "applied" : "simulated";
   return {
     formFactor,
+    throttling,
     runs: clampRuns(source.runs, DEFAULT_AUDIT_DEFAULTS.runs),
     concurrency:
       typeof source.concurrency === "number" &&
       Number.isFinite(source.concurrency)
         ? clampConcurrency(source.concurrency)
         : DEFAULT_AUDIT_DEFAULTS.concurrency,
+    accuracyMode: source.accuracyMode === true,
     categories: sanitizeCategories(source.categories),
+    cpuSlowdownMultiplier: clampCpuMultiplier(source.cpuSlowdownMultiplier),
     thresholds: sanitizeThresholds(source.thresholds),
   };
 }

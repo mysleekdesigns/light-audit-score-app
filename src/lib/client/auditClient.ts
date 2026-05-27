@@ -17,6 +17,11 @@ export interface CreateBatchRequest {
   urls: string[];
   options?: Partial<AuditOptions>;
   concurrency?: number;
+  /**
+   * When true, the server forces effective concurrency to 1 if Performance is in
+   * scope (DevTools-panel parity, PRD §6 Phase 9). Optional; defaults to false.
+   */
+  accuracyMode?: boolean;
 }
 
 /** Thrown by every client call on a non-2xx response; carries the structured envelope. */
