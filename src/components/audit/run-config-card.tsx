@@ -83,8 +83,8 @@ export function RunConfigCard({
     cpuSlowdownMultiplier === calibration.recommendedMultiplier;
 
   return (
-    <div className="rounded-lg border border-border/60 bg-muted/30 p-3">
-      <div className="grid grid-cols-3 gap-3">
+    <div className="flex flex-col gap-2 rounded-lg border border-border/60 bg-muted/30 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
         <ReadoutCell
           icon={<Activity className="size-3" aria-hidden />}
           label="Throttle"
@@ -102,7 +102,7 @@ export function RunConfigCard({
           value={recommendation}
         />
       </div>
-      <p className="mt-2.5 font-mono text-[0.6rem] leading-relaxed tracking-[0.04em] text-muted-foreground">
+      <p className="font-mono text-[0.6rem] leading-relaxed tracking-[0.04em] text-muted-foreground">
         {calibration
           ? matchesRecommendation
             ? `Calibrated for ${calibration.deviceClassLabel.toLowerCase()} (benchmark ${Math.round(calibration.benchmarkIndex)}).`

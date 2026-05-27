@@ -6,6 +6,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { SiteHeader } from "@/components/site-header";
+import { ScoreBandLegend } from "@/components/score-band-legend";
 
 // UI / headings: a technical grotesque with engineered character.
 const archivo = Archivo({
@@ -46,8 +47,9 @@ export default function RootLayout({
               {children}
             </main>
             <footer className="border-t border-border/60">
-              <div className="flex w-full items-center justify-between px-6 py-4 font-mono text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground lg:px-10">
+              <div className="flex w-full flex-wrap items-center justify-between gap-4 px-6 py-4 font-mono text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground lg:px-10">
                 <span>Local lab data · Lighthouse v13</span>
+                <ScoreBandLegend />
                 <span className="text-muted-foreground/70">Median-of-N · bounded concurrency</span>
               </div>
             </footer>

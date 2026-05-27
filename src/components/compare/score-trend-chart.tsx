@@ -38,7 +38,7 @@ export function ScoreTrendChart({ data }: ScoreTrendChartProps) {
   return (
     <ChartContainer
       config={TREND_CONFIG}
-      className="aspect-auto h-64 w-full font-mono"
+      className="aspect-auto h-56 w-full font-mono"
     >
       <LineChart data={data} margin={{ top: 8, right: 12, left: -8, bottom: 0 }}>
         <CartesianGrid vertical={false} strokeDasharray="2 4" />

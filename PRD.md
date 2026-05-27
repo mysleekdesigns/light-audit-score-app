@@ -1,6 +1,37 @@
 # PRD — Local Lighthouse Auditing Tool
 
-> **Status:** Phase 10 complete — **all 11 phases (0–10) are done.** The **Environment visibility &
+> **Planned (post-v1 — Phases 11–14):** a **density & multi-device** pass that keeps the existing
+> dark "precision-instrument" visual design **untouched** (the cooled `oklch(0.165 …)` palette, cyan
+> primary, green/amber/red score bands, Archivo + JetBrains-Mono with tabular figures, hairline 9%
+> borders, instrument-grid texture) and only reclaims wasted screen space + borrows proven tools from
+> swing's dense Lighthouse console. Scope: a toggleable **dense results table** (one row per URL,
+> compact score pills) alongside the ring cards, a **compact control bar**, true **full-bleed**
+> wide-screen layouts, **Desktop + Mobile paired** audits, one-click **re-run / regenerate**, **crawl
+> exclude-paths + max-count**, and a scheduled **daily archive**. Detailed checklists in §6
+> (Phases 11–14). (The swing layout was analysed from a full-page screenshot — its live site blocks
+> automated fetch behind an invalid-cert-authority, so crawl/stealth/fetch all failed.)
+
+> **Status:** Phase 11 complete — the **full-bleed density & wide-screen reclaim** pass is in, a pure
+> *layout + tooling* change with the dark "precision-instrument" identity preserved verbatim (no new
+> colours/fonts; the new pill, toggle, table and legend reuse only the existing score-band tokens +
+> Archivo/JetBrains-Mono). The band→colour helper (already shared in `src/lib/scores.ts`) gained
+> `scoreBandChipClass`/`scoreChipClass`/`scoreBandSolidClass`, feeding a new **`ScorePill`** (dense
+> counterpart to the ring). Live results + History now toggle between a **dense one-row-per-URL table**
+> (`results-table.tsx`: path · 4 score pills · inline micro-CWV · env chip · status · `View →` into the
+> unchanged detail sheet) and the **ring-card grid** (breakpoints raised to `…xl:grid-cols-4 2xl:grid-cols-5`,
+> smaller rings) via a shared **`ResultsViewToggle`**; the choice is persisted in
+> `AuditDefaults.resultsView` (default **table**, storage key → v3). The New-Audit form collapsed its
+> ~440 px right rail into a **dense horizontal control bar** so the URL textarea + results span full width;
+> the wide pages were right-sized (batch cards flow `xl:grid-cols-2 2xl:grid-cols-3`, the trend chart
+> height capped, the compare Trend/Diff cards side-by-side on `xl`, History rows densified); and a
+> site-wide **footer score-band legend** (`ScoreBandLegend`) was added. **Verified for real**: lint,
+> typecheck, build, and **302 unit tests** green, plus a **1920 px headless-Chrome** pass against a
+> production build — live dense table + cards toggle + detail sheet (full category readout + CWV),
+> `/history` 88 rows with the toggle **persisting across reload**, `/batches` 63-card grid, the footer
+> legend, `/compare` hydrating, and **zero console errors**. Next up: Phase 12 (Desktop + Mobile paired
+> audits).
+>
+> **Status (Phase 10):** Phase 10 complete — **all 11 phases (0–10) are done.** The **Environment visibility &
 > drift warnings** layer closes out the build: every live result card + the batch-summary cards now
 > show an **environment badge** (`benchmarkIndex` "CPU/Memory Power" + the effective throttling method
 > + CPU multiplier, formatted by pure `src/lib/lighthouse/environment-format.ts`), and a pure,
@@ -568,6 +599,142 @@ Results are durably persisted to SQLite + disk, so nothing is lost on restart.
 
 ---
 
+> **Design constraint for Phases 11–14 (binding for all agents):** these are a *layout-density +
+> tooling* pass, **not a redesign**. The visual identity is preserved verbatim — the dark cooled
+> palette (`--background oklch(0.165 …)`), cyan primary, the green/amber/red **score bands**, Archivo +
+> JetBrains-Mono with `tabular-nums`, hairline (9%) borders, and the instrument-grid texture. No new
+> colours, fonts, or generic "shadcn-default" surfaces. We only reclaim wasted horizontal/vertical
+> space and add proven tools observed on swing's dense Lighthouse console. All four phases reuse the
+> existing seams (`AuditOptions` → `CreateBatchInput` → persisted `runs`; the `/api/discover` +
+> `/api/audits` routes; the `useAuditDefaults` store) — no new architecture beyond Phase 14's local
+> scheduler. Per CLAUDE.md, UI work here MUST invoke **frontend-design** (drives the visuals) +
+> **vercel-react-best-practices** + **shadcn**, then review with **web-design-guidelines**.
+
+### Phase 11 — Full-bleed density & wide-screen reclaim
+**Why:** the canvas is already full-width (commit `c53671f`) but the *content* stays sparse — live
+results cap at `sm:grid-cols-2` ring cards (~400 px, only 2-across on a 1600 px+ monitor), the
+New-Audit form is a tall 2:1 `lg:grid-cols-3` panel with a ~440 px right rail, and History / Compare /
+Batches are single-column stacks. Make the content as dense as swing's, in *our* theme.
+
+- [x] **Score-pill primitive** (`src/components/audit/score-pill.tsx`): a small rounded mono chip — a
+      dense counterpart to `score-ring.tsx` — reusing the *existing* 0–49 / 50–89 / 90–100 band logic
+      and `--score-good/average/poor` tokens (factor the band→colour helper out of `score-ring.tsx`
+      so the pill and ring share one source of truth).
+      *Done: the band→colour helper was already factored into `@/lib/scores` (`scoreBand`/`scoreColorClass`)
+      and shared by the ring; Phase 11 added `scoreBandChipClass`/`scoreChipClass`/`scoreBandSolidClass`
+      there (one source of truth, unit-tested) and `ScorePill` consumes them.*
+- [x] **Dense results table** (`src/components/audit/results-table.tsx`): one compact row per URL —
+      path (mono, truncated, tabular), the 4 category **score pills**, an inline micro-CWV
+      (LCP / TBT / CLS), the compact `EnvironmentBadge` chip, the `StatusBadge`, and a `View →` that
+      opens the *existing* `audit-detail-sheet.tsx` (full rings + CWV + per-run spread stay there,
+      unchanged). Sticky header row, hairline dividers, `tabular-nums`.
+      *Done: pure presentational `ResultsTable` (`AuditJob[]` → rows; Skeleton while queued/running,
+      em dash on error); the unchanged detail sheet renders the score readout as large numeric figures
+      (`CategoryScoreGrid`) rather than rings — "full rings" was loose wording — so the live verify
+      asserts the full category readout + CWV.*
+- [x] **View toggle** (table ↔ ring-cards) in the live-results header (`audit-results.tsx`) and on
+      History; persist the choice via `useAuditDefaults` (extend `AuditDefaults` + `normalizeDefaults`,
+      bump the storage key). Default = **table** (hybrid, per the approved decision).
+      *Done: `AuditDefaults.resultsView` (`"table"` default, storage key → v3, normalised + unit-tested);
+      a shared `ResultsViewToggle` primitive drives both surfaces; SSR-safe via the existing store.*
+- [x] Keep the ring-card grid as the alternate view, but **raise its breakpoints**
+      (`sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5`) and shrink the ring a touch so
+      it is no longer 2-across on wide screens.
+      *Done: cards view keeps the host-grouped accordion with the raised breakpoints and `ScoreRings size={48}`.*
+- [x] **Compact control bar** for New Audit (`new-audit-form.tsx` + `run-config-card.tsx`): collapse the
+      ~440 px right rail into a single dense horizontal toolbar (device · runs · concurrency ·
+      throttling · CPU · accuracy · Match-DevTools) so the URL textarea + live results get the full
+      width. Every current control, the calibration readout, and the `DriftWarning` stay — re-flowed,
+      not removed.
+      *Done: the form is now top-down — a dense wrapping control bar (all controls + Calibrate/Match-DevTools
+      + the `RunConfigCard` readout + the concurrency `Alert`) above a full-width Target-URLs card + results;
+      every handler / `update(...)` / `disabled`/`canSubmit` / `useId` / hydration call preserved.*
+- [x] **Right-size the wide pages**: flow `batch-summary-console.tsx` cards in a responsive grid
+      (`xl:grid-cols-2 2xl:grid-cols-3`) instead of one-per-row; cap Recharts heights and tighten the
+      `compare` diff grid; densify `history-table.tsx` row height. True full-bleed stays (the `<main>`
+      already has no `max-w-*`); tune `px`/`gap` for density.
+      *Done: batch cards now flow `xl:grid-cols-2 2xl:grid-cols-3`; the trend chart height capped (`h-64`→`h-56`)
+      and the compare Trend/Diff cards sit side-by-side on `xl`; History rows densified (`py-2 leading-tight`,
+      sticky header) and gained the table↔cards toggle + a ring-card grid over the same filtered rows.*
+- [x] **Footer score-band legend**: a compact green/amber/red key (mirroring swing's footer legend).
+      *Done: a server-safe `ScoreBandLegend` (token swatches via `scoreBandSolidClass`, range text so colour
+      isn't the only signal) rendered site-wide in the layout footer.*
+- [x] **Verify**: lint + typecheck + build + the full unit suite green (the band-helper + defaults
+      additions get tests); in headless Chrome at 1920 px, a live batch and `/history` render many URL
+      rows, the table↔cards toggle persists across reload, the detail sheet still opens with full
+      rings / CWV, zero console errors, and a visual check confirms palette / fonts / tokens are
+      unchanged.
+      *Verified: lint, typecheck, build, and **302 unit tests** all green (Phase 11 added band-chip/solid +
+      resultsView normalisation tests). A headless-Chrome pass at **1920×1080** against a production `next start`
+      build drove a live example.com batch — the dense results table rendered, the table↔cards toggle flipped to
+      the ring-card view (rings present), and `View →` opened the unchanged detail sheet with the full category
+      readout (Performance · Accessibility · SEO) + Core Web Vitals. `/history` rendered **88 persisted rows**, the
+      table↔cards toggle **persisted across a full reload**, `/batches` rendered its **63-card grid**, the footer
+      score-band legend (90–100 … 0–49) was present, `/compare`'s trend chart hydrated, and there were **zero
+      console errors** across every page. Palette / fonts / tokens are unchanged by construction — the new pill,
+      toggle, table and legend reuse only the existing score-band tokens and Archivo/JetBrains-Mono; no new colours
+      or fonts were introduced.*
+
+### Phase 12 — Desktop + Mobile paired audits
+**Why:** swing's standout feature — audit both form factors in one run and show paired score columns
+per URL. We already persist `device` per run, so this is a job fan-out + a pairing projection, not new
+storage.
+
+- [ ] **Engine / options**: accept `device: "mobile" | "desktop" | "both"` (resolve `"both"` to the two
+      form factors) in `src/lib/lighthouse/types.ts` + `options.ts`; the worker path
+      (`runAuditWorker.ts`) is unchanged — `"both"` simply enqueues two independent isolated-Chrome
+      jobs.
+- [ ] **Queue / batch**: a `both` URL fans out to two jobs keyed `(url, device)`; thread the per-job
+      device through `CreateBatchInput` / `AuditQueue` and the SSE job ids so the two stream
+      independently.
+- [ ] **Pairing projection**: a never-throwing `listPairedHistory()` / batch grouping that pairs the
+      mobile + desktop `runs` rows for the same `(batchId, url)` (pure, unit-tested) — no schema change.
+- [ ] **UI**: the Phase-11 table gains **Desktop | Mobile** paired pill columns per URL row; the
+      ring-card view shows both device ring-sets; the detail sheet flips device. The New-Audit device
+      control gains a "Both" option.
+- [ ] **API**: `src/lib/api/audits-schema.ts` accepts the new device value (enum / clamp); structured
+      errors unchanged.
+- [ ] **Verify**: a real `both` batch of one URL persists two runs (mobile + desktop), the table shows
+      paired pills, and each device's scores match a single-device run of the same URL within the
+      documented ±5; lint / types / build / tests green.
+
+### Phase 13 — Re-run / Regenerate + crawl exclude-paths & max-count
+**Why:** small, high-value power-user tools from swing's input panel and run list.
+
+- [ ] **Re-run / Regenerate**: a button on each Batch card (`batch-summary-console.tsx`) and the History
+      batch group that re-submits that batch's exact URLs + options through the *existing*
+      `POST /api/audits` path; record the prior batch id so the result is one click from the Phase-6
+      compare / trend.
+- [ ] **Crawl exclude-paths**: extend `DiscoverRequest` + `src/lib/crawl/discover.ts` with
+      `excludePaths: string[]` (prefix / glob, same-origin), filtered during *both* the BFS crawl and
+      the sitemap merge; add an "exclude paths" textarea to `crawl-panel.tsx` (swing's "Don't crawl
+      these links").
+- [ ] **Max-count control**: surface a user `maxPages` input in the crawl panel (the engine already
+      clamps to `MAX_PAGES` = 50 = the batch cap).
+- [ ] **Verify**: re-run reproduces a batch (same URLs / options → new runs, compare works); a crawl with
+      an exclude pattern omits matching URLs and keeps the rest; an invalid pattern → structured 400;
+      tests green.
+
+### Phase 14 — Scheduled daily archive
+**Why:** swing's "Daily archive" / Archive tab — recurring re-runs with a browsable history. Largest
+effort; the only phase that adds architecture (a *local* scheduler, consistent with §5's "single-user,
+no Redis / cron" rationale).
+
+- [ ] **Schedule model**: a `schedules` table (target = a saved URL set *or* a crawl spec, + audit
+      options + cadence e.g. daily @ HH:MM + enabled flag) with a Drizzle migration (self-healing like
+      Phase 4).
+- [ ] **Local scheduler**: a `globalThis`-pinned singleton (same HMR-safe pattern as `AuditQueue` / the
+      DB client) that, on cadence, submits the saved target through the existing queue — no external
+      cron / Redis, runs offline.
+- [ ] **Archive view** (`/archive`, new nav tab): list scheduled targets + their run history over time,
+      reusing the Phase-6 trend / compare helpers for day-over-day deltas; create / pause / delete
+      schedules here and via a "save as daily" affordance on the New-Audit form.
+- [ ] **Verify**: a schedule fires on cadence (fast-forwarded clock in test) → persisted batch; the
+      Archive view shows its run history + day-over-day trend and survives a dev HMR reset;
+      lint / types / build / tests green.
+
+---
+
 ## 7. End-to-end verification strategy
 1. **Engine correctness (Phase 1)**: CLI audit vs `npx lighthouse <url>` — scores within
    normal ±5 variance.
@@ -583,6 +750,10 @@ Results are durably persisted to SQLite + disk, so nothing is lost on restart.
 8. **Parity (Phases 8–10)**: a URL run via the "Match DevTools" preset lands within a few points
    of the DevTools Lighthouse panel on the same machine; the reported `benchmarkIndex` matches the
    panel's "CPU/Memory Power", and accuracy mode removes concurrency-induced Performance deflation.
+9. **Density & multi-device (Phases 11–14)**: at 1920 px the dense table shows many URL rows per
+   screen with the table↔cards toggle persisting across reload; a `both` batch shows paired
+   Desktop / Mobile pills; re-run reproduces a batch; a scheduled target fires and lands in the
+   Archive — all with the existing visual design (palette / fonts / tokens) unchanged.
 
 ## 8. Risks & mitigations
 - **Score variability** → median-of-N default + document expected variance; surface
@@ -600,3 +771,8 @@ Results are durably persisted to SQLite + disk, so nothing is lost on restart.
 - **Dev-mode HMR resetting the queue** → pin the singleton to `globalThis`.
 - **Chrome not found / launch failure** → `chrome-launcher` auto-detects (Chrome is
   installed); add a clear preflight error if detection fails.
+- **Density hurting readability / the established look (Phases 11–14)** → constrained to layout +
+  tooling only (no palette / font / token changes); the dense table reuses the existing score-band
+  colours and mono tabular figures, and true full-bleed keeps comfortable widths via dense
+  table / grid structure rather than long prose lines. UI built with **frontend-design** and reviewed
+  against **web-design-guidelines** before each phase is checked off.

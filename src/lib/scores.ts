@@ -48,6 +48,48 @@ export function scoreColorClass(score: number | null | undefined): string {
   return scoreTextClass(scoreBand(score));
 }
 
+/**
+ * Tailwind classes for a colour-banded *chip* (the dense {@link ScorePill} and
+ * any small banded surface): the band text colour plus a faint tinted fill and
+ * hairline border. Shares the same band → token mapping as the rings, so pills
+ * and rings can never drift apart (PRD §6 Phase 11). Pairs with {@link scoreBand}.
+ */
+export function scoreBandChipClass(band: ScoreBand): string {
+  switch (band) {
+    case "good":
+      return "text-score-good bg-score-good/10 border-score-good/30";
+    case "average":
+      return "text-score-average bg-score-average/10 border-score-average/30";
+    case "poor":
+      return "text-score-poor bg-score-poor/10 border-score-poor/30";
+    case "none":
+      return "text-muted-foreground bg-muted/40 border-border/60";
+  }
+}
+
+/** Convenience: chip classes straight from a numeric score. */
+export function scoreChipClass(score: number | null | undefined): string {
+  return scoreBandChipClass(scoreBand(score));
+}
+
+/**
+ * A solid band fill (no tint), for legend swatches and dense indicators where a
+ * full-strength colour reads better than the chip's faint fill. Same band → token
+ * source of truth as every other score surface.
+ */
+export function scoreBandSolidClass(band: ScoreBand): string {
+  switch (band) {
+    case "good":
+      return "bg-score-good";
+    case "average":
+      return "bg-score-average";
+    case "poor":
+      return "bg-score-poor";
+    case "none":
+      return "bg-muted-foreground";
+  }
+}
+
 /** Format a 0–100 score for display: rounded integer, or an em dash when unscored. */
 export function formatScore(score: number | null | undefined): string {
   if (score === null || score === undefined || Number.isNaN(score)) return "—";

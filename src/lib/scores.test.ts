@@ -8,6 +8,9 @@ import {
   METRIC_DISPLAY_ORDER,
   METRIC_META,
   scoreBand,
+  scoreBandChipClass,
+  scoreBandSolidClass,
+  scoreChipClass,
   scoreColorClass,
   scoreTextClass,
 } from "@/lib/scores";
@@ -53,6 +56,33 @@ describe("scoreTextClass / scoreColorClass", () => {
     expect(scoreColorClass(70)).toBe("text-score-average");
     expect(scoreColorClass(20)).toBe("text-score-poor");
     expect(scoreColorClass(null)).toBe("text-muted-foreground");
+  });
+});
+
+describe("scoreBandChipClass / scoreChipClass", () => {
+  it("includes the band text, tinted fill and border per band", () => {
+    expect(scoreBandChipClass("good")).toContain("text-score-good");
+    expect(scoreBandChipClass("good")).toContain("bg-score-good/10");
+    expect(scoreBandChipClass("good")).toContain("border-score-good/30");
+    expect(scoreBandChipClass("average")).toContain("text-score-average");
+    expect(scoreBandChipClass("poor")).toContain("text-score-poor");
+    expect(scoreBandChipClass("none")).toContain("text-muted-foreground");
+  });
+
+  it("derives chip classes from a numeric score, matching the band", () => {
+    expect(scoreChipClass(95)).toBe(scoreBandChipClass("good"));
+    expect(scoreChipClass(70)).toBe(scoreBandChipClass("average"));
+    expect(scoreChipClass(20)).toBe(scoreBandChipClass("poor"));
+    expect(scoreChipClass(null)).toBe(scoreBandChipClass("none"));
+  });
+});
+
+describe("scoreBandSolidClass", () => {
+  it("returns a solid band fill per band", () => {
+    expect(scoreBandSolidClass("good")).toBe("bg-score-good");
+    expect(scoreBandSolidClass("average")).toBe("bg-score-average");
+    expect(scoreBandSolidClass("poor")).toBe("bg-score-poor");
+    expect(scoreBandSolidClass("none")).toBe("bg-muted-foreground");
   });
 });
 

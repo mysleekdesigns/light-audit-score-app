@@ -143,6 +143,15 @@ describe("normalizeDefaults", () => {
     expect(junk.accuracyMode).toBe(false);
   });
 
+  it("normalizes the Phase 11 resultsView field", () => {
+    // Defaults to the dense table when absent or garbage.
+    expect(normalizeDefaults({}).resultsView).toBe("table");
+    expect(normalizeDefaults({ resultsView: "grid" }).resultsView).toBe("table");
+    expect(DEFAULT_AUDIT_DEFAULTS.resultsView).toBe("table");
+    // Honoured when explicitly "cards".
+    expect(normalizeDefaults({ resultsView: "cards" }).resultsView).toBe("cards");
+  });
+
   it("MATCH_DEVTOOLS_PRESET resolves to the panel's defaults", () => {
     const resolved = normalizeDefaults({
       ...DEFAULT_AUDIT_DEFAULTS,

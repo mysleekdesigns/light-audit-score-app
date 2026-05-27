@@ -147,7 +147,7 @@ export function BatchSummaryConsole({ batches, runs }: BatchSummaryConsoleProps)
       <div className="flex flex-col gap-6">
         <ThresholdControls thresholds={thresholds} onChange={setThresholds} />
 
-        <ul className="flex list-none flex-col gap-5 p-0">
+        <ul className="grid list-none grid-cols-1 gap-5 p-0 xl:grid-cols-2 2xl:grid-cols-3">
           {batches.map((batch) => (
             <li key={batch.id}>
               <BatchCard
@@ -364,7 +364,7 @@ function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
                   </span>
                 ) : null}
               </div>
-              <div className="flex flex-wrap items-start gap-6">
+              <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
                 {LIGHTHOUSE_CATEGORIES.map((category) => (
                   <ScoreRing
                     key={category}

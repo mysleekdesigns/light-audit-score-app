@@ -12,6 +12,8 @@ import { Radio } from "lucide-react";
 
 import { CoreWebVitalsStrip } from "@/components/audit/core-web-vitals";
 import { EnvironmentBadge } from "@/components/audit/environment-badge";
+import { ResultsTable } from "@/components/audit/results-table";
+import { ResultsViewToggle } from "@/components/audit/results-view-toggle";
 import { ScoreRings } from "@/components/audit/score-rings";
 import { JobStatusBadge } from "@/components/audit/status-badge";
 import {
@@ -23,6 +25,7 @@ import {
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useAuditDefaults } from "@/hooks/useAuditDefaults";
 import { assessDrift } from "@/lib/lighthouse/drift";
 import { cn } from "@/lib/utils";
 import type { StreamConnection } from "@/hooks/useBatchStream";
@@ -75,6 +78,8 @@ function groupJobsByHost(jobs: AuditJob[]): HostGroup[] {
 }
 
 export function AuditResults({ batch, connection, onSelect }: AuditResultsProps) {
+  const { defaults, update } = useAuditDefaults();
+  const view = defaults.resultsView;
   const pct = batchProgress(batch);
   const { total, done, error, running } = batch.counts;
   const groups = groupJobsByHost(batch.jobs);
@@ -98,23 +103,29 @@ export function AuditResults({ batch, connection, onSelect }: AuditResultsProps)
               </span>
             ) : null}
           </div>
-          <div className="flex items-center gap-4 font-mono text-[0.7rem] uppercase tracking-[0.16em] text-muted-foreground tabular-nums">
-            <span>
-              <span className="text-foreground">{done}</span> done
-            </span>
-            {error > 0 ? (
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4 font-mono text-[0.7rem] uppercase tracking-[0.16em] text-muted-foreground tabular-nums">
               <span>
-                <span className="text-score-poor">{error}</span> error
+                <span className="text-foreground">{done}</span> done
               </span>
-            ) : null}
-            {running > 0 ? (
+              {error > 0 ? (
+                <span>
+                  <span className="text-score-poor">{error}</span> error
+                </span>
+              ) : null}
+              {running > 0 ? (
+                <span>
+                  <span className="text-primary">{running}</span> running
+                </span>
+              ) : null}
               <span>
-                <span className="text-primary">{running}</span> running
+                <span className="text-foreground">{done + error}</span> / {total}
               </span>
-            ) : null}
-            <span>
-              <span className="text-foreground">{done + error}</span> / {total}
-            </span>
+            </div>
+            <ResultsViewToggle
+              value={view}
+              onChange={(next) => update({ resultsView: next })}
+            />
           </div>
         </div>
         <Progress value={pct} aria-label="Batch progress" />
@@ -157,13 +168,19 @@ export function AuditResults({ batch, connection, onSelect }: AuditResultsProps)
                 </span>
               </AccordionTrigger>
               <AccordionContent>
-                <ul className="grid list-none gap-4 p-0 pt-1 sm:grid-cols-2">
-                  {group.jobs.map((job) => (
-                    <li key={job.id}>
-                      <AuditJobCard job={job} onSelect={onSelect} />
-                    </li>
-                  ))}
-                </ul>
+                {view === "table" ? (
+                  <div className="pt-1">
+                    <ResultsTable jobs={group.jobs} onSelect={onSelect} />
+                  </div>
+                ) : (
+                  <ul className="grid list-none gap-4 p-0 pt-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                    {group.jobs.map((job) => (
+                      <li key={job.id}>
+                        <AuditJobCard job={job} onSelect={onSelect} />
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </AccordionContent>
             </AccordionItem>
           );
@@ -221,7 +238,7 @@ const AuditJobCard = memo(function AuditJobCard({
             environment={job.result.environment}
             drifted={drifted}
           />
-          <ScoreRings scores={job.result.median.scores} size={56} />
+          <ScoreRings scores={job.result.median.scores} size={48} />
           <CoreWebVitalsStrip metrics={job.result.median.metrics} />
         </div>
       ) : job.status === "error" ? (

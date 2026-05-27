@@ -135,7 +135,7 @@ function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
   const hasTrend = groupRuns.length >= 2;
 
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-6">
       {/* URL selector ------------------------------------------------------ */}
       <div className="flex flex-col gap-2 sm:max-w-md">
         <label htmlFor={urlSelectId} className={SECTION_LABEL}>
@@ -163,8 +163,10 @@ function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
         </Select>
       </div>
 
-      {/* Trend section ----------------------------------------------------- */}
-      <Card>
+      {/* Trend + Diff — stacked on narrow screens, side-by-side on very wide. */}
+      <div className="grid gap-6 xl:grid-cols-2 xl:items-start">
+        {/* Trend section --------------------------------------------------- */}
+        <Card>
         <CardHeader className="border-b">
           <CardTitle className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.16em]">
             <LineChart aria-hidden className="size-3.5 text-primary" />
@@ -198,8 +200,8 @@ function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
         </CardContent>
       </Card>
 
-      {/* Diff section ------------------------------------------------------ */}
-      <Card>
+        {/* Diff section ---------------------------------------------------- */}
+        <Card>
         <CardHeader className="border-b">
           <CardTitle className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.16em]">
             <GitCompareArrows aria-hidden className="size-3.5 text-primary" />
@@ -238,7 +240,8 @@ function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
             <RunDiff baseline={baseline} comparison={comparison} />
           )}
         </CardContent>
-      </Card>
+        </Card>
+      </div>
     </div>
   );
 }

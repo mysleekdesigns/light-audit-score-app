@@ -50,8 +50,6 @@ import {
 import {
   Field,
   FieldContent,
-  FieldDescription,
-  FieldGroup,
   FieldLabel,
   FieldLegend,
   FieldSet,
@@ -295,86 +293,22 @@ export function NewAuditForm({
   }
 
   return (
-    <div className="grid gap-6 lg:grid-cols-3 lg:items-start">
-      {/* Targets — and, once a batch is running, the live results beneath. */}
-      <div className="flex flex-col gap-6 lg:col-span-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Target URLs</CardTitle>
-            <CardDescription>
-              One URL per line. Each is audited independently.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Tabs value={tab} onValueChange={handleTabChange} className="gap-4">
-              <TabsList>
-                <TabsTrigger value="paste">
-                  <ListPlus data-icon="inline-start" />
-                  Paste list
-                </TabsTrigger>
-                <TabsTrigger value="crawl">
-                  <Radar data-icon="inline-start" />
-                  Crawl site
-                </TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="paste" className="flex flex-col gap-3">
-                <Textarea
-                  rows={10}
-                  value={text}
-                  onChange={(event) => setText(event.target.value)}
-                  disabled={isRunning}
-                  aria-label="Target URLs"
-                  spellCheck={false}
-                  autoComplete="off"
-                  className="resize-none font-mono text-sm"
-                  placeholder={
-                    "https://example.com\nhttps://example.com/pricing\nhttps://example.com/blog"
-                  }
-                />
-                <div
-                  aria-live="polite"
-                  className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1"
-                >
-                  <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">
-                    {pastedUrls.length}{" "}
-                    {pastedUrls.length === 1 ? "URL" : "URLs"} queued
-                  </p>
-                  {invalid.length > 0 ? (
-                    <p className="font-mono text-xs uppercase tracking-[0.18em] text-score-average">
-                      {invalid.length}{" "}
-                      {invalid.length === 1 ? "line" : "lines"} ignored
-                      <span className="text-muted-foreground/70 normal-case tracking-normal">
-                        {" "}
-                        ({invalid.map((entry) => `L${entry.line}`).join(", ")})
-                      </span>
-                    </p>
-                  ) : null}
-                </div>
-              </TabsContent>
-
-              <TabsContent value="crawl">
-                <CrawlPanel
-                  onUrlsChange={handleCrawlUrlsChange}
-                  disabled={isRunning}
-                />
-              </TabsContent>
-            </Tabs>
-          </CardContent>
-        </Card>
-        {results}
-      </div>
-
-      {/* Run configuration */}
+    <div className="flex flex-col gap-6">
+      {/* Dense horizontal control bar — every run-config lever in one instrument
+          toolbar so the textarea + live results below get the full width. */}
       <Card>
-        <CardHeader>
-          <CardTitle>Run config</CardTitle>
-          <CardDescription>
-            The biggest levers on score accuracy.
-          </CardDescription>
+        <CardHeader className="gap-1.5">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+            <CardTitle>Run config</CardTitle>
+            <CardDescription className="font-mono text-[0.65rem] uppercase tracking-[0.18em]">
+              The biggest levers on score accuracy.
+            </CardDescription>
+          </div>
         </CardHeader>
-        <CardContent>
-          <FieldGroup>
+        <CardContent className="flex flex-col gap-4">
+          {/* Row 1: the controls, re-flowed into a wrapping grid that goes dense
+              on wide screens. Each cell keeps its own label + handler + wiring. */}
+          <div className="grid grid-cols-2 gap-x-5 gap-y-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
             <Field>
               <FieldLabel htmlFor={deviceId}>Device</FieldLabel>
               <ToggleGroup
@@ -413,10 +347,6 @@ export function NewAuditForm({
                   Applied
                 </ToggleGroupItem>
               </ToggleGroup>
-              <FieldDescription>
-                Simulated estimates from one unthrottled trace; Applied throttles
-                the real CPU/network — slower, closer to a device.
-              </FieldDescription>
             </Field>
 
             <Field>
@@ -442,10 +372,6 @@ export function NewAuditForm({
                   </SelectGroup>
                 </SelectContent>
               </Select>
-              <FieldDescription>
-                Throttling is relative to this host. A faster machine needs a
-                higher multiplier to hit mid-tier mobile — Calibrate sets it.
-              </FieldDescription>
             </Field>
 
             <Field>
@@ -468,9 +394,6 @@ export function NewAuditForm({
                   </SelectGroup>
                 </SelectContent>
               </Select>
-              <FieldDescription>
-                Median of N smooths out ±5pt variance.
-              </FieldDescription>
             </Field>
 
             <Field>
@@ -495,7 +418,31 @@ export function NewAuditForm({
               </Select>
             </Field>
 
-            <FieldSet>
+            <Field orientation="horizontal" className="items-end">
+              <FieldContent>
+                <FieldLabel htmlFor={accuracyId}>Accuracy mode</FieldLabel>
+              </FieldContent>
+              <Toggle
+                id={accuracyId}
+                variant="outline"
+                size="sm"
+                pressed={accuracyMode}
+                onPressedChange={handleAccuracyModeChange}
+                disabled={isRunning}
+                aria-label="Accuracy mode"
+                className="shrink-0 font-mono text-[0.65rem] uppercase tracking-[0.18em] data-[state=on]:bg-score-good/15 data-[state=on]:text-score-good data-[state=on]:border-score-good/40"
+              >
+                {accuracyMode ? "On" : "Off"}
+              </Toggle>
+            </Field>
+          </div>
+
+          <Separator />
+
+          {/* Row 2: categories + parity (calibration readout + Calibrate /
+              Match-DevTools), flowing horizontally on wide screens. */}
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+            <FieldSet className="gap-2">
               <FieldLegend variant="label">Categories</FieldLegend>
               <ToggleGroup
                 type="multiple"
@@ -511,44 +458,15 @@ export function NewAuditForm({
                   </ToggleGroupItem>
                 ))}
               </ToggleGroup>
-              <FieldDescription>
-                At least one category stays selected.
-              </FieldDescription>
             </FieldSet>
 
-            <Field orientation="horizontal">
-              <FieldContent>
-                <FieldLabel htmlFor={accuracyId}>Accuracy mode</FieldLabel>
-                <FieldDescription>
-                  Forces one audit at a time when Performance is in scope —
-                  slower, but no CPU contention skewing the score.
-                </FieldDescription>
-              </FieldContent>
-              <Toggle
-                id={accuracyId}
-                variant="outline"
-                size="sm"
-                pressed={accuracyMode}
-                onPressedChange={handleAccuracyModeChange}
-                disabled={isRunning}
-                aria-label="Accuracy mode"
-                className="shrink-0 font-mono text-[0.65rem] uppercase tracking-[0.18em] data-[state=on]:bg-score-good/15 data-[state=on]:text-score-good data-[state=on]:border-score-good/40"
-              >
-                {accuracyMode ? "On" : "Off"}
-              </Toggle>
-            </Field>
-
-            <Separator />
-
-            {/* Calibration & parity (PRD §6 Phase 9). */}
-            <FieldSet>
-              <FieldLegend variant="label">Parity</FieldLegend>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
               <RunConfigCard
                 throttling={throttling}
                 cpuSlowdownMultiplier={cpuSlowdownMultiplier}
                 calibration={calibration}
               />
-              <div className="grid grid-cols-2 gap-2">
+              <div className="flex shrink-0 flex-col gap-2 sm:justify-center">
                 <Button
                   type="button"
                   variant="outline"
@@ -576,26 +494,94 @@ export function NewAuditForm({
                   Match DevTools
                 </Button>
               </div>
-              <FieldDescription>
-                {calibration
-                  ? "Calibrate retargets mid-tier mobile from the last run's host benchmark."
-                  : "Calibrate unlocks after your first run reports a host benchmark."}
-              </FieldDescription>
-            </FieldSet>
+            </div>
+          </div>
 
-            <Alert>
-              <TriangleAlert className="text-score-average" />
-              <AlertDescription>
-                High concurrency causes CPU contention that distorts performance
-                scores. Keep it low for trustworthy numbers.
-              </AlertDescription>
-            </Alert>
-          </FieldGroup>
+          <Alert>
+            <TriangleAlert className="text-score-average" />
+            <AlertDescription>
+              High concurrency causes CPU contention that distorts performance
+              scores. Keep it low for trustworthy numbers.
+            </AlertDescription>
+          </Alert>
         </CardContent>
-        <CardFooter className="flex-col items-stretch gap-2">
+      </Card>
+
+      {/* Targets — full width — with the primary action, then the live results. */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Target URLs</CardTitle>
+          <CardDescription>
+            One URL per line. Each is audited independently.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Tabs value={tab} onValueChange={handleTabChange} className="gap-4">
+            <TabsList>
+              <TabsTrigger value="paste">
+                <ListPlus data-icon="inline-start" />
+                Paste list
+              </TabsTrigger>
+              <TabsTrigger value="crawl">
+                <Radar data-icon="inline-start" />
+                Crawl site
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="paste" className="flex flex-col gap-3">
+              <Textarea
+                rows={10}
+                value={text}
+                onChange={(event) => setText(event.target.value)}
+                disabled={isRunning}
+                aria-label="Target URLs"
+                spellCheck={false}
+                autoComplete="off"
+                className="resize-none font-mono text-sm"
+                placeholder={
+                  "https://example.com\nhttps://example.com/pricing\nhttps://example.com/blog"
+                }
+              />
+              <div
+                aria-live="polite"
+                className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1"
+              >
+                <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                  {pastedUrls.length}{" "}
+                  {pastedUrls.length === 1 ? "URL" : "URLs"} queued
+                </p>
+                {invalid.length > 0 ? (
+                  <p className="font-mono text-xs uppercase tracking-[0.18em] text-score-average">
+                    {invalid.length}{" "}
+                    {invalid.length === 1 ? "line" : "lines"} ignored
+                    <span className="text-muted-foreground/70 normal-case tracking-normal">
+                      {" "}
+                      ({invalid.map((entry) => `L${entry.line}`).join(", ")})
+                    </span>
+                  </p>
+                ) : null}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="crawl">
+              <CrawlPanel
+                onUrlsChange={handleCrawlUrlsChange}
+                disabled={isRunning}
+              />
+            </TabsContent>
+          </Tabs>
+        </CardContent>
+        <CardFooter className="flex-col-reverse items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-center font-mono text-[0.65rem] uppercase tracking-[0.18em] text-muted-foreground sm:text-left">
+            {urls.length > 0
+              ? `${urls.length} ${urls.length === 1 ? "target" : "targets"} ready`
+              : tab === "paste"
+                ? "Paste at least one URL to begin"
+                : "Discover and select at least one URL to begin"}
+          </p>
           <Button
             type="button"
-            className="w-full"
+            className="sm:w-auto sm:min-w-44"
             disabled={!canSubmit}
             onClick={handleSubmit}
           >
@@ -611,15 +597,10 @@ export function NewAuditForm({
               </>
             )}
           </Button>
-          <p className="text-center font-mono text-[0.65rem] uppercase tracking-[0.18em] text-muted-foreground">
-            {urls.length > 0
-              ? `${urls.length} ${urls.length === 1 ? "target" : "targets"} ready`
-              : tab === "paste"
-                ? "Paste at least one URL to begin"
-                : "Discover and select at least one URL to begin"}
-          </p>
         </CardFooter>
       </Card>
+
+      {results}
     </div>
   );
 }

@@ -30,6 +30,9 @@ import { GOOD_THRESHOLD } from "@/lib/scores";
 /** Per-category pass threshold (0–100). A score ≥ threshold passes. */
 export type CategoryThresholds = Record<LighthouseCategory, number>;
 
+/** Preferred results layout: a dense table (default) or the ring-card grid. */
+export type ResultsView = "table" | "cards";
+
 /** The full set of remembered audit defaults. */
 export interface AuditDefaults {
   /** Default emulated device for a new audit. */
@@ -52,6 +55,11 @@ export interface AuditDefaults {
    * Omitted = Lighthouse's own 4× — exactly what the DevTools panel uses.
    */
   cpuSlowdownMultiplier?: number;
+  /**
+   * Preferred layout for live results + History: the dense `table` (default) or
+   * the ring-`card` grid (PRD §6 Phase 11). Remembered across visits.
+   */
+  resultsView: ResultsView;
   /** Per-category pass thresholds for the Batch Summary view. */
   thresholds: CategoryThresholds;
 }
@@ -73,6 +81,7 @@ export const DEFAULT_AUDIT_DEFAULTS: AuditDefaults = {
   accuracyMode: false,
   categories: [...LIGHTHOUSE_CATEGORIES],
   // cpuSlowdownMultiplier intentionally omitted → Lighthouse's 4× default.
+  resultsView: "table",
   thresholds: { ...DEFAULT_THRESHOLDS },
 };
 
@@ -97,8 +106,9 @@ export const MATCH_DEVTOOLS_PRESET: Partial<AuditDefaults> = {
  * `localStorage` key. Versioned so a future shape change can't crash on a stale
  * blob — bump the suffix and old data is simply ignored (normaliser falls back).
  * v2 added throttling / accuracyMode / cpuSlowdownMultiplier (Phase 9).
+ * v3 added resultsView (Phase 11).
  */
-export const SETTINGS_STORAGE_KEY = "lighthouse:audit-defaults:v2";
+export const SETTINGS_STORAGE_KEY = "lighthouse:audit-defaults:v3";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -167,6 +177,7 @@ export function normalizeDefaults(raw: unknown): AuditDefaults {
     accuracyMode: source.accuracyMode === true,
     categories: sanitizeCategories(source.categories),
     cpuSlowdownMultiplier: clampCpuMultiplier(source.cpuSlowdownMultiplier),
+    resultsView: source.resultsView === "cards" ? "cards" : "table",
     thresholds: sanitizeThresholds(source.thresholds),
   };
 }

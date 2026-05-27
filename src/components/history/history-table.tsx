@@ -13,9 +13,13 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { CoreWebVitalsStrip } from "@/components/audit/core-web-vitals";
+import { EnvironmentBadge } from "@/components/audit/environment-badge";
+import { ResultsViewToggle } from "@/components/audit/results-view-toggle";
+import { ScoreRings } from "@/components/audit/score-rings";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
   Table,
@@ -31,6 +35,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useAuditDefaults } from "@/hooks/useAuditDefaults";
 import { reportHtmlUrl, reportJsonUrl } from "@/lib/client/auditClient";
 import type { HistoryRow } from "@/lib/db/persistence";
 import {
@@ -61,6 +66,12 @@ type SortDirection = "asc" | "desc";
 
 /** Shared header label styling — mono, uppercase, tracked, matching the house style. */
 const HEAD_LABEL = "font-mono text-[0.7rem] uppercase tracking-[0.16em]";
+
+/**
+ * Compact cell padding for the densified archive — tighter vertical rhythm than
+ * the default `TableCell` while keeping link/button hit-targets comfortable.
+ */
+const COMPACT_CELL = "py-2 leading-tight";
 
 /** Format an ISO timestamp into a readable local datetime; falls back to the raw string. */
 function formatRunAt(iso: string): string {
@@ -155,7 +166,7 @@ function SortHeader({
 function ScoreCell({ score }: { score: number | null | undefined }) {
   const value = score ?? null;
   return (
-    <TableCell className="text-right">
+    <TableCell className={cn(COMPACT_CELL, "text-right")}>
       <span
         className={cn(
           "font-mono text-sm tabular-nums",
@@ -172,7 +183,7 @@ function ScoreCell({ score }: { score: number | null | undefined }) {
 function FailedCell({ message }: { message: string | null }) {
   const text = message ?? "Unknown error";
   return (
-    <TableCell colSpan={SCORE_COLUMNS.length} className="text-left">
+    <TableCell colSpan={SCORE_COLUMNS.length} className={cn(COMPACT_CELL, "text-left")}>
       <div className="flex items-center gap-2">
         <Badge
           variant="destructive"
@@ -244,6 +255,119 @@ function ReportLinks({ row }: { row: HistoryRow }) {
   );
 }
 
+/** The archive empty state, shared by the table and cards views. */
+function HistoryEmptyState({ isFiltering }: { isFiltering: boolean }) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+      <div className="flex size-12 items-center justify-center rounded-full border border-border/70 bg-muted/30">
+        <Archive className="size-5 text-muted-foreground" />
+      </div>
+      <p className="text-sm font-medium text-foreground">
+        {isFiltering ? "No matching runs" : "No audits yet"}
+      </p>
+      <p className="max-w-sm text-sm text-muted-foreground">
+        {isFiltering
+          ? "No persisted run matches that URL filter."
+          : "Completed runs are persisted here automatically. Run an audit to populate the archive."}
+      </p>
+    </div>
+  );
+}
+
+/** A single ring-card for the cards view — the History analogue of the live result card. */
+function HistoryRunCard({ row }: { row: HistoryRow }) {
+  const href = row.finalUrl ?? row.url;
+  const isError = row.status === "error";
+
+  return (
+    <Card size="sm" className="ring-foreground/10">
+      <CardHeader className="gap-2">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block truncate font-mono text-xs text-foreground underline-offset-4 outline-none hover:text-primary hover:underline focus-visible:ring-3 focus-visible:ring-ring/50"
+            >
+              {row.url}
+            </a>
+          </TooltipTrigger>
+          <TooltipContent className="font-mono">{href}</TooltipContent>
+        </Tooltip>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge
+            variant="outline"
+            className="font-mono text-[0.65rem] uppercase tracking-[0.12em] text-muted-foreground"
+          >
+            {row.formFactor}
+          </Badge>
+          <span
+            title={row.createdAt}
+            className="font-mono text-[0.65rem] tabular-nums text-muted-foreground"
+          >
+            {formatRunAt(row.createdAt)}
+          </span>
+        </div>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {isError ? (
+          <div className="flex items-start gap-2">
+            <Badge
+              variant="destructive"
+              className="font-mono text-[0.65rem] uppercase tracking-[0.12em]"
+            >
+              Failed
+            </Badge>
+            <span className="text-xs text-muted-foreground">
+              {row.errorMessage ?? "Unknown error"}
+            </span>
+          </div>
+        ) : (
+          <>
+            <ScoreRings scores={row.scores} size={48} />
+            {row.metrics ? (
+              <CoreWebVitalsStrip metrics={row.metrics} />
+            ) : null}
+          </>
+        )}
+        {row.environment ? (
+          <EnvironmentBadge variant="compact" environment={row.environment} />
+        ) : null}
+        <div className="flex items-center justify-end">
+          <ReportLinks row={row} />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** The ring-card grid over the same filtered + sorted rows as the table. */
+function HistoryCardsView({
+  rows,
+  isFiltering,
+}: {
+  rows: HistoryRow[];
+  isFiltering: boolean;
+}) {
+  if (rows.length === 0) {
+    return (
+      <Card className="overflow-hidden">
+        <HistoryEmptyState isFiltering={isFiltering} />
+      </Card>
+    );
+  }
+  return (
+    <ul className="grid list-none gap-4 p-0 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      {rows.map((row) => (
+        <li key={row.id}>
+          <HistoryRunCard row={row} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 interface HistoryTableProps {
   rows: HistoryRow[];
 }
@@ -256,6 +380,8 @@ interface HistoryTableProps {
  */
 export function HistoryTable({ rows }: HistoryTableProps) {
   const filterId = useId();
+  const { defaults, update } = useAuditDefaults();
+  const view = defaults.resultsView;
   const [query, setQuery] = useState("");
   // Default order matches `listHistory` (newest first).
   const [sort, setSort] = useState<SortState>({
@@ -358,12 +484,18 @@ export function HistoryTable({ rows }: HistoryTableProps) {
             </div>
           </div>
 
-          {/* Export / bulk-open the currently visible (filtered + sorted) rows. */}
-          <div
-            className="flex items-center gap-1"
-            role="group"
-            aria-label="Export and open visible runs"
-          >
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+            <ResultsViewToggle
+              value={view}
+              onChange={(next) => update({ resultsView: next })}
+            />
+
+            {/* Export / bulk-open the currently visible (filtered + sorted) rows. */}
+            <div
+              className="flex items-center gap-1"
+              role="group"
+              aria-label="Export and open visible runs"
+            >
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -420,12 +552,16 @@ export function HistoryTable({ rows }: HistoryTableProps) {
                   : `Open all ${openableCount} report${openableCount === 1 ? "" : "s"}`}
               </TooltipContent>
             </Tooltip>
+            </div>
           </div>
         </div>
 
+        {view === "cards" ? (
+          <HistoryCardsView rows={visible} isFiltering={isFiltering} />
+        ) : (
         <Card className="overflow-hidden py-0">
           <Table>
-            <TableHeader>
+            <TableHeader className="sticky top-0 z-10 bg-card [&_th]:bg-card">
               <TableRow className="hover:bg-transparent">
                 <SortHeader
                   label="URL"
@@ -480,7 +616,7 @@ export function HistoryTable({ rows }: HistoryTableProps) {
                   const href = row.finalUrl ?? row.url;
                   return (
                     <TableRow key={row.id} className="hover:bg-muted/40">
-                      <TableCell className="max-w-0">
+                      <TableCell className={cn(COMPACT_CELL, "max-w-0")}>
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <a
@@ -497,7 +633,7 @@ export function HistoryTable({ rows }: HistoryTableProps) {
                           </TooltipContent>
                         </Tooltip>
                       </TableCell>
-                      <TableCell>
+                      <TableCell className={COMPACT_CELL}>
                         <Badge
                           variant="outline"
                           className="font-mono text-[0.65rem] uppercase tracking-[0.12em] text-muted-foreground"
@@ -515,7 +651,7 @@ export function HistoryTable({ rows }: HistoryTableProps) {
                           />
                         ))
                       )}
-                      <TableCell>
+                      <TableCell className={COMPACT_CELL}>
                         <span
                           title={row.createdAt}
                           className="font-mono text-xs tabular-nums text-muted-foreground"
@@ -523,7 +659,7 @@ export function HistoryTable({ rows }: HistoryTableProps) {
                           {formatRunAt(row.createdAt)}
                         </span>
                       </TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className={cn(COMPACT_CELL, "text-right")}>
                         <ReportLinks row={row} />
                       </TableCell>
                     </TableRow>
@@ -533,6 +669,7 @@ export function HistoryTable({ rows }: HistoryTableProps) {
             </TableBody>
           </Table>
         </Card>
+        )}
       </div>
     </TooltipProvider>
   );
