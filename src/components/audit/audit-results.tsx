@@ -14,6 +14,12 @@ import { CoreWebVitalsStrip } from "@/components/audit/core-web-vitals";
 import { EnvironmentBadge } from "@/components/audit/environment-badge";
 import { ScoreRings } from "@/components/audit/score-rings";
 import { JobStatusBadge } from "@/components/audit/status-badge";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -42,9 +48,39 @@ const STATUS_LABEL: Record<Batch["status"], string> = {
   completed_with_errors: "Complete · with errors",
 };
 
+interface HostGroup {
+  host: string;
+  jobs: AuditJob[];
+}
+
+/**
+ * Group jobs by their URL's hostname, preserving first-appearance order so the
+ * accordion sections track input order. A malformed URL falls back to the raw
+ * string rather than crashing the render.
+ */
+function groupJobsByHost(jobs: AuditJob[]): HostGroup[] {
+  const groups = new Map<string, AuditJob[]>();
+  for (const job of jobs) {
+    let host: string;
+    try {
+      host = new URL(job.url).hostname;
+    } catch {
+      host = job.url;
+    }
+    const existing = groups.get(host);
+    if (existing) existing.push(job);
+    else groups.set(host, [job]);
+  }
+  return Array.from(groups, ([host, hostJobs]) => ({ host, jobs: hostJobs }));
+}
+
 export function AuditResults({ batch, connection, onSelect }: AuditResultsProps) {
   const pct = batchProgress(batch);
   const { total, done, error, running } = batch.counts;
+  const groups = groupJobsByHost(batch.jobs);
+  // Only the first website opens on load; the rest start collapsed. Keyed by
+  // batch id so a new batch resets to "first open".
+  const firstHost = groups[0]?.host;
 
   return (
     <section className="flex flex-col gap-4" aria-label="Audit results">
@@ -84,13 +120,55 @@ export function AuditResults({ batch, connection, onSelect }: AuditResultsProps)
         <Progress value={pct} aria-label="Batch progress" />
       </div>
 
-      <ul className="grid list-none gap-4 p-0 md:grid-cols-2">
-        {batch.jobs.map((job) => (
-          <li key={job.id}>
-            <AuditJobCard job={job} onSelect={onSelect} />
-          </li>
-        ))}
-      </ul>
+      <Accordion
+        key={batch.id}
+        type="multiple"
+        defaultValue={firstHost ? [firstHost] : []}
+        className="flex flex-col gap-2"
+      >
+        {groups.map((group) => {
+          const groupDone = group.jobs.filter((j) => j.status === "done").length;
+          const groupError = group.jobs.filter(
+            (j) => j.status === "error",
+          ).length;
+          return (
+            <AccordionItem
+              key={group.host}
+              value={group.host}
+              className="rounded-lg border border-border/60 bg-card/40 px-4"
+            >
+              <AccordionTrigger className="items-center hover:no-underline">
+                <span className="flex flex-1 flex-wrap items-center justify-between gap-x-4 gap-y-1 pr-3">
+                  <span className="font-mono text-sm text-foreground">
+                    {group.host}
+                  </span>
+                  <span className="flex items-center gap-4 font-mono text-[0.7rem] uppercase tracking-[0.16em] text-muted-foreground tabular-nums">
+                    {groupError > 0 ? (
+                      <span>
+                        <span className="text-score-poor">{groupError}</span>{" "}
+                        error
+                      </span>
+                    ) : null}
+                    <span>
+                      <span className="text-foreground">{groupDone}</span> /{" "}
+                      {group.jobs.length}
+                    </span>
+                  </span>
+                </span>
+              </AccordionTrigger>
+              <AccordionContent>
+                <ul className="grid list-none gap-4 p-0 pt-1 sm:grid-cols-2">
+                  {group.jobs.map((job) => (
+                    <li key={job.id}>
+                      <AuditJobCard job={job} onSelect={onSelect} />
+                    </li>
+                  ))}
+                </ul>
+              </AccordionContent>
+            </AccordionItem>
+          );
+        })}
+      </Accordion>
     </section>
   );
 }

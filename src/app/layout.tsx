@@ -42,11 +42,11 @@ export default function RootLayout({
         <ThemeProvider>
           <TooltipProvider>
             <SiteHeader />
-            <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-10 md:py-14">
+            <main className="w-full flex-1 px-6 py-10 md:py-14 lg:px-10">
               {children}
             </main>
             <footer className="border-t border-border/60">
-              <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-6 py-4 font-mono text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground">
+              <div className="flex w-full items-center justify-between px-6 py-4 font-mono text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground lg:px-10">
                 <span>Local lab data · Lighthouse v13</span>
                 <span className="text-muted-foreground/70">Median-of-N · bounded concurrency</span>
               </div>

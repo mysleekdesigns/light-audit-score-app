@@ -53,7 +53,7 @@ export function SiteHeader() {
     <header className="sticky top-0 z-40 border-b border-border/70 bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       {/* instrument accent line */}
       <div className="h-px w-full bg-gradient-to-r from-transparent via-primary/70 to-transparent" />
-      <div className="mx-auto flex h-16 w-full max-w-6xl items-center gap-8 px-6">
+      <div className="flex h-16 w-full items-center gap-8 px-6 lg:px-10">
         <Link href="/" className="group flex items-center gap-3">
           <span className="text-primary transition-transform duration-300 group-hover:rotate-[8deg]">
             <BeamMark className="size-6" />

@@ -105,15 +105,16 @@ export function AuditConsole() {
         onSubmit={handleSubmit}
         isRunning={running}
         latestBenchmarkIndex={latestBenchmarkIndex}
+        results={
+          batch ? (
+            <AuditResults
+              batch={batch}
+              connection={connection}
+              onSelect={handleSelect}
+            />
+          ) : null
+        }
       />
-
-      {batch ? (
-        <AuditResults
-          batch={batch}
-          connection={connection}
-          onSelect={handleSelect}
-        />
-      ) : null}
 
       <AuditDetailSheet
         job={selectedJob}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useId, useMemo, useState } from "react";
+import { useCallback, useId, useMemo, useState, type ReactNode } from "react";
 import {
   Crosshair,
   Gauge,
@@ -113,12 +113,19 @@ export interface NewAuditFormProps {
    * the Run-config readout (PRD §6 Phase 9). The form never fetches this itself.
    */
   latestBenchmarkIndex?: number | null;
+  /**
+   * Live results panel rendered in the left column beneath the Target URLs
+   * card, filling the space alongside the (taller) Run config column. Null
+   * until a batch exists.
+   */
+  results?: ReactNode;
 }
 
 export function NewAuditForm({
   onSubmit,
   isRunning = false,
   latestBenchmarkIndex = null,
+  results = null,
 }: NewAuditFormProps) {
   const deviceId = useId();
   const throttlingId = useId();
@@ -288,72 +295,75 @@ export function NewAuditForm({
   }
 
   return (
-    <div className="grid gap-6 lg:grid-cols-3">
-      {/* Targets */}
-      <Card className="lg:col-span-2">
-        <CardHeader>
-          <CardTitle>Target URLs</CardTitle>
-          <CardDescription>
-            One URL per line. Each is audited independently.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Tabs value={tab} onValueChange={handleTabChange} className="gap-4">
-            <TabsList>
-              <TabsTrigger value="paste">
-                <ListPlus data-icon="inline-start" />
-                Paste list
-              </TabsTrigger>
-              <TabsTrigger value="crawl">
-                <Radar data-icon="inline-start" />
-                Crawl site
-              </TabsTrigger>
-            </TabsList>
+    <div className="grid gap-6 lg:grid-cols-3 lg:items-start">
+      {/* Targets — and, once a batch is running, the live results beneath. */}
+      <div className="flex flex-col gap-6 lg:col-span-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Target URLs</CardTitle>
+            <CardDescription>
+              One URL per line. Each is audited independently.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Tabs value={tab} onValueChange={handleTabChange} className="gap-4">
+              <TabsList>
+                <TabsTrigger value="paste">
+                  <ListPlus data-icon="inline-start" />
+                  Paste list
+                </TabsTrigger>
+                <TabsTrigger value="crawl">
+                  <Radar data-icon="inline-start" />
+                  Crawl site
+                </TabsTrigger>
+              </TabsList>
 
-            <TabsContent value="paste" className="flex flex-col gap-3">
-              <Textarea
-                rows={10}
-                value={text}
-                onChange={(event) => setText(event.target.value)}
-                disabled={isRunning}
-                aria-label="Target URLs"
-                spellCheck={false}
-                autoComplete="off"
-                className="resize-none font-mono text-sm"
-                placeholder={
-                  "https://example.com\nhttps://example.com/pricing\nhttps://example.com/blog"
-                }
-              />
-              <div
-                aria-live="polite"
-                className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1"
-              >
-                <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">
-                  {pastedUrls.length}{" "}
-                  {pastedUrls.length === 1 ? "URL" : "URLs"} queued
-                </p>
-                {invalid.length > 0 ? (
-                  <p className="font-mono text-xs uppercase tracking-[0.18em] text-score-average">
-                    {invalid.length}{" "}
-                    {invalid.length === 1 ? "line" : "lines"} ignored
-                    <span className="text-muted-foreground/70 normal-case tracking-normal">
-                      {" "}
-                      ({invalid.map((entry) => `L${entry.line}`).join(", ")})
-                    </span>
+              <TabsContent value="paste" className="flex flex-col gap-3">
+                <Textarea
+                  rows={10}
+                  value={text}
+                  onChange={(event) => setText(event.target.value)}
+                  disabled={isRunning}
+                  aria-label="Target URLs"
+                  spellCheck={false}
+                  autoComplete="off"
+                  className="resize-none font-mono text-sm"
+                  placeholder={
+                    "https://example.com\nhttps://example.com/pricing\nhttps://example.com/blog"
+                  }
+                />
+                <div
+                  aria-live="polite"
+                  className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1"
+                >
+                  <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                    {pastedUrls.length}{" "}
+                    {pastedUrls.length === 1 ? "URL" : "URLs"} queued
                   </p>
-                ) : null}
-              </div>
-            </TabsContent>
+                  {invalid.length > 0 ? (
+                    <p className="font-mono text-xs uppercase tracking-[0.18em] text-score-average">
+                      {invalid.length}{" "}
+                      {invalid.length === 1 ? "line" : "lines"} ignored
+                      <span className="text-muted-foreground/70 normal-case tracking-normal">
+                        {" "}
+                        ({invalid.map((entry) => `L${entry.line}`).join(", ")})
+                      </span>
+                    </p>
+                  ) : null}
+                </div>
+              </TabsContent>
 
-            <TabsContent value="crawl">
-              <CrawlPanel
-                onUrlsChange={handleCrawlUrlsChange}
-                disabled={isRunning}
-              />
-            </TabsContent>
-          </Tabs>
-        </CardContent>
-      </Card>
+              <TabsContent value="crawl">
+                <CrawlPanel
+                  onUrlsChange={handleCrawlUrlsChange}
+                  disabled={isRunning}
+                />
+              </TabsContent>
+            </Tabs>
+          </CardContent>
+        </Card>
+        {results}
+      </div>
 
       {/* Run configuration */}
       <Card>
