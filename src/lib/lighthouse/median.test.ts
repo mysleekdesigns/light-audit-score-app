@@ -46,6 +46,11 @@ function makeLhr(perf: number, fetchTime: string): LighthouseResult {
       "interactive": { numericValue: ms, displayValue: `${ms}`, score: perf / 10 },
       "largest-contentful-paint": { numericValue: ms, displayValue: `${ms}`, score: perf / 10 },
     },
+    environment: { benchmarkIndex: 1500, hostUserAgent: "test" },
+    configSettings: {
+      throttlingMethod: "simulate",
+      throttling: { cpuSlowdownMultiplier: 4 },
+    },
     timing: { total: ms },
   };
 }
@@ -69,6 +74,12 @@ function makeRun(perf: number, fetchTime: string): SingleRunResult {
     },
     opportunities: [],
     runWarnings: [`warn-${perf}`],
+    environment: {
+      benchmarkIndex: 1500,
+      hostUserAgent: "test",
+      throttlingMethod: "simulate",
+      cpuSlowdownMultiplier: 4,
+    },
     lhr,
   };
 }

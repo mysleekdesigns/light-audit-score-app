@@ -36,6 +36,10 @@ export type Throttling = "simulated" | "applied";
 export const MIN_RUNS = 1;
 export const MAX_RUNS = 5;
 
+/** Bounds for the CPU slowdown multiplier (PRD §6 Phase 8; Lighthouse default 4×). */
+export const MIN_CPU_MULTIPLIER = 1;
+export const MAX_CPU_MULTIPLIER = 20;
+
 /** Validated audit configuration consumed by the engine. */
 export interface AuditOptions {
   formFactor: FormFactor;
@@ -44,6 +48,14 @@ export interface AuditOptions {
   categories: LighthouseCategory[];
   /** Number of runs to take the median of (MIN_RUNS..MAX_RUNS). */
   runs: number;
+  /**
+   * CPU slowdown multiplier (MIN_CPU_MULTIPLIER..MAX_CPU_MULTIPLIER). Omitted =
+   * Lighthouse's default 4×. Under `simulated` throttling it scales the
+   * simulation; under `applied` it sets the real CPU interrupt rate. The biggest
+   * lever on score parity with the DevTools panel relative to host power
+   * (`benchmarkIndex`) — see PRD §3 host-parity finding.
+   */
+  cpuSlowdownMultiplier?: number;
 }
 
 /** Category id → 0–100 score (Lighthouse reports 0–1; we normalise to 0–100), or null if unscored. */
@@ -103,6 +115,24 @@ export interface Opportunity {
  */
 export type LighthouseResult = Record<string, unknown>;
 
+/**
+ * Host / effective-throttling environment a run executed under (PRD §6 Phase 8 —
+ * the inputs to score parity with the DevTools panel). `benchmarkIndex` and
+ * `hostUserAgent` are read from `lhr.environment`; the *effective* throttling
+ * method + CPU multiplier Lighthouse actually applied are read from
+ * `lhr.configSettings` (which reflects the resolved config, not just our flags).
+ */
+export interface RunEnvironment {
+  /** Lighthouse host CPU/memory benchmark (`lhr.environment.benchmarkIndex`); null if absent. */
+  benchmarkIndex: number | null;
+  /** Host browser user agent (`lhr.environment.hostUserAgent`); "" if absent. */
+  hostUserAgent: string;
+  /** Effective throttling method Lighthouse ran with ("simulate" | "devtools" | "provided" | …); "" if absent. */
+  throttlingMethod: string;
+  /** Effective CPU slowdown multiplier applied (`lhr.configSettings.throttling.cpuSlowdownMultiplier`); null if absent. */
+  cpuSlowdownMultiplier: number | null;
+}
+
 /** Result of one Lighthouse run against one URL. */
 export interface SingleRunResult {
   requestedUrl: string;
@@ -115,6 +145,8 @@ export interface SingleRunResult {
   metrics: CoreWebVitals;
   opportunities: Opportunity[];
   runWarnings: string[];
+  /** Host / effective-throttling environment this run executed under. */
+  environment: RunEnvironment;
   /** Raw LHR for persistence and median computation. */
   lhr: LighthouseResult;
 }
@@ -140,6 +172,8 @@ export interface AuditResult {
   lighthouseVersion: string;
   /** Deduped warnings collected across runs. */
   runWarnings: string[];
+  /** Host / effective-throttling environment the median run executed under. */
+  environment: RunEnvironment;
 }
 
 /** Signature: run Lighthouse once against a URL with already-validated options. */

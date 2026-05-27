@@ -9,6 +9,7 @@ import { CrawlPanel } from "@/components/audit/crawl-panel";
 import type {
   FormFactor,
   LighthouseCategory,
+  Throttling,
 } from "@/lib/lighthouse/types";
 import {
   LIGHTHOUSE_CATEGORIES,
@@ -74,6 +75,7 @@ export interface NewAuditFormProps {
 
 export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps) {
   const deviceId = useId();
+  const throttlingId = useId();
   const runsId = useId();
   const concurrencyId = useId();
 
@@ -89,6 +91,8 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
   // URLs through the same CreateBatchRequest the paste tab uses.
   const [crawlUrls, setCrawlUrls] = useState<string[]>([]);
   const [formFactor, setFormFactor] = useState<FormFactor>("mobile");
+  // Local-only this phase: throttling is NOT persisted to defaults yet (Phase 9).
+  const [throttling, setThrottling] = useState<Throttling>("simulated");
   const [runs, setRuns] = useState(3);
   const [concurrency, setConcurrency] = useState(DEFAULT_CONCURRENCY);
   const [categories, setCategories] = useState<LighthouseCategory[]>([
@@ -134,6 +138,12 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
     }
   }
 
+  function handleThrottlingChange(value: string) {
+    // Guard the union before committing. No `update(...)` — persisting throttling
+    // to defaults is Phase 9, so this choice lives only for the current session.
+    if (value === "simulated" || value === "applied") setThrottling(value);
+  }
+
   function handleRunsChange(value: string) {
     const next = Number(value);
     setRuns(next);
@@ -161,7 +171,7 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
       urls,
       options: {
         formFactor,
-        throttling: "simulated",
+        throttling,
         categories,
         runs,
       },
@@ -265,6 +275,30 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
                   Desktop
                 </ToggleGroupItem>
               </ToggleGroup>
+            </Field>
+
+            <Field>
+              <FieldLabel htmlFor={throttlingId}>Throttling</FieldLabel>
+              <ToggleGroup
+                id={throttlingId}
+                type="single"
+                variant="outline"
+                value={throttling}
+                onValueChange={handleThrottlingChange}
+                disabled={isRunning}
+                className="w-full"
+              >
+                <ToggleGroupItem value="simulated" className="flex-1">
+                  Simulated
+                </ToggleGroupItem>
+                <ToggleGroupItem value="applied" className="flex-1">
+                  Applied
+                </ToggleGroupItem>
+              </ToggleGroup>
+              <FieldDescription>
+                Simulated estimates from one unthrottled trace; Applied throttles
+                the real CPU/network — slower, closer to a device.
+              </FieldDescription>
             </Field>
 
             <Field>

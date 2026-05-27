@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { parseLhr } from "@/lib/lighthouse/runAudit";
-import { type LighthouseResult } from "@/lib/lighthouse/types";
+import {
+  buildThrottlingFlags,
+  parseEnvironment,
+  parseLhr,
+} from "@/lib/lighthouse/runAudit";
+import {
+  type AuditOptions,
+  type LighthouseResult,
+} from "@/lib/lighthouse/types";
 
 /** A small but representative in-memory LHR. No Chrome is launched here. */
 function sampleLhr(): LighthouseResult {
@@ -111,5 +118,123 @@ describe("parseLhr", () => {
     expect(parsed.opportunities).toEqual([]);
     // Every metric id present and null.
     expect(parsed.metrics.interactive).toBeNull();
+  });
+
+  it("includes the parsed environment", () => {
+    const parsed = parseLhr(sampleLhr(), "mobile");
+    expect(parsed.environment).toEqual({
+      benchmarkIndex: null,
+      hostUserAgent: "",
+      throttlingMethod: "",
+      cpuSlowdownMultiplier: null,
+    });
+  });
+});
+
+/** Base validated options; tests override only the fields they exercise. */
+function baseOptions(overrides: Partial<AuditOptions> = {}): AuditOptions {
+  return {
+    formFactor: "mobile",
+    throttling: "simulated",
+    categories: ["performance"],
+    runs: 1,
+    ...overrides,
+  };
+}
+
+describe("buildThrottlingFlags", () => {
+  it("maps 'simulated' → throttlingMethod 'simulate' and 'applied' → 'devtools'", () => {
+    expect(
+      buildThrottlingFlags(baseOptions({ throttling: "simulated" }))
+        .throttlingMethod,
+    ).toBe("simulate");
+    expect(
+      buildThrottlingFlags(baseOptions({ throttling: "applied" }))
+        .throttlingMethod,
+    ).toBe("devtools");
+  });
+
+  it("emits NO throttling flag when the multiplier is omitted (keeps Lighthouse defaults)", () => {
+    const flags = buildThrottlingFlags(baseOptions());
+    expect(flags.throttlingMethod).toBe("simulate");
+    expect(flags.throttling).toBeUndefined();
+    expect("throttling" in flags).toBe(false);
+  });
+
+  it("preserves the mobile network throttling profile when a multiplier is set", () => {
+    const flags = buildThrottlingFlags(
+      baseOptions({ formFactor: "mobile", cpuSlowdownMultiplier: 8 }),
+    );
+    expect(flags.throttling).toBeDefined();
+    const throttling = flags.throttling as Record<string, unknown>;
+    // Only the CPU multiplier changes…
+    expect(throttling.cpuSlowdownMultiplier).toBe(8);
+    // …the 4G-class network profile from the mobile config is retained.
+    expect(typeof throttling.rttMs).toBe("number");
+    expect(typeof throttling.throughputKbps).toBe("number");
+    expect(throttling.rttMs).toBeGreaterThan(0);
+    expect(throttling.throughputKbps).toBeGreaterThan(0);
+  });
+
+  it("preserves the desktop network throttling profile when a multiplier is set", () => {
+    const flags = buildThrottlingFlags(
+      baseOptions({ formFactor: "desktop", cpuSlowdownMultiplier: 2 }),
+    );
+    const throttling = flags.throttling as Record<string, unknown>;
+    expect(throttling.cpuSlowdownMultiplier).toBe(2);
+    expect(typeof throttling.rttMs).toBe("number");
+    expect(typeof throttling.throughputKbps).toBe("number");
+    expect(throttling.rttMs).toBeGreaterThan(0);
+    expect(throttling.throughputKbps).toBeGreaterThan(0);
+  });
+
+  it("works under 'applied' (devtools) too, still merging over the network profile", () => {
+    const flags = buildThrottlingFlags(
+      baseOptions({ throttling: "applied", cpuSlowdownMultiplier: 6 }),
+    );
+    expect(flags.throttlingMethod).toBe("devtools");
+    const throttling = flags.throttling as Record<string, unknown>;
+    expect(throttling.cpuSlowdownMultiplier).toBe(6);
+    expect(typeof throttling.rttMs).toBe("number");
+  });
+});
+
+describe("parseEnvironment", () => {
+  it("reads benchmarkIndex/hostUserAgent and effective throttling from the LHR", () => {
+    const lhr: LighthouseResult = {
+      environment: { benchmarkIndex: 1234.5, hostUserAgent: "Chrome/130" },
+      configSettings: {
+        throttlingMethod: "devtools",
+        throttling: { cpuSlowdownMultiplier: 6, rttMs: 40 },
+      },
+    };
+    expect(parseEnvironment(lhr)).toEqual({
+      benchmarkIndex: 1234.5,
+      hostUserAgent: "Chrome/130",
+      throttlingMethod: "devtools",
+      cpuSlowdownMultiplier: 6,
+    });
+  });
+
+  it("defaults gracefully when fields are absent", () => {
+    expect(parseEnvironment({})).toEqual({
+      benchmarkIndex: null,
+      hostUserAgent: "",
+      throttlingMethod: "",
+      cpuSlowdownMultiplier: null,
+    });
+  });
+
+  it("tolerates a non-numeric benchmarkIndex / missing throttling sub-object", () => {
+    const lhr: LighthouseResult = {
+      environment: { benchmarkIndex: "nope", hostUserAgent: "UA" },
+      configSettings: { throttlingMethod: "simulate" },
+    };
+    expect(parseEnvironment(lhr)).toEqual({
+      benchmarkIndex: null,
+      hostUserAgent: "UA",
+      throttlingMethod: "simulate",
+      cpuSlowdownMultiplier: null,
+    });
   });
 });

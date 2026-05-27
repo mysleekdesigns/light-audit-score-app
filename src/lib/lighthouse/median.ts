@@ -96,6 +96,7 @@ export const runAudit: RunAudit = async (url, options) => {
     fetchTime: parsedMedian.fetchTime,
     lighthouseVersion: parsedMedian.lighthouseVersion,
     runWarnings,
+    environment: parsedMedian.environment,
   };
 
   return result;

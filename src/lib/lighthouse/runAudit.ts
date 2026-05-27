@@ -16,12 +16,14 @@ import path from "node:path";
 
 import { launch, type LaunchedChrome } from "chrome-launcher";
 import lighthouse, {
+  defaultConfig,
   desktopConfig,
   type LighthouseFlags,
 } from "lighthouse";
 
 import { classifyAuditError, runtimeErrorMessage } from "@/lib/lighthouse/diagnose";
 import {
+  type AuditOptions,
   type CategoryScores,
   type CoreWebVitals,
   type FormFactor,
@@ -32,6 +34,7 @@ import {
   METRIC_IDS,
   type MetricValue,
   type Opportunity,
+  type RunEnvironment,
   type RunSingleAudit,
   type SingleRunResult,
   type Throttling,
@@ -78,6 +81,51 @@ function pickString(
     if (value !== undefined) return value;
   }
   return undefined;
+}
+
+/**
+ * The default `throttling` settings object for the active form factor's config
+ * (mobile = `defaultConfig`, desktop = `desktopConfig`). These carry the network
+ * profile (rttMs/throughputKbps/…) AND the method's default `cpuSlowdownMultiplier`.
+ * Returns a fresh shallow copy ({} if absent) so callers can safely spread over it.
+ */
+function defaultThrottlingFor(
+  formFactor: FormFactor,
+): Record<string, unknown> {
+  const config = formFactor === "desktop" ? desktopConfig : defaultConfig;
+  const settings = isRecord(config.settings) ? config.settings : undefined;
+  const throttling =
+    settings && isRecord(settings.throttling) ? settings.throttling : undefined;
+  return throttling ? { ...throttling } : {};
+}
+
+/**
+ * Pure mapping from validated options → the throttling-related Lighthouse flags.
+ * Exported so flag construction is unit-testable without launching Chrome.
+ *
+ * - Always sets `throttlingMethod` (`simulate`/`devtools`) via {@link toThrottlingMethod}.
+ * - When `cpuSlowdownMultiplier` is set, we MUST NOT hand Lighthouse a bare
+ *   `{ cpuSlowdownMultiplier }`: a `throttling` flag REPLACES the config's entire
+ *   `throttling` object, which would silently drop network throttling
+ *   (rttMs/throughputKbps/…). So we MERGE the multiplier over the active form
+ *   factor's default throttling profile, changing only `cpuSlowdownMultiplier`.
+ * - When omitted, we emit no `throttling` flag at all, so Lighthouse keeps its
+ *   own config defaults (mobile 4×, desktop 1×).
+ */
+export function buildThrottlingFlags(
+  options: AuditOptions,
+): Pick<LighthouseFlags, "throttlingMethod" | "throttling"> {
+  const throttlingMethod = toThrottlingMethod(options.throttling);
+  if (options.cpuSlowdownMultiplier === undefined) {
+    return { throttlingMethod };
+  }
+  return {
+    throttlingMethod,
+    throttling: {
+      ...defaultThrottlingFor(options.formFactor),
+      cpuSlowdownMultiplier: options.cpuSlowdownMultiplier,
+    },
+  };
 }
 
 function getCategories(lhr: LighthouseResult): Record<string, unknown> {
@@ -159,6 +207,28 @@ function parseOpportunities(lhr: LighthouseResult): Opportunity[] {
 }
 
 /**
+ * Read the run's host / effective-throttling environment from the LHR (PRD §6
+ * Phase 8). `benchmarkIndex` + `hostUserAgent` come from `lhr.environment`; the
+ * *effective* throttling method + CPU multiplier Lighthouse actually applied come
+ * from `lhr.configSettings` (the resolved config, not just the flags we passed).
+ * Pure and tolerant of absent fields.
+ */
+export function parseEnvironment(lhr: LighthouseResult): RunEnvironment {
+  const environment = isRecord(lhr.environment) ? lhr.environment : {};
+  const configSettings = isRecord(lhr.configSettings) ? lhr.configSettings : {};
+  const throttling = isRecord(configSettings.throttling)
+    ? configSettings.throttling
+    : {};
+
+  return {
+    benchmarkIndex: asNumber(environment.benchmarkIndex),
+    hostUserAgent: asString(environment.hostUserAgent) ?? "",
+    throttlingMethod: asString(configSettings.throttlingMethod) ?? "",
+    cpuSlowdownMultiplier: asNumber(throttling.cpuSlowdownMultiplier),
+  };
+}
+
+/**
  * Pure transform from a raw LHR into our contract (minus the raw `lhr`).
  * No Chrome, no I/O — unit-testable in isolation. Tolerates field-name variance
  * across Lighthouse versions.
@@ -187,6 +257,7 @@ export function parseLhr(
     metrics: parseMetrics(lhr),
     opportunities: parseOpportunities(lhr),
     runWarnings,
+    environment: parseEnvironment(lhr),
   };
 }
 
@@ -217,7 +288,10 @@ export const runSingleAudit: RunSingleAudit = async (url, options) => {
         port: chrome.port,
         onlyCategories: options.categories,
         formFactor: options.formFactor,
-        throttlingMethod: toThrottlingMethod(options.throttling),
+        // throttlingMethod (simulate/devtools) + an optional throttling override
+        // that preserves the active config's network profile when a CPU
+        // multiplier is set. See `buildThrottlingFlags`.
+        ...buildThrottlingFlags(options),
         // Bound a single navigation so a hung page fails fast (and is then
         // classified) rather than stalling until the worker timeout.
         maxWaitForLoad: MAX_WAIT_FOR_LOAD_MS,

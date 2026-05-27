@@ -12,7 +12,9 @@ import { z } from "zod";
 import {
   type AuditOptions,
   LIGHTHOUSE_CATEGORIES,
+  MAX_CPU_MULTIPLIER,
   MAX_RUNS,
+  MIN_CPU_MULTIPLIER,
   MIN_RUNS,
 } from "@/lib/lighthouse/types";
 
@@ -21,6 +23,11 @@ const CATEGORY_VALUES = [...LIGHTHOUSE_CATEGORIES] as [
   (typeof LIGHTHOUSE_CATEGORIES)[number],
   ...(typeof LIGHTHOUSE_CATEGORIES)[number][],
 ];
+
+/** Clamp an arbitrary number into the allowed CPU-multiplier band (mirrors `clampConcurrency`). */
+function clampCpuMultiplier(n: number): number {
+  return Math.min(MAX_CPU_MULTIPLIER, Math.max(MIN_CPU_MULTIPLIER, n));
+}
 
 /**
  * Zod schema for raw audit options. Every field has a default, so an empty
@@ -40,6 +47,14 @@ export const auditOptionsSchema = z.object({
     .min(MIN_RUNS, `runs must be at least ${MIN_RUNS}.`)
     .max(MAX_RUNS, `runs must be at most ${MAX_RUNS}.`)
     .default(3),
+  // Optional, NO default: when omitted it stays `undefined` and the engine
+  // doesn't pass the flag, so Lighthouse uses its own 4× default. Per the PRD
+  // we clamp (never reject) finite values into [MIN..MAX]_CPU_MULTIPLIER —
+  // mirroring the `concurrency` clamp style.
+  cpuSlowdownMultiplier: z
+    .number("cpuSlowdownMultiplier must be a number.")
+    .transform((n) => clampCpuMultiplier(n))
+    .optional(),
 });
 
 /**

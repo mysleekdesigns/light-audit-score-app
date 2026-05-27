@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import { MAX_URLS, parseCreateBatchBody } from "@/lib/api/audits-schema";
 import { DEFAULT_OPTIONS } from "@/lib/lighthouse/options";
-import { LIGHTHOUSE_CATEGORIES } from "@/lib/lighthouse/types";
+import {
+  LIGHTHOUSE_CATEGORIES,
+  MAX_CPU_MULTIPLIER,
+} from "@/lib/lighthouse/types";
 import {
   DEFAULT_CONCURRENCY,
   MAX_CONCURRENCY,
@@ -60,6 +63,38 @@ describe("parseCreateBatchBody — valid bodies", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.options).toEqual(DEFAULT_OPTIONS);
+  });
+
+  it("passes through an in-range cpuSlowdownMultiplier + throttling unchanged", () => {
+    const result = parseCreateBatchBody({
+      urls: ["https://example.com"],
+      options: { throttling: "applied", cpuSlowdownMultiplier: 6 },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.options.throttling).toBe("applied");
+    expect(result.value.options.cpuSlowdownMultiplier).toBe(6);
+  });
+
+  it("clamps an out-of-range cpuSlowdownMultiplier as it passes through", () => {
+    const result = parseCreateBatchBody({
+      urls: ["https://example.com"],
+      options: { cpuSlowdownMultiplier: 999 },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.options.cpuSlowdownMultiplier).toBe(MAX_CPU_MULTIPLIER);
+  });
+
+  it("omits cpuSlowdownMultiplier entirely when not provided", () => {
+    const result = parseCreateBatchBody({
+      urls: ["https://example.com"],
+      options: { throttling: "applied" },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.options.cpuSlowdownMultiplier).toBeUndefined();
+    expect("cpuSlowdownMultiplier" in result.value.options).toBe(false);
   });
 
   it("accepts exactly MAX_URLS entries", () => {

@@ -1,6 +1,20 @@
 # PRD — Local Lighthouse Auditing Tool
 
-> **Status:** Phase 7 complete — **the build is feature-complete.** The final polish landed:
+> **Status:** Phase 8 complete — the **Calibration & Accuracy** layer has begun. The engine now
+> takes a `throttling` method (simulated/applied) *and* an optional `cpuSlowdownMultiplier` (1–20,
+> clamped; omitted = Lighthouse's 4×), plumbed into the Lighthouse flags by the unit-tested
+> `buildThrottlingFlags` (which merges the multiplier over the form factor's default throttling so
+> the network profile is never clobbered); every run captures its host/effective-throttling
+> `RunEnvironment` (`benchmarkIndex`, `hostUserAgent`, effective method + multiplier from
+> `lhr.environment`/`configSettings`), which rides through `AuditResultLite` to the API/SSE; the
+> New-Audit form exposes a Simulated/Applied throttling control (no longer hardcoded); and the CLI
+> gained `--cpu=N`. **Verified for real**: simulated→`simulate`/applied→`devtools` with the chosen
+> multiplier read back from `configSettings`, `benchmarkIndex`+host captured, and raising the
+> multiplier 1×→12× shifted TBT 0→250 ms / Performance 65→58. Lint, typecheck, build, and **263
+> unit tests** all green. **Next up:** Phase 9 (§6) — Calibration & the "Match DevTools" preset
+> (calibrate the multiplier from `benchmarkIndex`, accuracy mode that serializes Performance at
+> concurrency 1, and a one-button mobile·simulated·1-run·concurrency-1 preset), then Phase 10
+> (environment badge + drift warnings). Phase 7's polish layer remains complete:
 > **export** (History exports its filtered rows and each Batch exports its runs as JSON/CSV +
 > bulk-opens their HTML reports, via pure unit-tested serializers in `src/lib/export/`);
 > **settings persistence** (default device / runs / concurrency / categories + per-category pass
@@ -18,7 +32,8 @@
 > typecheck, build, and **244 unit tests** all green (Phase 7 added 20 settings/export +
 > 15 engine-diagnose tests). Phases 1–6 (engine, median-of-N, forked-process queue, API/SSE, live
 > Audit UI, SQLite persistence + History, crawl/sitemap discovery, comparison & trends) remain
-> complete underneath. **All seven phases of §6 are done.**
+> complete underneath. The **Calibration & Accuracy** layer (Phases 8–10) makes local scores
+> matchable to the Chrome DevTools Lighthouse panel — see §3's host-parity finding for the why.
 
 ## 1. Overview
 
@@ -60,6 +75,19 @@ Lighthouse engine.
   We need a job queue + progress streaming (SSE), running in the **Node runtime**
   (Lighthouse cannot run on the Edge runtime), with native deps externalized from the
   bundle.
+- **Parity with the DevTools panel depends on the *host*, not just the config.** Both this
+  tool and the DevTools Lighthouse panel default to **simulated throttling** with a constant
+  **4× CPU multiplier**, so the throttling *method* is not the gap. Simulated throttling derives
+  its whole estimate from the initial **unthrottled** load trace, so any CPU contention during
+  that trace inflates TBT/TTI/LCP — meaning running several headless Chrome instances
+  concurrently (our default 3) **deflates** Performance vs a solo DevTools run. CPU throttling is
+  also expressed *relative to the host's* `benchmarkIndex`; 4× only lands on the mid-tier-mobile
+  target from a high-end desktop, so an over/under-powered or thermally-throttled machine drifts.
+  The tool never surfaces `benchmarkIndex`, hardcodes throttling to `simulated`, and runs cold
+  isolated profiles (vs the panel's warm headed profile), so users can't tell when *their
+  environment* is the cause. Fix: surface `benchmarkIndex`, let users calibrate the CPU multiplier
+  and pick the throttling method, and add an accuracy mode that serializes Performance audits.
+  (Source: Lighthouse `docs/throttling.md`; confirmed against the engine config in `runAudit.ts`.)
 
 ## 4. Confirmed product decisions
 1. **Input**: paste a list of URLs **and** crawl a site to discover pages (sitemap +
@@ -378,6 +406,95 @@ Results are durably persisted to SQLite + disk, so nothing is lost on restart.
 > (5) **README** documents setup/run, the median-of-N + isolated-Chrome scoring
 > model, the colour bands, and the variance/concurrency accuracy notes.
 
+### Phase 8 — Engine: throttling method + CPU-multiplier controls
+- [x] Extend the engine seam: add optional `cpuSlowdownMultiplier?: number` (1–20; omitted =
+      Lighthouse's default 4×) to `AuditOptions` (`src/lib/lighthouse/types.ts`) and surface the
+      already-typed `throttling` ("simulated" / "applied"). Update `auditOptionsSchema` +
+      `resolveAuditOptions` (`src/lib/lighthouse/options.ts`) to validate/clamp + default them.
+- [x] Plumb both into the Lighthouse `flags` in `runAudit.ts`: keep the existing
+      `throttlingMethod` mapping (`simulate`/`devtools`) and pass `throttling:
+      { cpuSlowdownMultiplier }` when set (under `simulate` it scales the simulation; under
+      `devtools` it sets the real CPU interrupt rate).
+- [x] Unhardcode throttling in the submit path — `new-audit-form.tsx:164` currently forces
+      `throttling: "simulated"`; flow the chosen value through `CreateBatchRequest` instead.
+- [x] Capture the run's environment into `AuditResult` (`types.ts`): `benchmarkIndex` +
+      `hostUserAgent` (from `lhr.environment`) and the *effective* throttling method + multiplier.
+- [x] Validate the new fields server-side in `src/lib/api/audits-schema.ts` (enum throttling,
+      clamp multiplier) so they pass through `POST /api/audits` unchanged.
+- [x] **Verify**: ran the engine/CLI against `example.com` (simulated 4× vs applied 8×) and a
+      JS-heavier Wikipedia page (simulated 1× vs 12×). (a) Flags reach Lighthouse: `applied` →
+      effective `throttlingMethod: "devtools"`, `simulated` → `"simulate"`, and the chosen
+      `cpuSlowdownMultiplier` is read back from `lhr.configSettings` (omitted → Lighthouse's 4×).
+      (b) Each result carries `benchmarkIndex` (~4046) + `hostUserAgent`. (c) Expected metric
+      shift: holding method/page fixed and raising the multiplier 1×→12× inflated **TBT 0→250 ms**
+      and dropped **Performance 65→58**. Lint, typecheck, build, and **263 unit tests** all green
+      (Phase 8 added option-schema clamp, flag-mapping, `parseEnvironment`, and audits-schema
+      pass-through tests).
+
+> **Phase 8 design notes.** (1) **Network throttling must not be clobbered.** Passing a bare
+> `throttling: { cpuSlowdownMultiplier }` flag *replaces* Lighthouse's whole `throttling` object,
+> silently dropping the network profile (rttMs/throughputKbps/…). The exported, unit-tested
+> `buildThrottlingFlags(options)` in `runAudit.ts` instead *merges* the multiplier over the active
+> form factor's default throttling (read from `defaultConfig`/`desktopConfig`), so only the CPU
+> field changes — confirmed empirically (mobile + 8× keeps the full 4G-class network values).
+> When the multiplier is omitted, no `throttling` flag is sent at all (Lighthouse keeps its 4×).
+> (2) **Effective vs requested.** The captured `RunEnvironment` reads the *effective* throttling
+> method + multiplier back from `lhr.configSettings` (not just our requested flags), alongside
+> `benchmarkIndex` + `hostUserAgent` from `lhr.environment`, via a pure `parseEnvironment(lhr)`.
+> `environment` is a required field on `SingleRunResult`/`AuditResult` and rides through
+> `AuditResultLite` (so it reaches the API/SSE for Phase 10's environment badge). (3) **No
+> `audits-schema.ts` code change.** It already delegates `options` to `auditOptionsSchema`, so the
+> clamped multiplier + throttling pass through `POST /api/audits` for free (covered by a new
+> pass-through test). (4) **CLI knob.** `scripts/audit-cli.ts` gained `--cpu=N` (aliases
+> `--cpu-multiplier`/`--cpu-slowdown`) so the engine's Verify harness can drive the new option.
+> (5) **Not yet persisted as columns / surfaced in UI.** Phase 8 only *captures* the environment
+> and adds the throttling control; the multiplier UI control, calibration, and the environment
+> badge/drift warnings are Phases 9–10.
+
+### Phase 9 — Calibration & "Match DevTools" parity
+- [ ] **Calibrate** action: run a quick reference benchmark (or reuse one audit's
+      `benchmarkIndex`), then map it to a recommended `cpuSlowdownMultiplier` via the official
+      bracket table (high-end desktop 1500–2000, mid-tier mobile 125–800, etc. — Lighthouse
+      `docs/throttling.md`), and persist the recommendation as a default.
+- [ ] **Accuracy mode** toggle: when Performance is in scope, force the batch's effective
+      `concurrency = 1` so the initial unthrottled trace isn't CPU-contended; surface the
+      speed↔accuracy tradeoff. Honour an effective-concurrency override in `CreateBatchInput`
+      (`src/lib/queue/types.ts`) / `AuditQueue` rather than mutating the user's saved setting.
+- [ ] **"Match DevTools" preset**: one button sets mobile · simulated · 1 run · concurrency 1 —
+      the panel's defaults — so a run is directly comparable to a DevTools-panel run.
+- [ ] Expose throttling method + CPU multiplier + the calibrated default in the Run-config card;
+      remember them via `useAuditDefaults` (extend `AuditDefaults` + `normalizeDefaults` in
+      `src/lib/settings/defaults.ts`, each slice merged without clobbering the others).
+- **Verify**: run a URL via the "Match DevTools" preset **and** in the DevTools Lighthouse panel
+      (mobile, simulated) on the same machine — category scores land within a few points and the
+      reported `benchmarkIndex` matches the panel's "CPU/Memory Power". Confirm a batch with
+      accuracy mode on no longer silently deflates Performance vs the same URLs run one-by-one.
+
+### Phase 10 — Environment visibility & drift warnings
+- [ ] **Environment badge** on each result card + the batch summary: show `benchmarkIndex`
+      ("CPU/Memory Power") and the effective throttling method + multiplier the run used.
+- [ ] **Drift warning**: flag runs whose `benchmarkIndex` indicates an over/under-powered or
+      CPU-contended host (e.g. a wide benchmarkIndex spread across a batch), with a one-click link
+      to Calibrate and a note when `concurrency > 1` likely depressed Performance.
+- [ ] Surface the **per-run `benchmarkIndex` spread** alongside the existing per-run score spread,
+      closing the §8 "surface per-run spread" risk for the CPU dimension too.
+- [ ] Extend `README.md` accuracy notes with the calibration workflow and "Match DevTools"
+      guidance (when to use simulated vs applied throttling, why concurrency affects Performance).
+- **Verify**: a batch run on a deliberately busy machine shows the badge + drift warning;
+      running Calibrate updates the recommended multiplier, and a solo accuracy-mode re-run clears
+      the warning. Lint, typecheck, build, and the unit suite stay green.
+
+> **Phases 8–10 design notes.** Earlier phases optimised for **throughput** (parallel Chrome via
+> p-queue) and **reproducibility** (median-of-N, cold isolated profiles). Both are correct, but
+> both diverge from the DevTools panel, which runs **one page solo in a warm headed profile**.
+> Rather than abandon throughput, this layer makes the *environment* visible (`benchmarkIndex`)
+> and gives the user explicit, calibrated controls to trade speed for parity when they need it:
+> Phase 8 adds the engine knobs (throttling method + CPU multiplier) and records the host
+> environment; Phase 9 turns those knobs into one-click parity (Calibrate, accuracy mode, "Match
+> DevTools"); Phase 10 makes drift legible so a surprising score is explained by the machine, not
+> mistaken for a regression. All three reuse the existing seam (`AuditOptions` → `CreateBatchInput`
+> → persisted run) and the `useAuditDefaults` store — no new architecture.
+
 ---
 
 ## 7. End-to-end verification strategy
@@ -392,12 +509,21 @@ Results are durably persisted to SQLite + disk, so nothing is lost on restart.
 5. **Persistence (Phase 4)**: restart server, confirm history/reports survive.
 6. **Crawl (Phase 5)**: discovered URLs match sitemap/links for a known small site.
 7. **Compare (Phase 6)**: deltas/trends reflect a real before/after change.
+8. **Parity (Phases 8–10)**: a URL run via the "Match DevTools" preset lands within a few points
+   of the DevTools Lighthouse panel on the same machine; the reported `benchmarkIndex` matches the
+   panel's "CPU/Memory Power", and accuracy mode removes concurrency-induced Performance deflation.
 
 ## 8. Risks & mitigations
 - **Score variability** → median-of-N default + document expected variance; surface
   per-run spread in the UI.
 - **CPU contention skewing scores** → bounded concurrency (default 3) + explicit UI
-  warning; recommend lower concurrency for trustworthy performance numbers.
+  warning; recommend lower concurrency for trustworthy performance numbers. **Phases 8–10**
+  harden this: an **accuracy mode** serializes Performance audits (concurrency 1) and a **drift
+  warning** flags when a run's `benchmarkIndex` shows the host was over/under-powered or contended.
+- **Scores not matching the DevTools panel / PageSpeed** → surface per-run `benchmarkIndex`, let
+  users **calibrate** the CPU multiplier and pick the throttling method, and ship a **"Match
+  DevTools" preset** (mobile · simulated · 1 run · concurrency 1) for a directly comparable run
+  (Phases 8–10).
 - **Lighthouse ESM / native `better-sqlite3` in Next bundling** → `serverExternalPackages`
   + Node runtime; dynamic import of `lighthouse` where needed.
 - **Dev-mode HMR resetting the queue** → pin the singleton to `globalThis`.

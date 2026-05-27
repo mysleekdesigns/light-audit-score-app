@@ -7,6 +7,7 @@
  *   --runs=N                 runs to take the median of (1–5, default 3)
  *   --device=mobile|desktop  emulated form factor (alias: --form-factor)
  *   --throttling=simulated|applied
+ *   --cpu=N                  CPU slowdown multiplier (1–20; omit = Lighthouse 4×)
  *   --categories=performance,accessibility,best-practices,seo
  *   --json                   print the raw AuditResult JSON instead of a summary
  *
@@ -62,6 +63,10 @@ function parseArgs(argv: string[]): ParsedArgs {
   }
   if (typeof raw["runs"] === "string") {
     optionInput.runs = Number(raw["runs"]);
+  }
+  const cpu = raw["cpu"] ?? raw["cpu-multiplier"] ?? raw["cpu-slowdown"];
+  if (typeof cpu === "string") {
+    optionInput.cpuSlowdownMultiplier = Number(cpu);
   }
   if (typeof raw["categories"] === "string") {
     optionInput.categories = raw["categories"]

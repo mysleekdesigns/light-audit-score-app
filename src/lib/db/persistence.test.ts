@@ -100,6 +100,12 @@ function makeResult(url: string): AuditResult {
     fetchTime: "2026-05-26T00:00:00.000Z",
     lighthouseVersion: "13.3.0",
     runWarnings: [],
+    environment: {
+      benchmarkIndex: 1500,
+      hostUserAgent: "test",
+      throttlingMethod: "simulate",
+      cpuSlowdownMultiplier: 4,
+    },
   };
 }
 

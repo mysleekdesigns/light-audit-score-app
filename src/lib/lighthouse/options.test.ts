@@ -5,7 +5,11 @@ import {
   parseAuditOptions,
   resolveAuditOptions,
 } from "@/lib/lighthouse/options";
-import { LIGHTHOUSE_CATEGORIES } from "@/lib/lighthouse/types";
+import {
+  LIGHTHOUSE_CATEGORIES,
+  MAX_CPU_MULTIPLIER,
+  MIN_CPU_MULTIPLIER,
+} from "@/lib/lighthouse/types";
 
 describe("DEFAULT_OPTIONS", () => {
   it("is mobile / simulated / all categories / 3 runs", () => {
@@ -101,6 +105,51 @@ describe("resolveAuditOptions", () => {
 
   it("includes the offending field path in the error message", () => {
     expect(() => resolveAuditOptions({ runs: 99 })).toThrow(/runs/);
+  });
+});
+
+describe("resolveAuditOptions — cpuSlowdownMultiplier", () => {
+  it("omits the field entirely when not provided (no default)", () => {
+    const result = resolveAuditOptions({});
+    expect("cpuSlowdownMultiplier" in result).toBe(false);
+    expect(result.cpuSlowdownMultiplier).toBeUndefined();
+  });
+
+  it("keeps an in-range integer multiplier unchanged", () => {
+    const result = resolveAuditOptions({ cpuSlowdownMultiplier: 6 });
+    expect(result.cpuSlowdownMultiplier).toBe(6);
+  });
+
+  it("keeps an in-range fractional multiplier unchanged (no flooring)", () => {
+    const result = resolveAuditOptions({ cpuSlowdownMultiplier: 4.5 });
+    expect(result.cpuSlowdownMultiplier).toBe(4.5);
+  });
+
+  it("clamps below MIN_CPU_MULTIPLIER up to the minimum", () => {
+    const result = resolveAuditOptions({ cpuSlowdownMultiplier: 0 });
+    expect(result.cpuSlowdownMultiplier).toBe(MIN_CPU_MULTIPLIER);
+  });
+
+  it("clamps above MAX_CPU_MULTIPLIER down to the maximum", () => {
+    const result = resolveAuditOptions({ cpuSlowdownMultiplier: 999 });
+    expect(result.cpuSlowdownMultiplier).toBe(MAX_CPU_MULTIPLIER);
+  });
+
+  it("keeps the exact bounds unchanged", () => {
+    expect(
+      resolveAuditOptions({ cpuSlowdownMultiplier: MIN_CPU_MULTIPLIER })
+        .cpuSlowdownMultiplier,
+    ).toBe(MIN_CPU_MULTIPLIER);
+    expect(
+      resolveAuditOptions({ cpuSlowdownMultiplier: MAX_CPU_MULTIPLIER })
+        .cpuSlowdownMultiplier,
+    ).toBe(MAX_CPU_MULTIPLIER);
+  });
+
+  it("throws on a non-numeric multiplier", () => {
+    expect(() =>
+      resolveAuditOptions({ cpuSlowdownMultiplier: "fast" }),
+    ).toThrow(/audit options/i);
   });
 });
 

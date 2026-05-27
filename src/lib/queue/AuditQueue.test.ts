@@ -81,6 +81,12 @@ function makeResult(url: string, perf: number): AuditResult {
     fetchTime: `t-${perf}`,
     lighthouseVersion: "13.0.0",
     runWarnings: [],
+    environment: {
+      benchmarkIndex: 1500,
+      hostUserAgent: "test",
+      throttlingMethod: "simulate",
+      cpuSlowdownMultiplier: 4,
+    },
   };
 }
 
