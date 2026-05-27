@@ -1,23 +1,24 @@
 # PRD — Local Lighthouse Auditing Tool
 
-> **Status:** Phase 6 complete — the tool can now **compare runs and surface trends**. Two new
-> views read the Phase-4 persistence seam: **`/compare`** groups history by URL and shows a
-> per-URL score-trend chart + sparklines (shadcn `chart`/Recharts) and a two-run diff of
-> category scores (higher = better) and Core Web Vitals (lower = better) with up/down direction;
-> **`/batches`** groups runs by batch and shows average scores, best/worst page, and pass/fail
-> counts against client-configurable thresholds. The only shared seam change: `HistoryRow` now
-> carries parsed median `metrics` and a new `listBatches()` exposes batch metadata; all
-> comparison/summary math is in pure, unit-tested helpers (`src/lib/compare/`,
-> `src/lib/batch-summary/`). **Verified for real:** audited one local URL twice with a degrading
-> change between (clean → broken A11y/SEO markup); `/compare` showed the Accessibility line
-> plunging **89 → 13** with the diff reading A11y −76 / SEO −16 (regressed) and Best Practices
-> +8 (improved), and `/batches` tallied the degraded batch as A11y **0/1** · SEO **0/1** · Perf
-> **1/1** at threshold 90 — confirmed via the shipped helpers on the real DB rows **and** a
-> headless-browser screenshot of the hydrated UI. Lint, typecheck, build, and **209 unit tests**
-> all green (Phase-6 added 42 compare/batch-summary helper tests + 5 persistence-seam tests).
-> Phases 1–5 (engine, median-of-N, forked-process queue, API/SSE, live Audit UI, SQLite
-> persistence + History, crawl/sitemap discovery) remain complete underneath. Next up:
-> **Phase 7 — Polish & docs**.
+> **Status:** Phase 7 complete — **the build is feature-complete.** The final polish landed:
+> **export** (History exports its filtered rows and each Batch exports its runs as JSON/CSV +
+> bulk-opens their HTML reports, via pure unit-tested serializers in `src/lib/export/`);
+> **settings persistence** (default device / runs / concurrency / categories + per-category pass
+> thresholds remembered in `localStorage` through an SSR-safe `useSyncExternalStore` store,
+> `src/hooks/useAuditDefaults.ts` + `src/lib/settings/`); **graceful failure handling** (a pure
+> classifier, `src/lib/lighthouse/diagnose.ts`, turns Chrome-launch / DNS / unreachable / timeout
+> / Lighthouse `runtimeError` failures into plain-English messages, `runAudit` fails fast on a
+> hung load via `maxWaitForLoad` and never returns bogus scores for a page that didn't render);
+> **loading / error / 404 states** (App-Router `loading.tsx` skeletons + `error.tsx` /
+> `global-error.tsx` / `not-found.tsx`); and a full **`README.md`**. **Verified for real** with a
+> live end-to-end pass — crawl `localhost` → batch-audit the 4 discovered pages (4/4 done,
+> concurrency capped) → 35 persisted History rows → Compare/Batches hydrate in headless Chrome
+> with **zero console errors** → the shipped serializers produced a valid 35-record JSON + 36-line
+> CSV from the real rows → two unreachable hosts failed with friendly classified messages. Lint,
+> typecheck, build, and **244 unit tests** all green (Phase 7 added 20 settings/export +
+> 15 engine-diagnose tests). Phases 1–6 (engine, median-of-N, forked-process queue, API/SSE, live
+> Audit UI, SQLite persistence + History, crawl/sitemap discovery, comparison & trends) remain
+> complete underneath. **All seven phases of §6 are done.**
 
 ## 1. Overview
 
@@ -318,12 +319,64 @@ Results are durably persisted to SQLite + disk, so nothing is lost on restart.
 > count as *fail* in the batch pass/fail tally (an errored page hasn't met the bar).
 
 ### Phase 7 — Polish & docs
-- [ ] Export: download batch results as JSON/CSV; bulk-open reports
-- [ ] Settings persistence (default device, runs, concurrency, score thresholds)
-- [ ] Graceful handling: unreachable URLs, redirects, timeouts, Chrome launch failures
-- [ ] Empty/loading/error states; keyboard & a11y polish
-- [ ] `README.md`: setup, run, how scores are computed, accuracy notes
-- **Verify**: full end-to-end pass — crawl → batch audit → history → compare → export.
+- [x] Export: download batch results as JSON/CSV; bulk-open reports
+- [x] Settings persistence (default device, runs, concurrency, score thresholds)
+- [x] Graceful handling: unreachable URLs, redirects, timeouts, Chrome launch failures
+- [x] Empty/loading/error states; keyboard & a11y polish
+- [x] `README.md`: setup, run, how scores are computed, accuracy notes
+- [x] **Verify**: full end-to-end pass — drove it live against the dev server.
+      **Crawl** `POST /api/discover` (`http://localhost:3000`, depth 1) → exactly
+      `/`, `/history`, `/compare`, `/batches`. **Batch audit** those 4 via
+      `POST /api/audits` (desktop, concurrency 2) → **4/4 done, 0 errors**,
+      concurrency capped at 2 throughout (~97 perf / 100 a11y / 100 seo).
+      **History** `/api/history` returned 35 persisted rows (scores + parsed
+      median CWVs + on-disk reports). **Compare/Batches** SSR + hydrated in
+      headless Chrome with **zero console errors** and the Run-Diff / Score-Trend
+      / Pass-thresholds / export controls live in the DOM. **Export**: the shipped
+      `rowsToJson`/`rowsToCsv` serializers run over the *real* 35 rows produced a
+      valid 35-record JSON array and a 36-line CSV (header + 35); the
+      "Export JSON/CSV" + "Open all reports" buttons render with proper
+      `aria-label`s. **Graceful errors**: a batch of two unreachable hosts
+      (`*.invalid`, `localhost:9`) finished `completed_with_errors` (2/2 error)
+      with friendly classified messages, not stack traces. Lint, typecheck, build,
+      and **244 unit tests** all green (Phase 7 added 20 settings/export +
+      15 engine-diagnose tests).
+
+> **Phase 7 design notes.** (1) **Settings persistence is a tiny client store, not
+> a server concern.** A single shared module-level store behind
+> `useAuditDefaults` (`src/hooks/useAuditDefaults.ts`) backs {@link AuditDefaults}
+> (default device / runs / concurrency / categories + per-category pass
+> thresholds) with `localStorage`, exposed via `useSyncExternalStore` so the read
+> is SSR-safe by construction — `getServerSnapshot` returns the factory defaults
+> (matching hydration) and the persisted blob is read only once subscribed, with a
+> `loaded` flag for the false→true transition. The pure shape + a never-throwing
+> `normalizeDefaults` (every field clamped/whitelisted to the engine's own bounds)
+> live in `src/lib/settings/defaults.ts` (unit-tested); `update(partial)` merges +
+> re-validates so the New Audit form and the Batch-Summary thresholds each write
+> their own slice without clobbering the rest. (2) **Export = pure serializers +
+> a thin DOM layer.** `src/lib/export/exporters.ts` (`rowsToJson`/`rowsToCsv`,
+> unit-tested, RFC-4180 CSV escaping) projects `HistoryRow`s into a flat per-run
+> record (URLs, device, status, the 4 scores, the 6 CWVs, timing/version,
+> error message — no heavy LHR); `src/lib/export/download.ts` (browser-only) does
+> the Blob download + `openUrlsInNewTabs` for bulk-open. History exports the
+> *currently-visible* (filtered+sorted) rows; each Batch card exports its own runs
+> and opens all of its stored HTML reports, with a popup-blocker toast fallback.
+> (3) **Graceful handling lives in a pure classifier.** `src/lib/lighthouse/diagnose.ts`
+> (`runtimeErrorMessage(lhr)` + `classifyAuditError(err, url)`, unit-tested) maps
+> Chrome-launch failures, DNS/unreachable, timeouts, and Lighthouse `runtimeError`
+> codes (e.g. `FAILED_DOCUMENT_REQUEST`, `NO_FCP`) to plain-English messages.
+> `runAudit` now throws on a non-null `lhr.runtimeError` (a page that "loaded" but
+> never rendered is an error, not bogus scores), re-throws via the classifier, and
+> bounds navigation with `maxWaitForLoad` so a hung load fails fast instead of
+> waiting the 5-min worker ceiling — the existing always-runs teardown `finally`
+> is untouched, and the friendly message survives the worker IPC path to the UI.
+> (4) **Loading/error/404 surfaces are App-Router special files.** Route-level
+> `loading.tsx` skeletons (root + history/compare/batches) mirror each page's
+> layout so content doesn't jump; `error.tsx` / `global-error.tsx` are on-brand
+> client boundaries with a "Try again" `reset()`; `not-found.tsx` links home. All
+> use `role="status"`/`aria-busy` + `sr-only` "Loading…" and visible focus rings.
+> (5) **README** documents setup/run, the median-of-N + isolated-Chrome scoring
+> model, the colour bands, and the variance/concurrency accuracy notes.
 
 ---
 

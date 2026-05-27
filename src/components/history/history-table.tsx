@@ -9,7 +9,9 @@ import {
   ExternalLink,
   FileJson,
   Search,
+  Sheet,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,6 +33,13 @@ import {
 } from "@/components/ui/tooltip";
 import { reportHtmlUrl, reportJsonUrl } from "@/lib/client/auditClient";
 import type { HistoryRow } from "@/lib/db/persistence";
+import {
+  downloadCsv,
+  downloadJson,
+  openUrlsInNewTabs,
+  timestampSlug,
+} from "@/lib/export/download";
+import { rowsToCsv, rowsToJson } from "@/lib/export/exporters";
 import type { LighthouseCategory } from "@/lib/lighthouse/types";
 import { CATEGORY_SHORT_LABELS, formatScore, scoreColorClass } from "@/lib/scores";
 import { cn } from "@/lib/utils";
@@ -292,29 +301,125 @@ export function HistoryTable({ rows }: HistoryTableProps) {
 
   const isFiltering = query.trim().length > 0;
 
+  // HTML reports for the visible rows that actually have one — for bulk-open.
+  const openableHrefs = useMemo(
+    () =>
+      visible
+        .filter((row) => row.status !== "error" && row.hasHtmlReport)
+        .map((row) => reportHtmlUrl(row.id)),
+    [visible],
+  );
+
+  const hasRows = visible.length > 0;
+  const openableCount = openableHrefs.length;
+
+  // Serialize in the handler (not on render) — exports the currently visible set.
+  const exportJson = useCallback(() => {
+    downloadJson(`lighthouse-history-${timestampSlug()}.json`, rowsToJson(visible));
+  }, [visible]);
+
+  const exportCsv = useCallback(() => {
+    downloadCsv(`lighthouse-history-${timestampSlug()}.csv`, rowsToCsv(visible));
+  }, [visible]);
+
+  const openAll = useCallback(() => {
+    const opened = openUrlsInNewTabs(openableHrefs);
+    if (opened < openableHrefs.length) {
+      toast.warning("Some reports didn't open", {
+        description: `Opened ${opened} of ${openableHrefs.length} — your browser's popup blocker may have stopped the rest.`,
+      });
+    }
+  }, [openableHrefs]);
+
   return (
     <TooltipProvider delayDuration={150}>
       <div className="flex flex-col gap-4">
-        <div className="flex flex-col gap-2 sm:max-w-xs">
-          <label
-            htmlFor={filterId}
-            className={cn(HEAD_LABEL, "text-muted-foreground")}
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div className="flex flex-col gap-2 sm:max-w-xs sm:flex-1">
+            <label
+              htmlFor={filterId}
+              className={cn(HEAD_LABEL, "text-muted-foreground")}
+            >
+              Filter by URL
+            </label>
+            <div className="relative">
+              <Search
+                aria-hidden
+                className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+              />
+              <Input
+                id={filterId}
+                type="search"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="example.com"
+                className="pl-8 font-mono text-xs"
+              />
+            </div>
+          </div>
+
+          {/* Export / bulk-open the currently visible (filtered + sorted) rows. */}
+          <div
+            className="flex items-center gap-1"
+            role="group"
+            aria-label="Export and open visible runs"
           >
-            Filter by URL
-          </label>
-          <div className="relative">
-            <Search
-              aria-hidden
-              className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
-            />
-            <Input
-              id={filterId}
-              type="search"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="example.com"
-              className="pl-8 font-mono text-xs"
-            />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={exportJson}
+                  disabled={!hasRows}
+                  aria-label="Export visible runs as JSON"
+                >
+                  <FileJson data-icon="inline-start" />
+                  JSON
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent className="font-mono">
+                Export {visible.length} run{visible.length === 1 ? "" : "s"} · JSON
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={exportCsv}
+                  disabled={!hasRows}
+                  aria-label="Export visible runs as CSV"
+                >
+                  <Sheet data-icon="inline-start" />
+                  CSV
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent className="font-mono">
+                Export {visible.length} run{visible.length === 1 ? "" : "s"} · CSV
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={openAll}
+                  disabled={openableCount === 0}
+                  aria-label={`Open all ${openableCount} visible reports`}
+                >
+                  <ExternalLink data-icon="inline-start" />
+                  Open all
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {openableCount === 0
+                  ? "No reports to open"
+                  : `Open all ${openableCount} report${openableCount === 1 ? "" : "s"}`}
+              </TooltipContent>
+            </Tooltip>
           </div>
         </div>
 

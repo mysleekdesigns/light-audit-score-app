@@ -5,16 +5,27 @@
  *
  * Renders one card per persisted batch (newest-first) with: average score per
  * category, best/worst page by overall score, and pass/fail counts against
- * **user-configurable per-category thresholds**. Thresholds live in component
- * state (in-memory; persisting them is Phase 7) and all summaries are derived
- * with `useMemo` from the runs handed down by the server page.
+ * **user-configurable per-category thresholds**. Thresholds are persisted via
+ * {@link useAuditDefaults} (shared with the New Audit form) and all summaries
+ * are derived with `useMemo` from the runs handed down by the server page. Each
+ * card can also export its own runs (JSON/CSV) and bulk-open their reports.
  */
 
-import { useId, useMemo, useState } from "react";
-import { CheckCircle2, Clock, Loader2, TriangleAlert } from "lucide-react";
+import { useCallback, useId, useMemo } from "react";
+import {
+  CheckCircle2,
+  Clock,
+  ExternalLink,
+  FileJson,
+  Loader2,
+  Sheet,
+  TriangleAlert,
+} from "lucide-react";
+import { toast } from "sonner";
 
 import { ScoreRing } from "@/components/audit/score-ring";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -29,16 +40,21 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useAuditDefaults } from "@/hooks/useAuditDefaults";
 import { reportHtmlUrl } from "@/lib/client/auditClient";
 import type { BatchInfo, HistoryRow } from "@/lib/db/persistence";
 import {
-  LIGHTHOUSE_CATEGORIES,
-  type LighthouseCategory,
-} from "@/lib/lighthouse/types";
+  downloadCsv,
+  downloadJson,
+  openUrlsInNewTabs,
+  timestampSlug,
+} from "@/lib/export/download";
+import { rowsToCsv, rowsToJson } from "@/lib/export/exporters";
+import { LIGHTHOUSE_CATEGORIES } from "@/lib/lighthouse/types";
+import type { CategoryThresholds } from "@/lib/settings/defaults";
 import {
   CATEGORY_SHORT_LABELS,
   formatScore,
-  GOOD_THRESHOLD,
   scoreColorClass,
 } from "@/lib/scores";
 import { cn } from "@/lib/utils";
@@ -54,16 +70,6 @@ import {
 /** Mono uppercase tracked section label — the house "telemetry" label style. */
 const SECTION_LABEL =
   "font-mono text-[0.625rem] uppercase tracking-[0.18em] text-muted-foreground";
-
-type Thresholds = Record<LighthouseCategory, number>;
-
-/** Every category defaults to the "good" bar (90). */
-const DEFAULT_THRESHOLDS: Thresholds = {
-  performance: GOOD_THRESHOLD,
-  accessibility: GOOD_THRESHOLD,
-  "best-practices": GOOD_THRESHOLD,
-  seo: GOOD_THRESHOLD,
-};
 
 /** Lifecycle label + Badge variant + leading icon for each batch status. */
 const STATUS_META: Record<
@@ -115,7 +121,19 @@ interface BatchSummaryConsoleProps {
 }
 
 export function BatchSummaryConsole({ batches, runs }: BatchSummaryConsoleProps) {
-  const [thresholds, setThresholds] = useState<Thresholds>(DEFAULT_THRESHOLDS);
+  // Thresholds are persisted in the shared audit-defaults store. Until the
+  // persisted blob has loaded we render the factory defaults but must NOT write
+  // them back — that would clobber a user's saved values on first render.
+  const { defaults, update, loaded } = useAuditDefaults();
+  const thresholds = defaults.thresholds;
+
+  const setThresholds = useCallback(
+    (next: CategoryThresholds) => {
+      if (!loaded) return;
+      update({ thresholds: next });
+    },
+    [loaded, update],
+  );
 
   // Group once; each batch card slices its own runs out of the map.
   const runsByBatch = useMemo(() => groupRunsByBatch(runs), [runs]);
@@ -142,8 +160,8 @@ export function BatchSummaryConsole({ batches, runs }: BatchSummaryConsoleProps)
 }
 
 interface ThresholdControlsProps {
-  thresholds: Thresholds;
-  onChange: (next: Thresholds) => void;
+  thresholds: CategoryThresholds;
+  onChange: (next: CategoryThresholds) => void;
 }
 
 /** The configurable per-category pass-threshold row (defaults to 90 / GOOD_THRESHOLD). */
@@ -199,7 +217,7 @@ function ThresholdControls({ thresholds, onChange }: ThresholdControlsProps) {
 interface BatchCardProps {
   batch: BatchInfo;
   rows: HistoryRow[];
-  thresholds: Thresholds;
+  thresholds: CategoryThresholds;
 }
 
 function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
@@ -244,9 +262,12 @@ function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
               {status.label}
             </Badge>
           </div>
-          <span className="font-mono text-xs text-muted-foreground tabular-nums">
-            {formatBatchAt(batch.createdAt)}
-          </span>
+          <div className="flex items-center gap-3">
+            <BatchActions rows={rows} shortId={shortId} />
+            <span className="font-mono text-xs text-muted-foreground tabular-nums">
+              {formatBatchAt(batch.createdAt)}
+            </span>
+          </div>
         </div>
 
         {/* Telemetry strip: device · runs · pages · done/error tallies. */}
@@ -330,6 +351,111 @@ function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
   );
 }
 
+interface BatchActionsProps {
+  rows: HistoryRow[];
+  shortId: string;
+}
+
+/**
+ * Per-batch export + bulk-open toolbar. Serializes this batch's runs to a file
+ * (in the click handler, never on render) and opens every run that has a stored
+ * HTML report in a new tab — warning via toast if the popup blocker stopped any.
+ */
+function BatchActions({ rows, shortId }: BatchActionsProps) {
+  // Runs in this batch that actually have an HTML report to open.
+  const openableHrefs = useMemo(
+    () =>
+      rows
+        .filter((row) => row.status !== "error" && row.hasHtmlReport)
+        .map((row) => reportHtmlUrl(row.id)),
+    [rows],
+  );
+  const hasRows = rows.length > 0;
+  const openableCount = openableHrefs.length;
+
+  const baseName = `lighthouse-batch-${shortId}-${timestampSlug()}`;
+
+  const exportJson = useCallback(() => {
+    downloadJson(
+      `lighthouse-batch-${shortId}-${timestampSlug()}.json`,
+      rowsToJson(rows),
+    );
+  }, [rows, shortId]);
+
+  const exportCsv = useCallback(() => {
+    downloadCsv(
+      `lighthouse-batch-${shortId}-${timestampSlug()}.csv`,
+      rowsToCsv(rows),
+    );
+  }, [rows, shortId]);
+
+  const openAll = useCallback(() => {
+    const opened = openUrlsInNewTabs(openableHrefs);
+    if (opened < openableHrefs.length) {
+      toast.warning("Some reports didn't open", {
+        description: `Opened ${opened} of ${openableHrefs.length} — your browser's popup blocker may have stopped the rest.`,
+      });
+    }
+  }, [openableHrefs]);
+
+  return (
+    <div className="flex items-center gap-1">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={exportJson}
+            disabled={!hasRows}
+            aria-label={`Export batch ${shortId} as JSON`}
+          >
+            <FileJson data-icon="inline-start" />
+            JSON
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent className="font-mono">{baseName}.json</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={exportCsv}
+            disabled={!hasRows}
+            aria-label={`Export batch ${shortId} as CSV`}
+          >
+            <Sheet data-icon="inline-start" />
+            CSV
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent className="font-mono">{baseName}.csv</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={openAll}
+            disabled={openableCount === 0}
+            aria-label={`Open all ${openableCount} reports in this batch`}
+          >
+            <ExternalLink data-icon="inline-start" />
+            Open all
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>
+          {openableCount === 0
+            ? "No reports to open"
+            : `Open all ${openableCount} report${openableCount === 1 ? "" : "s"}`}
+        </TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
 interface PageHighlightProps {
   label: string;
   row: HistoryRow | null;
@@ -381,7 +507,7 @@ function PageHighlight({ label, row, accent }: PageHighlightProps) {
 
 interface PassFailGridProps {
   passFail: PassFailByCategory;
-  thresholds: Thresholds;
+  thresholds: CategoryThresholds;
 }
 
 /** Per-category "N/total passing" against the configured threshold. */

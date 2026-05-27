@@ -20,6 +20,7 @@ import lighthouse, {
   type LighthouseFlags,
 } from "lighthouse";
 
+import { classifyAuditError, runtimeErrorMessage } from "@/lib/lighthouse/diagnose";
 import {
   type CategoryScores,
   type CoreWebVitals,
@@ -38,6 +39,13 @@ import {
 
 /** Max opportunities surfaced per run (sorted by estimated savings desc). */
 const MAX_OPPORTUNITIES = 15;
+
+/**
+ * Per-navigation load ceiling handed to Lighthouse. Bounds a single run so a
+ * hung navigation fails fast (and is then classified by `classifyAuditError`)
+ * instead of stalling until the 5-minute worker ceiling (`WORKER_TIMEOUT_MS`).
+ */
+const MAX_WAIT_FOR_LOAD_MS = 45_000;
 
 /** Map our user-facing throttling choice to Lighthouse's `throttlingMethod`. */
 function toThrottlingMethod(
@@ -194,35 +202,54 @@ export const runSingleAudit: RunSingleAudit = async (url, options) => {
   let chrome: LaunchedChrome | undefined;
 
   try {
-    chrome = await launch({
-      userDataDir,
-      chromeFlags: ["--headless=new", `--user-data-dir=${userDataDir}`],
-    });
+    // Inner try/catch maps any launch/Lighthouse/network throw onto a friendly,
+    // user-facing message via `classifyAuditError`. It NEVER swallows: every
+    // path re-throws. Teardown stays in the outer `finally` so it always runs.
+    try {
+      chrome = await launch({
+        userDataDir,
+        chromeFlags: ["--headless=new", `--user-data-dir=${userDataDir}`],
+      });
 
-    const flags: LighthouseFlags = {
-      logLevel: "error",
-      output: ["json", "html"],
-      port: chrome.port,
-      onlyCategories: options.categories,
-      formFactor: options.formFactor,
-      throttlingMethod: toThrottlingMethod(options.throttling),
-    };
+      const flags: LighthouseFlags = {
+        logLevel: "error",
+        output: ["json", "html"],
+        port: chrome.port,
+        onlyCategories: options.categories,
+        formFactor: options.formFactor,
+        throttlingMethod: toThrottlingMethod(options.throttling),
+        // Bound a single navigation so a hung page fails fast (and is then
+        // classified) rather than stalling until the worker timeout.
+        maxWaitForLoad: MAX_WAIT_FOR_LOAD_MS,
+      };
 
-    // Desktop uses Lighthouse's `desktopConfig` (sets desktop screenEmulation /
-    // formFactor); mobile uses the default config (undefined). The
-    // throttlingMethod flag is honoured in either case.
-    const config: Record<string, unknown> | undefined =
-      options.formFactor === "desktop" ? desktopConfig : undefined;
+      // Desktop uses Lighthouse's `desktopConfig` (sets desktop screenEmulation /
+      // formFactor); mobile uses the default config (undefined). The
+      // throttlingMethod flag is honoured in either case.
+      const config: Record<string, unknown> | undefined =
+        options.formFactor === "desktop" ? desktopConfig : undefined;
 
-    const result = await lighthouse(url, flags, config);
-    if (!result) {
-      throw new Error(
-        `Lighthouse returned no result for ${url} (formFactor=${options.formFactor}).`,
-      );
+      const result = await lighthouse(url, flags, config);
+      if (!result) {
+        throw new Error(
+          `Lighthouse returned no result for ${url} (formFactor=${options.formFactor}).`,
+        );
+      }
+
+      const lhr = result.lhr as LighthouseResult;
+
+      // Lighthouse often returns an LHR even when navigation failed, carrying the
+      // reason in `lhr.runtimeError`. Treat that as an error (not bogus scores).
+      const runtimeError = runtimeErrorMessage(lhr);
+      if (runtimeError !== null) {
+        throw new Error(runtimeError);
+      }
+
+      return { ...parseLhr(lhr, options.formFactor), lhr };
+    } catch (error) {
+      // Re-throw a friendly, classified message (includes the url for context).
+      throw new Error(classifyAuditError(error, url));
     }
-
-    const lhr = result.lhr as LighthouseResult;
-    return { ...parseLhr(lhr, options.formFactor), lhr };
   } finally {
     // Always tear down: kill Chrome (guard if launch failed) then remove the
     // temp user-data-dir. Wrapped so a teardown error never masks a run error.

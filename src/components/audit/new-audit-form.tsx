@@ -21,6 +21,7 @@ import {
   MIN_CONCURRENCY,
 } from "@/lib/queue/types";
 import { CATEGORY_LABELS } from "@/lib/scores";
+import { useAuditDefaults } from "@/hooks/useAuditDefaults";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -76,6 +77,11 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
   const runsId = useId();
   const concurrencyId = useId();
 
+  // Persisted run defaults (device / runs / concurrency / categories). The first
+  // render must match SSR, so we keep the hardcoded initial state below and only
+  // adopt persisted values once `loaded` flips true (one-time hydration effect).
+  const { defaults, update, loaded } = useAuditDefaults();
+
   const [tab, setTab] = useState<"paste" | "crawl">("paste");
   const [text, setText] = useState("");
   // URLs the crawl panel currently has selected. The panel owns discovery; this
@@ -88,6 +94,21 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
   const [categories, setCategories] = useState<LighthouseCategory[]>([
     ...LIGHTHOUSE_CATEGORIES,
   ]);
+
+  // Seed device / runs / concurrency / categories from the persisted defaults
+  // exactly once, the render after the hook has read localStorage (`loaded`
+  // flips true). Adjusting state during render — guarded by a one-shot state
+  // flag — is React's recommended pattern for adopting an external value, and
+  // keeps the SSR/first render on the hardcoded defaults so there's no
+  // hydration mismatch. The flag ensures we never fight the user's later edits.
+  const [hydrated, setHydrated] = useState(false);
+  if (loaded && !hydrated) {
+    setHydrated(true);
+    setFormFactor(defaults.formFactor);
+    setRuns(defaults.runs);
+    setConcurrency(defaults.concurrency);
+    setCategories([...defaults.categories]);
+  }
 
   const { urls: pastedUrls, invalid } = useMemo(() => parseUrls(text), [text]);
 
@@ -106,16 +127,32 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
   }
 
   function handleDeviceChange(value: string) {
-    if (value === "mobile" || value === "desktop") setFormFactor(value);
+    if (value === "mobile" || value === "desktop") {
+      setFormFactor(value);
+      // Remember this device for the next visit.
+      update({ formFactor: value });
+    }
+  }
+
+  function handleRunsChange(value: string) {
+    const next = Number(value);
+    setRuns(next);
+    update({ runs: next });
+  }
+
+  function handleConcurrencyChange(value: string) {
+    const next = Number(value);
+    setConcurrency(next);
+    update({ concurrency: next });
   }
 
   function handleCategoriesChange(value: string[]) {
     // Never allow deselecting the last category — keep at least one selected.
     if (value.length === 0) return;
     // Preserve canonical category order regardless of toggle interaction order.
-    setCategories(
-      LIGHTHOUSE_CATEGORIES.filter((c) => value.includes(c)),
-    );
+    const next = LIGHTHOUSE_CATEGORIES.filter((c) => value.includes(c));
+    setCategories(next);
+    update({ categories: next });
   }
 
   function handleSubmit() {
@@ -234,7 +271,7 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
               <FieldLabel htmlFor={runsId}>Runs per URL</FieldLabel>
               <Select
                 value={String(runs)}
-                onValueChange={(value) => setRuns(Number(value))}
+                onValueChange={handleRunsChange}
                 disabled={isRunning}
               >
                 <SelectTrigger id={runsId} className="w-full">
@@ -259,7 +296,7 @@ export function NewAuditForm({ onSubmit, isRunning = false }: NewAuditFormProps)
               <FieldLabel htmlFor={concurrencyId}>Concurrency</FieldLabel>
               <Select
                 value={String(concurrency)}
-                onValueChange={(value) => setConcurrency(Number(value))}
+                onValueChange={handleConcurrencyChange}
                 disabled={isRunning}
               >
                 <SelectTrigger id={concurrencyId} className="w-full">

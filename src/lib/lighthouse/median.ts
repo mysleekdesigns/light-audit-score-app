@@ -62,6 +62,10 @@ function selectMedianRun(runs: SingleRunResult[]): SingleRunResult {
 export const runAudit: RunAudit = async (url, options) => {
   const runs: SingleRunResult[] = [];
   // Sequential by design — concurrent runs contend for CPU and distort timings.
+  // No partial-success: if any run throws (unreachable URL, Chrome launch
+  // failure, timeout, …) we let it propagate and fail the whole job. The error
+  // is already a friendly, classified one-liner (runSingleAudit funnels every
+  // throw through `classifyAuditError`), so it's safe to surface verbatim.
   for (let i = 0; i < options.runs; i += 1) {
     runs.push(await runSingleAudit(url, options));
   }
