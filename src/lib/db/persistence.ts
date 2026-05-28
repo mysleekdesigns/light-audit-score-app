@@ -378,6 +378,7 @@ const FALLBACK_OPTIONS: AuditOptions = {
   throttling: "simulated",
   categories: [],
   runs: 1,
+  warmCache: true,
 };
 
 /** Flatten a `runs` row into a {@link HistoryRow}. */

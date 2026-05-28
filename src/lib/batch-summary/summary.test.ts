@@ -27,6 +27,7 @@ function makeRow(overrides: Partial<HistoryRow> & { id: string }): HistoryRow {
       throttling: "simulated",
       categories: ["performance", "accessibility", "best-practices", "seo"],
       runs: 3,
+      warmCache: true,
     },
     scores: overrides.scores ?? {},
     metrics: overrides.metrics ?? null,

@@ -1,10 +1,13 @@
 /**
  * Single Lighthouse run + robust teardown (PRD §6 Phase 1).
  *
- * Each run launches a FRESH, ISOLATED Chrome instance with a unique temp
- * `--user-data-dir` (cold cache, `--headless=new`) so runs cannot contaminate
- * one another. Chrome is always killed and the temp dir always removed in a
- * `finally`, even when Lighthouse throws.
+ * Each run launches an ISOLATED `--headless=new` Chrome instance. By default it
+ * gets a FRESH, unique temp `--user-data-dir` (cold cache) which is always
+ * removed in a `finally`, even when Lighthouse throws. When the caller passes an
+ * {@link AuditSession}, the run instead REUSES that caller-owned profile dir and
+ * disables Lighthouse's storage reset, so the HTTP cache persists across runs
+ * (warm cache → DevTools-panel parity); the caller, not the run, disposes it.
+ * Use {@link createAuditSession} to mint a disposable session.
  *
  * `parseLhr` is a pure, I/O-free helper exported for unit testing: it narrows
  * the loosely-typed LHR (`Record<string, unknown>`) into our stable contract.
@@ -24,6 +27,7 @@ import lighthouse, {
 import { classifyAuditError, runtimeErrorMessage } from "@/lib/lighthouse/diagnose";
 import {
   type AuditOptions,
+  type AuditSession,
   type CategoryScores,
   type CoreWebVitals,
   type FormFactor,
@@ -261,15 +265,42 @@ export function parseLhr(
   };
 }
 
+// --- Session (warm-cache profile) ------------------------------------------
+
+/**
+ * Mint a disposable {@link AuditSession}: a persistent Chrome `--user-data-dir`
+ * to reuse across the runs of a single audit so the HTTP cache stays warm
+ * (DevTools-panel parity — see {@link AuditOptions.warmCache}). The caller MUST
+ * `dispose()` it (in a `finally`) to remove the temp profile; individual runs
+ * handed this session never delete it.
+ */
+export async function createAuditSession(): Promise<
+  AuditSession & { dispose: () => Promise<void> }
+> {
+  const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "lh-warm-"));
+  return {
+    userDataDir,
+    dispose: () => fs.rm(userDataDir, { recursive: true, force: true }),
+  };
+}
+
 // --- Single run + teardown -------------------------------------------------
 
 /**
- * Run Lighthouse once against `url` with already-validated `options`, using a
- * fresh isolated Chrome. Chrome is always killed and the temp profile always
- * removed, even on error (see the `finally` block).
+ * Run Lighthouse once against `url` with already-validated `options`.
+ *
+ * Without a `session`: uses a fresh isolated Chrome profile (cold cache) that is
+ * always removed in the `finally`, even on error. With a `session`: reuses the
+ * caller-owned profile dir and disables Lighthouse's storage reset so the cache
+ * persists across runs (warm cache); the session owner disposes the dir, not
+ * this function. Chrome is always killed either way.
  */
-export const runSingleAudit: RunSingleAudit = async (url, options) => {
-  const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "lh-"));
+export const runSingleAudit: RunSingleAudit = async (url, options, session) => {
+  // A caller-owned session means a reused, warm profile we must NOT delete; no
+  // session means a fresh, cold profile this run both creates and tears down.
+  const ownsProfile = session === undefined;
+  const userDataDir =
+    session?.userDataDir ?? (await fs.mkdtemp(path.join(os.tmpdir(), "lh-")));
   let chrome: LaunchedChrome | undefined;
 
   try {
@@ -292,6 +323,12 @@ export const runSingleAudit: RunSingleAudit = async (url, options) => {
         // that preserves the active config's network profile when a CPU
         // multiplier is set. See `buildThrottlingFlags`.
         ...buildThrottlingFlags(options),
+        // Warm cache (session present): keep the profile's HTTP cache between
+        // runs instead of Lighthouse wiping it at the start of each run. This is
+        // what makes a reused-profile run a *warm* repeat visit (DevTools-panel
+        // parity); a fresh-profile run leaves this at Lighthouse's default
+        // (storage IS reset → cold first visit).
+        ...(ownsProfile ? {} : { disableStorageReset: true }),
         // Bound a single navigation so a hung page fails fast (and is then
         // classified) rather than stalling until the worker timeout.
         maxWaitForLoad: MAX_WAIT_FOR_LOAD_MS,
@@ -325,13 +362,17 @@ export const runSingleAudit: RunSingleAudit = async (url, options) => {
       throw new Error(classifyAuditError(error, url));
     }
   } finally {
-    // Always tear down: kill Chrome (guard if launch failed) then remove the
-    // temp user-data-dir. Wrapped so a teardown error never masks a run error.
+    // Always kill Chrome (guard if launch failed). Wrapped so a teardown error
+    // never masks a run error.
     try {
       chrome?.kill();
     } catch {
       // best-effort; the process may already be gone
     }
-    await fs.rm(userDataDir, { recursive: true, force: true });
+    // Only remove the profile we created. A caller-owned (warm) session dir is
+    // reused by later runs and disposed by its owner — see `createAuditSession`.
+    if (ownsProfile) {
+      await fs.rm(userDataDir, { recursive: true, force: true });
+    }
   }
 };

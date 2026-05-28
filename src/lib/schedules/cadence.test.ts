@@ -20,6 +20,7 @@ function makeSchedule(patch: Partial<Schedule> = {}): Schedule {
       throttling: "simulated",
       categories: ["performance"],
       runs: 1,
+      warmCache: true,
     },
     concurrency: 1,
     device: "mobile",

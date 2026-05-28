@@ -13,12 +13,13 @@ import {
 } from "@/lib/lighthouse/types";
 
 describe("DEFAULT_OPTIONS", () => {
-  it("is mobile / simulated / all categories / 3 runs", () => {
+  it("is mobile / simulated / all categories / 3 runs / warm cache", () => {
     expect(DEFAULT_OPTIONS).toEqual({
       formFactor: "mobile",
       throttling: "simulated",
       categories: [...LIGHTHOUSE_CATEGORIES],
       runs: 3,
+      warmCache: true,
     });
   });
 });
@@ -43,6 +44,7 @@ describe("resolveAuditOptions", () => {
       throttling: "simulated",
       categories: [...LIGHTHOUSE_CATEGORIES],
       runs: 5,
+      warmCache: true,
     });
   });
 
@@ -52,12 +54,14 @@ describe("resolveAuditOptions", () => {
       throttling: "applied",
       categories: ["performance", "seo"],
       runs: 1,
+      warmCache: false,
     });
     expect(result).toEqual({
       formFactor: "desktop",
       throttling: "applied",
       categories: ["performance", "seo"],
       runs: 1,
+      warmCache: false,
     });
   });
 

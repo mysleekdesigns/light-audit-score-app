@@ -680,6 +680,8 @@ export function NewAuditForm({
           categories,
           runs,
           cpuSlowdownMultiplier,
+          // Warm cache on by default (DevTools-panel parity); see AuditOptions.warmCache.
+          warmCache: true,
         }}
         concurrency={concurrency}
         device={device}

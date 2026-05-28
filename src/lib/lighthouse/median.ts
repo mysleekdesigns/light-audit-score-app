@@ -8,7 +8,11 @@
 
 import { computeMedianRun } from "lighthouse/core/lib/median-run.js";
 
-import { parseLhr, runSingleAudit } from "@/lib/lighthouse/runAudit";
+import {
+  createAuditSession,
+  parseLhr,
+  runSingleAudit,
+} from "@/lib/lighthouse/runAudit";
 import {
   type AuditResult,
   type CategoryScores,
@@ -67,8 +71,27 @@ export const runAudit: RunAudit = async (url, options) => {
   // failure, timeout, …) we let it propagate and fail the whole job. The error
   // is already a friendly, classified one-liner (runSingleAudit funnels every
   // throw through `classifyAuditError`), so it's safe to surface verbatim.
-  for (let i = 0; i < options.runs; i += 1) {
-    runs.push(await runSingleAudit(url, options));
+  if (options.warmCache === true) {
+    // Warm-cache mode (DevTools-panel parity): reuse ONE Chrome profile across
+    // all runs. A first navigation is always a cold miss, so we throw away an
+    // explicit warm-up run, then take the `options.runs` measured runs against
+    // the now-warm cache. This makes even a single-run audit reproducible at
+    // the warm/repeat-visit number instead of a cold-load roll of the dice.
+    // See AuditOptions.warmCache.
+    const session = await createAuditSession();
+    try {
+      await runSingleAudit(url, options, session); // warm-up; result discarded
+      for (let i = 0; i < options.runs; i += 1) {
+        runs.push(await runSingleAudit(url, options, session));
+      }
+    } finally {
+      await session.dispose();
+    }
+  } else {
+    // Cold first-visit mode: each run gets its own fresh, self-disposed profile.
+    for (let i = 0; i < options.runs; i += 1) {
+      runs.push(await runSingleAudit(url, options));
+    }
   }
 
   const perRunScores: CategoryScores[] = runs.map((run) => run.scores);

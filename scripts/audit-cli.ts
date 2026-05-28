@@ -9,6 +9,7 @@
  *   --throttling=simulated|applied
  *   --cpu=N                  CPU slowdown multiplier (1–20; omit = Lighthouse 4×)
  *   --categories=performance,accessibility,best-practices,seo
+ *   --no-warm-cache          cold first-visit (default is warm = DevTools parity)
  *   --json                   print the raw AuditResult JSON instead of a summary
  *
  * Exercises the real engine end-to-end (isolated Chrome → lighthouse() →
@@ -68,6 +69,15 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (typeof cpu === "string") {
     optionInput.cpuSlowdownMultiplier = Number(cpu);
   }
+  // Warm cache is on by default (DevTools-panel parity). Allow opting back into
+  // a strict cold first-visit: `--no-warm-cache`, `--cold`, or `--warm-cache=false`.
+  if (
+    raw["no-warm-cache"] === true ||
+    raw["cold"] === true ||
+    raw["warm-cache"] === "false"
+  ) {
+    optionInput.warmCache = false;
+  }
   if (typeof raw["categories"] === "string") {
     optionInput.categories = raw["categories"]
       .split(",")
@@ -117,7 +127,8 @@ function printSummary(result: AuditResult): void {
   console.log(`\x1b[1m${result.finalUrl || result.requestedUrl}\x1b[0m`);
   console.log(
     `  Lighthouse ${result.lighthouseVersion} · ${result.options.formFactor} · ` +
-      `${result.options.throttling} throttling · median of ${result.runs} run(s)`,
+      `${result.options.throttling} throttling · median of ${result.runs} run(s) · ` +
+      `${result.options.warmCache ? "warm cache (DevTools parity)" : "cold cache"}`,
   );
   console.log(`  Scores   ${formatScoresLine(result.median.scores)}`);
   console.log(`  Per-run scores:\n    ${formatPerRunSpread(result.perRunScores)}`);

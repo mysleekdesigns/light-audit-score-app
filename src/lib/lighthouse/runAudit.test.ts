@@ -138,6 +138,7 @@ function baseOptions(overrides: Partial<AuditOptions> = {}): AuditOptions {
     throttling: "simulated",
     categories: ["performance"],
     runs: 1,
+    warmCache: true,
     ...overrides,
   };
 }

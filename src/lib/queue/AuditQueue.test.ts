@@ -51,6 +51,7 @@ const OPTIONS: CreateBatchInput["options"] = {
   throttling: "simulated",
   categories: ["performance"],
   runs: 1,
+  warmCache: true,
 };
 
 /**

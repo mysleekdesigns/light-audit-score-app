@@ -38,6 +38,7 @@ const OPTIONS: AuditOptions = {
   throttling: "simulated",
   categories: ["performance", "accessibility", "best-practices", "seo"],
   runs: 3,
+  warmCache: true,
 };
 
 function makeBatch(id: string, jobs: AuditJob[]): Batch {

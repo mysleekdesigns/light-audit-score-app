@@ -73,6 +73,7 @@ describe("parseCreateBatchBody — valid bodies", () => {
       throttling: "simulated",
       categories: [...LIGHTHOUSE_CATEGORIES],
       runs: 3,
+      warmCache: true,
     });
   });
 

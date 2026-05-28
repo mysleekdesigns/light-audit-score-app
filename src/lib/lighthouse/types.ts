@@ -66,6 +66,32 @@ export interface AuditOptions {
    * (`benchmarkIndex`) — see PRD §3 host-parity finding.
    */
   cpuSlowdownMultiplier?: number;
+  /**
+   * Warm-cache mode — the lever that makes our scores match the Chrome DevTools
+   * Lighthouse panel (default `true`). Each fresh-profile Lighthouse run is a
+   * *cold* first visit: every asset is re-downloaded and re-parsed, which on
+   * heavy JS/SPA pages delays paint and (under `simulated`/Lantern throttling)
+   * inflates LCP — the standard CLI/PSI result, but far below the warm number a
+   * developer sees when running the DevTools panel against a page they already
+   * have cached. When `true`, `median.ts` runs one **discarded warm-up
+   * navigation** to populate a *reused* Chrome profile, then takes the measured
+   * runs against that warm profile with Lighthouse's storage reset disabled
+   * (`disableStorageReset`) so the cache survives — i.e. repeat-visit
+   * performance, matching the panel. Set `false` for the strict cold first-visit
+   * measurement (Lighthouse/PageSpeed-Insights default).
+   */
+  warmCache: boolean;
+}
+
+/**
+ * A caller-owned Chrome profile reused across the runs of a single audit to
+ * enable {@link AuditOptions.warmCache}. Created by `createAuditSession` and
+ * handed to {@link RunSingleAudit}; the *creator* owns its lifecycle (disposal),
+ * so a run handed a session never deletes the profile dir.
+ */
+export interface AuditSession {
+  /** Persistent `--user-data-dir` shared across this audit's runs (warm cache). */
+  userDataDir: string;
 }
 
 /** Category id → 0–100 score (Lighthouse reports 0–1; we normalise to 0–100), or null if unscored. */
@@ -193,10 +219,16 @@ export interface AuditResult {
   environment: RunEnvironment;
 }
 
-/** Signature: run Lighthouse once against a URL with already-validated options. */
+/**
+ * Signature: run Lighthouse once against a URL with already-validated options.
+ * An optional {@link AuditSession} makes the run reuse a caller-owned Chrome
+ * profile with storage reset disabled (warm cache); without it the run uses a
+ * fresh, self-disposed profile (cold cache). See {@link AuditOptions.warmCache}.
+ */
 export type RunSingleAudit = (
   url: string,
   options: AuditOptions,
+  session?: AuditSession,
 ) => Promise<SingleRunResult>;
 
 /** Signature: run N times and return the median (options must be pre-validated). */

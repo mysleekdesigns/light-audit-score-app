@@ -57,6 +57,10 @@ export const auditOptionsSchema = z.object({
     .number("cpuSlowdownMultiplier must be a number.")
     .transform((n) => clampCpuMultiplier(n))
     .optional(),
+  // Warm-cache mode (default true) — reuse a Chrome profile + a discarded
+  // warm-up navigation so scores match the DevTools Lighthouse panel (warm /
+  // repeat-visit) instead of a cold first visit. See AuditOptions.warmCache.
+  warmCache: z.boolean().default(true),
 });
 
 /**
