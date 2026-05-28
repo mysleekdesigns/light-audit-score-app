@@ -94,6 +94,14 @@ export function AuditConsole() {
   const selectedJob: AuditJob | null =
     (selectedId && batch?.jobs.find((j) => j.id === selectedId)) || null;
 
+  // The selected job's device pair: every job in the batch sharing its URL (1 for
+  // a single-device batch, up to 2 — mobile + desktop — for a "both" batch). The
+  // sheet uses this to offer a device flip; `selectedJob` is the one clicked.
+  const selectedPair = useMemo<AuditJob[]>(() => {
+    if (!selectedJob || !batch) return [];
+    return batch.jobs.filter((j) => j.url === selectedJob.url);
+  }, [selectedJob, batch]);
+
   function handleSelect(job: AuditJob) {
     setSelectedId(job.id);
     setSheetOpen(true);
@@ -118,6 +126,7 @@ export function AuditConsole() {
 
       <AuditDetailSheet
         job={selectedJob}
+        jobs={selectedPair}
         open={sheetOpen}
         onOpenChange={setSheetOpen}
       />

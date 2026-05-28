@@ -245,7 +245,11 @@ export function recordFailedRun(batch: Batch, job: AuditJob): void {
         finalUrl: null,
         status: "error",
         errorMessage: job.error?.message ?? "Unknown error",
-        formFactor: batch.options.formFactor,
+        // The per-job device (PRD §6 Phase 12): for a `"both"` batch each URL
+        // fanned out into a mobile + a desktop job, so a failed job must record
+        // ITS form factor, not the batch's representative `options.formFactor`.
+        // Throttling stays batch-wide (not a per-device override).
+        formFactor: job.device,
         throttling: batch.options.throttling,
         runs: null,
         lighthouseVersion: null,

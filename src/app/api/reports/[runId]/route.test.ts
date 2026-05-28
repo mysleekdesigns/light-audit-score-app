@@ -34,6 +34,7 @@ function makeBatch(id: string, jobs: AuditJob[]): Batch {
   return {
     id,
     status: "queued",
+    device: OPTIONS.formFactor,
     options: OPTIONS,
     concurrency: 3,
     jobs,
@@ -43,7 +44,14 @@ function makeBatch(id: string, jobs: AuditJob[]): Batch {
 }
 
 function makeJob(id: string, index: number, url: string): AuditJob {
-  return { id, index, url, status: "queued", queuedAt: new Date().toISOString() };
+  return {
+    id,
+    index,
+    url,
+    device: OPTIONS.formFactor,
+    status: "queued",
+    queuedAt: new Date().toISOString(),
+  };
 }
 
 function makeResult(url: string): AuditResult {

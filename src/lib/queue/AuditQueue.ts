@@ -38,6 +38,7 @@ import {
   recordRun,
   updateBatchStatus,
 } from "@/lib/db/persistence";
+import { resolveFormFactors } from "@/lib/lighthouse/options";
 import type { AuditResult } from "@/lib/lighthouse/types";
 import { runAuditInWorker } from "@/lib/queue/runAuditWorker";
 import {
@@ -168,18 +169,38 @@ export class AuditQueue implements AuditQueueApi {
     const createdAt = now();
     const batchId = nanoid();
 
-    const jobs: AuditJob[] = input.urls.map((url, index) => ({
-      id: nanoid(),
-      index,
-      url,
-      status: "queued",
-      queuedAt: createdAt,
-    }));
+    // Fan a `"both"` device selection out into per-(url, form-factor) jobs (PRD
+    // §6 Phase 12). `"both"` is purely a batch-creation concern — the engine and
+    // worker stay single-form-factor and never see it. Each URL yields one job
+    // per resolved form factor (mobile then desktop for `"both"`); a single
+    // device yields one job per URL exactly as before. `index` is the global
+    // flattened position across the whole fanned-out list so ordering stays
+    // stable regardless of how many form factors each URL expanded into.
+    const formFactors = resolveFormFactors(input.device);
+    const jobs: AuditJob[] = [];
+    let index = 0;
+    for (const url of input.urls) {
+      for (const formFactor of formFactors) {
+        jobs.push({
+          id: nanoid(),
+          index: index++,
+          url,
+          device: formFactor,
+          status: "queued",
+          queuedAt: createdAt,
+        });
+      }
+    }
 
     const batch: BatchRecord = {
       id: batchId,
       status: "queued",
-      options: input.options,
+      device: input.device,
+      // Pin a concrete representative form factor onto the batch-level options
+      // (the first resolved form factor) so single-device reads of
+      // `batch.options.formFactor` keep working and it's never `"both"`. Each
+      // job overrides this with its own `device` when the engine runs.
+      options: { ...input.options, formFactor: formFactors[0] },
       concurrency,
       jobs,
       counts: computeCounts(jobs),
@@ -272,7 +293,14 @@ export class AuditQueue implements AuditQueueApi {
 
     // --- run + settle ---
     try {
-      const result = await runAuditInWorker(job.url, batch.options);
+      // Run the batch options with this job's concrete form factor (PRD §6
+      // Phase 12). For a single-device batch this equals `batch.options`; for a
+      // `"both"` batch it pins the per-job device so the persisted run records
+      // the right one (`result.options.formFactor` flows straight through).
+      const result = await runAuditInWorker(job.url, {
+        ...batch.options,
+        formFactor: job.device,
+      });
       // Stash the heavy, lhr-bearing result under the runId for the report
       // endpoint; surface only the lite view on the job.
       this.results.set(job.id, result);

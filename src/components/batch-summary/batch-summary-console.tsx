@@ -55,6 +55,7 @@ import { rowsToCsv, rowsToJson } from "@/lib/export/exporters";
 import { assessDrift, benchmarkIndexSpread } from "@/lib/lighthouse/drift";
 import { formatBenchmarkIndex } from "@/lib/lighthouse/environment-format";
 import { LIGHTHOUSE_CATEGORIES } from "@/lib/lighthouse/types";
+import { hasBothDevices } from "@/lib/pairing/devicePairs";
 import type { CategoryThresholds } from "@/lib/settings/defaults";
 import {
   CATEGORY_SHORT_LABELS,
@@ -272,6 +273,17 @@ function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
   );
   const errorCount = rows.length - doneCount;
 
+  // True device for the batch (PRD §6 Phase 12): `batch.options.formFactor` only
+  // records a single representative, so a "both" batch would mislabel. Derive it
+  // from the runs — "both" when they span mobile + desktop, else the lone device.
+  const deviceLabel = useMemo(
+    () =>
+      hasBothDevices(rows, (row) => row.formFactor)
+        ? "both"
+        : batch.options.formFactor,
+    [rows, batch.options.formFactor],
+  );
+
   const status = STATUS_META[batch.status];
   const StatusIcon = status.icon;
   const shortId = batch.id.slice(0, 8);
@@ -312,7 +324,7 @@ function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
             variant="outline"
             className="font-mono text-[0.625rem] uppercase tracking-[0.14em] text-muted-foreground"
           >
-            {batch.options.formFactor}
+            {deviceLabel}
           </Badge>
           <span>
             <span className="text-foreground">{batch.options.runs}</span>× runs

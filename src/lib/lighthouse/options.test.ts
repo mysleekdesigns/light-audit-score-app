@@ -4,6 +4,7 @@ import {
   DEFAULT_OPTIONS,
   parseAuditOptions,
   resolveAuditOptions,
+  resolveFormFactors,
 } from "@/lib/lighthouse/options";
 import {
   LIGHTHOUSE_CATEGORIES,
@@ -162,5 +163,19 @@ describe("parseAuditOptions", () => {
 
   it("throws on invalid input", () => {
     expect(() => parseAuditOptions({ runs: -1 })).toThrow(/audit options/i);
+  });
+});
+
+describe("resolveFormFactors", () => {
+  it("expands 'both' to mobile then desktop, in that stable order", () => {
+    expect(resolveFormFactors("both")).toEqual(["mobile", "desktop"]);
+  });
+
+  it("returns a single-element list for 'mobile'", () => {
+    expect(resolveFormFactors("mobile")).toEqual(["mobile"]);
+  });
+
+  it("returns a single-element list for 'desktop'", () => {
+    expect(resolveFormFactors("desktop")).toEqual(["desktop"]);
   });
 });

@@ -64,6 +64,10 @@ export const createBatchBodySchema = z.object({
     .array(httpUrlSchema)
     .min(1, "Provide at least one URL.")
     .max(MAX_URLS, `Provide at most ${MAX_URLS} URLs.`),
+  // Device selection (PRD §6 Phase 12). Optional: when omitted the effective
+  // device falls back to `options.formFactor` (a back-compatible single-device
+  // run). `"both"` fans each URL out into a mobile + a desktop job in the queue.
+  device: z.enum(["mobile", "desktop", "both"]).optional(),
   options: auditOptionsSchema.optional().default(() => auditOptionsSchema.parse({})),
   concurrency: z
     .number("concurrency must be a number.")
@@ -102,5 +106,9 @@ export function parseCreateBatchBody(raw: unknown): ParseCreateBatchResult {
   // `result.data` already satisfies CreateBatchInput (urls/options/concurrency
   // resolved); the explicit shape keeps the contract obvious to readers.
   const { urls, options, concurrency, accuracyMode } = result.data;
-  return { ok: true, value: { urls, options, concurrency, accuracyMode } };
+  // Resolve the effective device (PRD §6 Phase 12): an explicit `device` wins;
+  // otherwise an omitted device defaults to the options' concrete `formFactor`,
+  // so older bodies (no `device`) behave as a single-device run unchanged.
+  const device = result.data.device ?? result.data.options.formFactor;
+  return { ok: true, value: { urls, device, options, concurrency, accuracyMode } };
 }

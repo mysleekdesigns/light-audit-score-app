@@ -16,6 +16,8 @@ import type {
   AuditOptions,
   AuditResult,
   CategoryScores,
+  DeviceSelection,
+  FormFactor,
 } from "@/lib/lighthouse/types";
 
 // --- Concurrency guardrails (PRD §5: default 3, bounded) -------------------
@@ -90,6 +92,14 @@ export interface AuditJob {
   /** Index of this job within its batch (0-based), for stable ordering. */
   index: number;
   url: string;
+  /**
+   * The concrete form factor THIS job runs (PRD §6 Phase 12). For a `"both"`
+   * batch each URL fans out into a `mobile` and a `desktop` job that stream
+   * independently (distinct ids); for a single-device batch it equals the
+   * batch's `options.formFactor`. The job runs the batch options with this
+   * `formFactor` override, so the persisted run records the right device.
+   */
+  device: FormFactor;
   status: JobStatus;
   /** Present once `status === "done"`. Lhr-stripped (see {@link AuditResultLite}). */
   result?: AuditResultLite;
@@ -114,7 +124,14 @@ export interface BatchCounts {
 export interface Batch {
   id: string;
   status: BatchStatus;
-  /** Resolved audit options applied to every job in the batch. */
+  /**
+   * Device selection the batch was created with (PRD §6 Phase 12). When `"both"`,
+   * each URL fanned out into a mobile + a desktop job; otherwise every job runs
+   * this single form factor. `options.formFactor` holds a concrete representative
+   * (the first resolved form factor) so existing single-device reads still work.
+   */
+  device: DeviceSelection;
+  /** Resolved audit options applied to every job in the batch (per-job `formFactor` overridden by `AuditJob.device`). */
   options: AuditOptions;
   /** Resolved (clamped) concurrency this batch was created with. */
   concurrency: number;
@@ -158,6 +175,12 @@ export type ProgressListener = (event: ProgressEvent) => void;
  */
 export interface CreateBatchInput {
   urls: string[];
+  /**
+   * Device selection (PRD §6 Phase 12). `"both"` fans each URL out into a mobile
+   * + a desktop job; a single device runs once per URL. When the HTTP layer omits
+   * it, it resolves to `options.formFactor` (back-compatible single-device run).
+   */
+  device: DeviceSelection;
   options: AuditOptions;
   concurrency: number;
   /**

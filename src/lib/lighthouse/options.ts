@@ -11,6 +11,8 @@ import { z } from "zod";
 
 import {
   type AuditOptions,
+  type DeviceSelection,
+  type FormFactor,
   LIGHTHOUSE_CATEGORIES,
   MAX_CPU_MULTIPLIER,
   MAX_RUNS,
@@ -104,4 +106,15 @@ export function resolveAuditOptions(input?: unknown): AuditOptions {
  */
 export function parseAuditOptions(input: unknown): AuditOptions {
   return resolveAuditOptions(input);
+}
+
+/**
+ * Resolve a {@link DeviceSelection} into the concrete {@link FormFactor}s to
+ * audit (PRD §6 Phase 12). `"both"` expands to `["mobile", "desktop"]` (in that
+ * stable order); a single device returns just itself. The queue uses this to fan
+ * a `"both"` URL out into two independent isolated-Chrome jobs, each running one
+ * concrete form factor — the engine/worker never sees `"both"`.
+ */
+export function resolveFormFactors(device: DeviceSelection): FormFactor[] {
+  return device === "both" ? ["mobile", "desktop"] : [device];
 }

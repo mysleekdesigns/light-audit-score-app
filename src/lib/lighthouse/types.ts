@@ -27,6 +27,16 @@ export const LIGHTHOUSE_CATEGORIES: readonly LighthouseCategory[] = [
 export type FormFactor = "mobile" | "desktop";
 
 /**
+ * User-facing device selection for a *batch* (PRD §6 Phase 12). `"both"` is not a
+ * form factor the engine can run — it's a request-level fan-out instruction:
+ * each `"both"` URL becomes two independent jobs, one per {@link FormFactor}.
+ * `AuditOptions.formFactor` therefore stays a concrete {@link FormFactor}; the
+ * queue resolves a `DeviceSelection` into the form factors to enqueue via
+ * `resolveFormFactors` (see `options.ts`).
+ */
+export type DeviceSelection = FormFactor | "both";
+
+/**
  * User-facing throttling choice. The engine maps these to Lighthouse's
  * `throttlingMethod`: `simulated` → `"simulate"`, `applied` → `"devtools"`.
  */

@@ -15,7 +15,7 @@ import type { CreateBatchRequest } from "@/lib/client/auditClient";
 import { CrawlPanel } from "@/components/audit/crawl-panel";
 import { RunConfigCard } from "@/components/audit/run-config-card";
 import type {
-  FormFactor,
+  DeviceSelection,
   LighthouseCategory,
   Throttling,
 } from "@/lib/lighthouse/types";
@@ -143,7 +143,9 @@ export function NewAuditForm({
   // form only needs the resolved selected set so it can submit the active tab's
   // URLs through the same CreateBatchRequest the paste tab uses.
   const [crawlUrls, setCrawlUrls] = useState<string[]>([]);
-  const [formFactor, setFormFactor] = useState<FormFactor>("mobile");
+  // Device selection (Phase 12): "mobile" | "desktop" | "both". "both" fans each
+  // URL out into a mobile + a desktop job server-side.
+  const [device, setDevice] = useState<DeviceSelection>("mobile");
   const [throttling, setThrottling] = useState<Throttling>("simulated");
   const [runs, setRuns] = useState(3);
   const [concurrency, setConcurrency] = useState(DEFAULT_CONCURRENCY);
@@ -165,7 +167,7 @@ export function NewAuditForm({
   const [hydrated, setHydrated] = useState(false);
   if (loaded && !hydrated) {
     setHydrated(true);
-    setFormFactor(defaults.formFactor);
+    setDevice(defaults.formFactor);
     setThrottling(defaults.throttling);
     setRuns(defaults.runs);
     setConcurrency(defaults.concurrency);
@@ -198,8 +200,9 @@ export function NewAuditForm({
   }
 
   function handleDeviceChange(value: string) {
-    if (value === "mobile" || value === "desktop") {
-      setFormFactor(value);
+    // "both" audits each URL on mobile AND desktop (Phase 12).
+    if (value === "mobile" || value === "desktop" || value === "both") {
+      setDevice(value);
       // Remember this device for the next visit.
       update({ formFactor: value });
     }
@@ -256,7 +259,7 @@ export function NewAuditForm({
    */
   function handleMatchDevTools() {
     const preset = MATCH_DEVTOOLS_PRESET;
-    if (preset.formFactor) setFormFactor(preset.formFactor);
+    if (preset.formFactor) setDevice(preset.formFactor);
     if (preset.throttling) setThrottling(preset.throttling);
     if (typeof preset.runs === "number") setRuns(preset.runs);
     if (typeof preset.concurrency === "number") setConcurrency(preset.concurrency);
@@ -279,8 +282,13 @@ export function NewAuditForm({
     if (!canSubmit) return;
     onSubmit({
       urls,
+      // Top-level device selection drives the fan-out; "both" → mobile + desktop
+      // jobs per URL (Phase 12). The server resolves it into per-job form factors.
+      device,
       options: {
-        formFactor,
+        // Keep options.formFactor a concrete base so the engine options stay
+        // valid even for "both" (each job overrides it with its own device).
+        formFactor: device === "both" ? "mobile" : device,
         throttling,
         categories,
         runs,
@@ -315,7 +323,7 @@ export function NewAuditForm({
                 id={deviceId}
                 type="single"
                 variant="outline"
-                value={formFactor}
+                value={device}
                 onValueChange={handleDeviceChange}
                 disabled={isRunning}
                 className="w-full"
@@ -325,6 +333,13 @@ export function NewAuditForm({
                 </ToggleGroupItem>
                 <ToggleGroupItem value="desktop" className="flex-1">
                   Desktop
+                </ToggleGroupItem>
+                <ToggleGroupItem
+                  value="both"
+                  className="flex-1"
+                  title="Audit each URL on mobile and desktop"
+                >
+                  Both
                 </ToggleGroupItem>
               </ToggleGroup>
             </Field>

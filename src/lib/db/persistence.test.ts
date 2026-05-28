@@ -44,6 +44,7 @@ function makeBatch(id: string, jobs: AuditJob[]): Batch {
   return {
     id,
     status: "queued",
+    device: OPTIONS.formFactor,
     options: OPTIONS,
     concurrency: 3,
     jobs,
@@ -58,11 +59,17 @@ function makeBatch(id: string, jobs: AuditJob[]): Batch {
   };
 }
 
-function makeJob(id: string, index: number, url: string): AuditJob {
+function makeJob(
+  id: string,
+  index: number,
+  url: string,
+  device: AuditJob["device"] = "mobile",
+): AuditJob {
   return {
     id,
     index,
     url,
+    device,
     status: "queued",
     queuedAt: new Date().toISOString(),
   };
@@ -193,6 +200,29 @@ describe("persistence", () => {
 
     expect(getRunReport("run-bad")).toBeDefined();
     expect(getRunReport("run-bad")!.jsonPath).toBeNull();
+  });
+
+  it("records a failed run's form factor from job.device, not batch.options.formFactor", () => {
+    // A "both" batch fans each URL out into a mobile + a desktop job; the
+    // batch's representative options.formFactor is mobile (the first resolved
+    // form factor). A failed DESKTOP job must still record form_factor=desktop.
+    const desktopJob: AuditJob = {
+      ...makeJob("run-both-desktop", 1, "https://both.test/", "desktop"),
+      status: "error",
+      error: { message: "Chrome launch failed" },
+    };
+    const batch = makeBatch("batch-both", [desktopJob]);
+    // Sanity: the batch-level options pin mobile, so this proves the row reads
+    // the per-job device rather than the batch representative.
+    expect(batch.options.formFactor).toBe("mobile");
+
+    recordBatch(batch);
+    recordFailedRun(batch, desktopJob);
+
+    const [row] = listHistory();
+    expect(row.id).toBe("run-both-desktop");
+    expect(row.status).toBe("error");
+    expect(row.formFactor).toBe("desktop");
   });
 
   it("orders history newest-first across multiple runs", async () => {

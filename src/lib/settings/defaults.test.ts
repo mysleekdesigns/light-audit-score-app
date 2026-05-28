@@ -120,6 +120,17 @@ describe("normalizeDefaults", () => {
     expect(normalizeDefaults({ formFactor: "watch" }).formFactor).toBe("mobile");
   });
 
+  it('keeps the widened "both" device selection (Phase 12)', () => {
+    expect(normalizeDefaults({ formFactor: "both" }).formFactor).toBe("both");
+    expect(normalizeDefaults({ formFactor: "desktop" }).formFactor).toBe(
+      "desktop",
+    );
+    // A garbage value still falls back to mobile after the widening.
+    expect(normalizeDefaults({ formFactor: "tablet" }).formFactor).toBe(
+      "mobile",
+    );
+  });
+
   it("normalizes the Phase 9 fields (throttling / accuracyMode / cpuSlowdownMultiplier)", () => {
     // Defaults when absent.
     const bare = normalizeDefaults({});

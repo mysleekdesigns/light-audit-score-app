@@ -11,7 +11,27 @@
 > (Phases 11–14). (The swing layout was analysed from a full-page screenshot — its live site blocks
 > automated fetch behind an invalid-cert-authority, so crawl/stealth/fetch all failed.)
 
-> **Status:** Phase 11 complete — the **full-bleed density & wide-screen reclaim** pass is in, a pure
+> **Status:** Phase 12 complete — **Desktop + Mobile paired audits**. `device: "mobile" | "desktop" | "both"`
+> is a request-level fan-out, not an engine concept: `AuditOptions.formFactor` stays a concrete `FormFactor`,
+> a pure `resolveFormFactors` (in `options.ts`) expands `"both"` → both factors, and `AuditQueue.createBatch`
+> fans each `"both"` URL into two independent isolated-Chrome jobs (`AuditJob.device`, distinct ids → they
+> stream independently) that run `{ ...batch.options, formFactor: job.device }` — so the worker path is
+> unchanged and each run persists its own device with **no schema change** (`runs.formFactor` already existed;
+> `recordFailedRun` now reads `job.device`). A pure, unit-tested `src/lib/pairing/devicePairs.ts`
+> (`pairByDevice`/`hasBothDevices`) re-pairs the mobile + desktop items for one URL, consumed by a
+> device-aware results **table** (paired Mobile|Desktop pill columns), **ring-card** view (stacked device
+> ring-sets), and a **detail sheet** that flips device — all *no-ops* for single-device batches.
+> `audits-schema` accepts the new `device` (older bodies → single-device), `AuditDefaults.formFactor` widened
+> to `DeviceSelection` (storage key → v4), and the batch-summary device badge is derived from the runs.
+> **Verified for real**: a live `both` batch of example.com persisted two runs — mobile + desktop, both
+> `100/96/92/80` — each matching a single-device baseline **exactly (within ±5)**; SSR `/batches` shows the
+> derived **"both"** badge and `/history` both device rows; a **headless-Chrome 1920px** pass drove the form
+> (URL → Both → Run) and rendered the live **paired table (8 score pills, Mobile|Desktop headers, 2/2 done)**
+> with **zero console errors**. Lint, typecheck, build, and **323 unit tests** all green (Phase 12 added 9
+> pairing tests + fan-out/schema/defaults coverage). Next up: Phase 13 (Re-run / Regenerate + crawl
+> exclude-paths & max-count).
+>
+> **Status (Phase 11):** Phase 11 complete — the **full-bleed density & wide-screen reclaim** pass is in, a pure
 > *layout + tooling* change with the dark "precision-instrument" identity preserved verbatim (no new
 > colours/fonts; the new pill, toggle, table and legend reuse only the existing score-band tokens +
 > Archivo/JetBrains-Mono). The band→colour helper (already shared in `src/lib/scores.ts`) gained
@@ -680,23 +700,54 @@ Batches are single-column stacks. Make the content as dense as swing's, in *our*
 per URL. We already persist `device` per run, so this is a job fan-out + a pairing projection, not new
 storage.
 
-- [ ] **Engine / options**: accept `device: "mobile" | "desktop" | "both"` (resolve `"both"` to the two
+- [x] **Engine / options**: accept `device: "mobile" | "desktop" | "both"` (resolve `"both"` to the two
       form factors) in `src/lib/lighthouse/types.ts` + `options.ts`; the worker path
       (`runAuditWorker.ts`) is unchanged — `"both"` simply enqueues two independent isolated-Chrome
       jobs.
-- [ ] **Queue / batch**: a `both` URL fans out to two jobs keyed `(url, device)`; thread the per-job
+      *Done: a new `DeviceSelection = FormFactor | "both"` (types.ts) is purely a request-level fan-out
+      instruction — `AuditOptions.formFactor` stays a concrete `FormFactor`, so the engine/worker never
+      see `"both"`. A pure, unit-tested `resolveFormFactors(device)` (options.ts) maps `"both"` →
+      `["mobile","desktop"]`.*
+- [x] **Queue / batch**: a `both` URL fans out to two jobs keyed `(url, device)`; thread the per-job
       device through `CreateBatchInput` / `AuditQueue` and the SSE job ids so the two stream
       independently.
-- [ ] **Pairing projection**: a never-throwing `listPairedHistory()` / batch grouping that pairs the
+      *Done: `AuditJob.device` (required) + `Batch.device` + `CreateBatchInput.device` thread the
+      selection through. `AuditQueue.createBatch` fans each URL out over `resolveFormFactors(device)` into
+      jobs with globally-contiguous indices + distinct ids (so the two stream independently); each job
+      runs `{ ...batch.options, formFactor: job.device }`. Since `runAudit` echoes `options`, `recordRun`
+      persists the right per-device `formFactor` with no schema change; `recordFailedRun` now reads
+      `job.device` too.*
+- [x] **Pairing projection**: a never-throwing `listPairedHistory()` / batch grouping that pairs the
       mobile + desktop `runs` rows for the same `(batchId, url)` (pure, unit-tested) — no schema change.
-- [ ] **UI**: the Phase-11 table gains **Desktop | Mobile** paired pill columns per URL row; the
+      *Done: a pure, server-safe `src/lib/pairing/devicePairs.ts` (`pairByDevice` → `DevicePair<T>`,
+      `hasBothDevices`, `devicesPresent`) pairs already-fetched live `AuditJob`s **or** persisted
+      `HistoryRow`s via caller-supplied accessors (callers group by `batchId` first); 9 unit tests.*
+- [x] **UI**: the Phase-11 table gains **Desktop | Mobile** paired pill columns per URL row; the
       ring-card view shows both device ring-sets; the detail sheet flips device. The New-Audit device
       control gains a "Both" option.
-- [ ] **API**: `src/lib/api/audits-schema.ts` accepts the new device value (enum / clamp); structured
+      *Done: the results table + ring-cards are device-aware — single-device sets render exactly as before
+      (no regression), a both set renders one row/card per URL with paired Mobile|Desktop pill columns /
+      stacked ring-sets (each device's `View →` opens its own job). The detail sheet gains a Mobile/Desktop
+      header toggle (the console passes the URL's job pair). New-Audit device control gained **Both** and
+      submits a top-level `device`; the batch-summary device badge is derived from the runs (`both` when
+      mixed). `AuditDefaults.formFactor` widened to `DeviceSelection` (storage key → v4).*
+- [x] **API**: `src/lib/api/audits-schema.ts` accepts the new device value (enum / clamp); structured
       errors unchanged.
-- [ ] **Verify**: a real `both` batch of one URL persists two runs (mobile + desktop), the table shows
+      *Done: `createBatchBodySchema` gained `device: z.enum(["mobile","desktop","both"]).optional()`;
+      `parseCreateBatchBody` resolves `device ?? options.formFactor` into `CreateBatchInput` (older bodies
+      stay single-device). Invalid device → the existing structured 400.*
+- [x] **Verify**: a real `both` batch of one URL persists two runs (mobile + desktop), the table shows
       paired pills, and each device's scores match a single-device run of the same URL within the
       documented ±5; lint / types / build / tests green.
+      *Verified for real: a live `device:both` batch of `example.com` (concurrency 1) persisted **two runs —
+      mobile `100/96/92/80` (benchmarkIndex 4038) + desktop `100/96/92/80` (4049)** — and each device matched
+      a single-device baseline run of the same URL **exactly (Δ0, within ±5)**. The SSR `/batches` card derives
+      the device badge **"both"** ("2 pages · 2 done") from the runs; `/history` shows both device rows. A
+      **headless-Chrome 1920px** pass drove the New-Audit form (URL → **Both** → Run): the live results table
+      completed **2/2** and rendered **paired Mobile | Desktop headers with 8 score pills** (mobile + desktop),
+      with **zero console errors**. Lint, typecheck, build, and **323 unit tests** all green (Phase 12 added the
+      9 device-pairing tests + `resolveFormFactors` / device-schema / fan-out / failed-run-device / defaults
+      tests).*
 
 ### Phase 13 — Re-run / Regenerate + crawl exclude-paths & max-count
 **Why:** small, high-value power-user tools from swing's input panel and run list.

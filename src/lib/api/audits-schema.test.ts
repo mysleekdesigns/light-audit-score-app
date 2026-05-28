@@ -19,6 +19,8 @@ describe("parseCreateBatchBody — valid bodies", () => {
     if (!result.ok) return;
     expect(result.value).toEqual({
       urls: ["https://example.com"],
+      // Omitted device defaults to the options' concrete formFactor (mobile).
+      device: "mobile",
       options: DEFAULT_OPTIONS,
       concurrency: DEFAULT_CONCURRENCY,
       accuracyMode: false,
@@ -122,6 +124,55 @@ describe("parseCreateBatchBody — valid bodies", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.urls).toHaveLength(MAX_URLS);
+  });
+});
+
+describe("parseCreateBatchBody — device selection", () => {
+  it("preserves an explicit device:'both'", () => {
+    const result = parseCreateBatchBody({
+      urls: ["https://example.com"],
+      device: "both",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.device).toBe("both");
+  });
+
+  it("defaults an omitted device to the options' formFactor (mobile by default)", () => {
+    const result = parseCreateBatchBody({ urls: ["https://example.com"] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.device).toBe("mobile");
+  });
+
+  it("defaults an omitted device to an explicit options.formFactor (desktop)", () => {
+    const result = parseCreateBatchBody({
+      urls: ["https://example.com"],
+      options: { formFactor: "desktop" },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.device).toBe("desktop");
+  });
+
+  it("preserves an explicit device:'desktop'", () => {
+    const result = parseCreateBatchBody({
+      urls: ["https://example.com"],
+      device: "desktop",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.device).toBe("desktop");
+  });
+
+  it("rejects an invalid device with a structured issue", () => {
+    const result = parseCreateBatchBody({
+      urls: ["https://example.com"],
+      device: "tablet",
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.issues.some((i) => i.path === "device")).toBe(true);
   });
 });
 

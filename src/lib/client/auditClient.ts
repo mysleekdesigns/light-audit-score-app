@@ -9,12 +9,18 @@
  * report URL helpers.
  */
 
-import type { AuditOptions } from "@/lib/lighthouse/types";
+import type { AuditOptions, DeviceSelection } from "@/lib/lighthouse/types";
 import type { ApiErrorBody, ApiErrorIssue, Batch } from "@/lib/queue/types";
 
 /** Body accepted by {@link createBatch}; mirrors `POST /api/audits` (options/concurrency optional). */
 export interface CreateBatchRequest {
   urls: string[];
+  /**
+   * Device selection (PRD §6 Phase 12). `"both"` audits each URL on mobile AND
+   * desktop (two jobs per URL). Optional; when omitted the server falls back to
+   * `options.formFactor` (single-device run), keeping older callers working.
+   */
+  device?: DeviceSelection;
   options?: Partial<AuditOptions>;
   concurrency?: number;
   /**

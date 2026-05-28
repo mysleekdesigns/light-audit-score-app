@@ -129,11 +129,13 @@ describe("AuditQueue", () => {
 
     const batch = queue.createBatch({
       urls: ["https://a.test/", "https://b.test/"],
+      device: "mobile",
       options: OPTIONS,
       concurrency: 1,
     });
 
     expect(batch.status).toBe("queued");
+    expect(batch.device).toBe("mobile");
     expect(batch.jobs).toHaveLength(2);
     expect(batch.jobs.map((j) => j.index)).toEqual([0, 1]);
     expect(batch.jobs.map((j) => j.url)).toEqual([
@@ -152,6 +154,65 @@ describe("AuditQueue", () => {
     });
   });
 
+  it("fans a 'both' batch out into a mobile + desktop job per URL with contiguous indices", () => {
+    mockRunAudit.mockResolvedValue(makeResult("https://a.test/", 90));
+    const queue = new AuditQueue();
+
+    const urls = ["https://a.test/", "https://b.test/", "https://c.test/"];
+    const batch = queue.createBatch({
+      urls,
+      device: "both",
+      options: OPTIONS,
+      concurrency: 1,
+    });
+
+    // N URLs × 2 form factors → 2N jobs; the batch records device "both".
+    expect(batch.device).toBe("both");
+    expect(batch.jobs).toHaveLength(urls.length * 2);
+
+    // Each URL has exactly one mobile and one desktop job (by job.device).
+    for (const url of urls) {
+      const devices = batch.jobs
+        .filter((j) => j.url === url)
+        .map((j) => j.device)
+        .sort();
+      expect(devices).toEqual(["desktop", "mobile"]);
+    }
+
+    // Indices are the global flattened position: 0..2N-1, contiguous & unique.
+    expect(batch.jobs.map((j) => j.index)).toEqual(
+      Array.from({ length: urls.length * 2 }, (_, i) => i),
+    );
+    expect(new Set(batch.jobs.map((j) => j.id)).size).toBe(urls.length * 2);
+
+    // The batch-level options pin a concrete representative form factor (never
+    // "both"), so single-device reads of options.formFactor still work.
+    expect(batch.options.formFactor).toBe("mobile");
+  });
+
+  it("runs each job with its own form factor (per-job options override)", async () => {
+    mockRunAudit.mockImplementation((url) => Promise.resolve(makeResult(url, 70)));
+    const queue = new AuditQueue();
+
+    const initial = queue.createBatch({
+      urls: ["https://a.test/"],
+      device: "both",
+      options: OPTIONS,
+      concurrency: 1,
+    });
+    const { done } = awaitBatch(queue, initial.id);
+    await done;
+
+    // The engine is called once per form factor, each with the matching
+    // formFactor pinned onto the otherwise-shared batch options. Filter to this
+    // test's URL so stray calls from prior tests' async drain can't leak in.
+    const calledFormFactors = mockRunAudit.mock.calls
+      .filter(([url]) => url === "https://a.test/")
+      .map(([, opts]) => opts.formFactor)
+      .sort();
+    expect(calledFormFactors).toEqual(["desktop", "mobile"]);
+  });
+
   it("transitions jobs queued→running→done and fires events in order", async () => {
     mockRunAudit.mockImplementation((url) =>
       Promise.resolve(makeResult(url, 50)),
@@ -160,6 +221,7 @@ describe("AuditQueue", () => {
 
     const initial = queue.createBatch({
       urls: ["https://a.test/"],
+      device: "mobile",
       options: OPTIONS,
       concurrency: 1,
     });
@@ -202,6 +264,7 @@ describe("AuditQueue", () => {
 
     const initial = queue.createBatch({
       urls: ["https://bad.test/", "https://good.test/"],
+      device: "mobile",
       options: OPTIONS,
       concurrency: 2,
     });
@@ -230,6 +293,7 @@ describe("AuditQueue", () => {
     mockRunAudit.mockResolvedValue(makeResult("https://ok.test/", 88));
     const okBatch = queue.createBatch({
       urls: ["https://ok.test/"],
+      device: "mobile",
       options: OPTIONS,
       concurrency: 1,
     });
@@ -241,6 +305,7 @@ describe("AuditQueue", () => {
     mockRunAudit.mockRejectedValue(new Error("nope"));
     const errBatch = queue.createBatch({
       urls: ["https://err.test/"],
+      device: "mobile",
       options: OPTIONS,
       concurrency: 1,
     });
@@ -257,6 +322,7 @@ describe("AuditQueue", () => {
 
     const initial = queue.createBatch({
       urls: ["https://a.test/"],
+      device: "mobile",
       options: OPTIONS,
       concurrency: 1,
     });
@@ -294,6 +360,7 @@ describe("AuditQueue", () => {
 
     const initial = queue.createBatch({
       urls: ["https://a.test/"],
+      device: "mobile",
       options: OPTIONS,
       concurrency: 1,
     });
@@ -333,6 +400,7 @@ describe("AuditQueue", () => {
 
     const batch = queue.createBatch({
       urls: ["https://a.test/"],
+      device: "mobile",
       options: OPTIONS,
       concurrency: 5,
     });
@@ -342,6 +410,7 @@ describe("AuditQueue", () => {
     // Over the ceiling → clamped.
     queue.createBatch({
       urls: ["https://b.test/"],
+      device: "mobile",
       options: OPTIONS,
       concurrency: 999,
     });
@@ -356,6 +425,7 @@ describe("AuditQueue", () => {
     // of the requested value.
     const perfBatch = queue.createBatch({
       urls: ["https://a.test/"],
+      device: "mobile",
       options: { ...OPTIONS, categories: ["performance"] },
       concurrency: 8,
       accuracyMode: true,
@@ -366,6 +436,7 @@ describe("AuditQueue", () => {
     // Accuracy mode but Performance NOT in scope → requested concurrency kept.
     const nonPerfBatch = queue.createBatch({
       urls: ["https://b.test/"],
+      device: "mobile",
       options: { ...OPTIONS, categories: ["seo", "accessibility"] },
       concurrency: 4,
       accuracyMode: true,
@@ -375,6 +446,7 @@ describe("AuditQueue", () => {
     // No accuracy mode → requested concurrency kept even with Performance.
     const plainBatch = queue.createBatch({
       urls: ["https://c.test/"],
+      device: "mobile",
       options: { ...OPTIONS, categories: ["performance"] },
       concurrency: 6,
     });
@@ -396,6 +468,7 @@ describe("AuditQueue", () => {
 
     const batch = queue.createBatch({
       urls: ["https://a.test/"],
+      device: "mobile",
       options: OPTIONS,
       concurrency: 1,
     });
@@ -414,6 +487,7 @@ describe("AuditQueue", () => {
     mockRunAudit.mockResolvedValue(makeResult("https://a.test/", 90));
     const okBatch = queue.createBatch({
       urls: ["https://a.test/"],
+      device: "mobile",
       options: OPTIONS,
       concurrency: 1,
     });
@@ -427,6 +501,7 @@ describe("AuditQueue", () => {
     mockRunAudit.mockRejectedValue(new Error("boom"));
     const errBatch = queue.createBatch({
       urls: ["https://err.test/"],
+      device: "mobile",
       options: OPTIONS,
       concurrency: 1,
     });

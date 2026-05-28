@@ -27,6 +27,7 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuditDefaults } from "@/hooks/useAuditDefaults";
 import { assessDrift } from "@/lib/lighthouse/drift";
+import { hasBothDevices, pairByDevice } from "@/lib/pairing/devicePairs";
 import { cn } from "@/lib/utils";
 import type { StreamConnection } from "@/hooks/useBatchStream";
 import type { AuditJob, Batch } from "@/lib/queue/types";
@@ -173,13 +174,7 @@ export function AuditResults({ batch, connection, onSelect }: AuditResultsProps)
                     <ResultsTable jobs={group.jobs} onSelect={onSelect} />
                   </div>
                 ) : (
-                  <ul className="grid list-none gap-4 p-0 pt-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-                    {group.jobs.map((job) => (
-                      <li key={job.id}>
-                        <AuditJobCard job={job} onSelect={onSelect} />
-                      </li>
-                    ))}
-                  </ul>
+                  <CardsGrid jobs={group.jobs} onSelect={onSelect} />
                 )}
               </AccordionContent>
             </AccordionItem>
@@ -189,6 +184,171 @@ export function AuditResults({ batch, connection, onSelect }: AuditResultsProps)
     </section>
   );
 }
+
+interface CardsGridProps {
+  jobs: AuditJob[];
+  onSelect: (job: AuditJob) => void;
+}
+
+/**
+ * The ring-card grid for one host group. Device-aware: when the group's jobs span
+ * both mobile + desktop it renders one {@link PairedAuditCard} per URL (both
+ * ring-sets stacked); otherwise one {@link AuditJobCard} per job, unchanged.
+ */
+function CardsGrid({ jobs, onSelect }: CardsGridProps) {
+  const paired = hasBothDevices(jobs, (job) => job.device);
+
+  if (paired) {
+    const pairs = pairByDevice(
+      jobs,
+      (job) => job.url,
+      (job) => job.device,
+    );
+    return (
+      <ul className="grid list-none gap-4 p-0 pt-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+        {pairs.map((pair) => (
+          <li key={pair.url}>
+            <PairedAuditCard
+              url={pair.url}
+              mobile={pair.mobile}
+              desktop={pair.desktop}
+              onSelect={onSelect}
+            />
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
+  return (
+    <ul className="grid list-none gap-4 p-0 pt-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+      {jobs.map((job) => (
+        <li key={job.id}>
+          <AuditJobCard job={job} onSelect={onSelect} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Mono uppercase device caption ("Mobile" / "Desktop") matching the house label style. */
+const DEVICE_LABEL =
+  "font-mono text-[0.625rem] uppercase tracking-[0.18em] text-muted-foreground";
+
+interface DeviceSectionProps {
+  device: "Mobile" | "Desktop";
+  job: AuditJob | null;
+  url: string;
+  onSelect: (job: AuditJob) => void;
+}
+
+/**
+ * One device's ring-set within a {@link PairedAuditCard}: a device caption + the
+ * job's status, then the four rings (done), an error line (error), skeleton rings
+ * (pending), or an em-dash placeholder when this URL wasn't audited on this
+ * device. A done/errored section is a button that opens that job's detail sheet.
+ */
+function DeviceSection({ device, job, url, onSelect }: DeviceSectionProps) {
+  const interactive = job?.status === "done" || job?.status === "error";
+
+  const header = (
+    <div className="flex items-center justify-between gap-2">
+      <span className={DEVICE_LABEL}>{device}</span>
+      {job ? <JobStatusBadge status={job.status} /> : null}
+    </div>
+  );
+
+  let body: React.ReactNode;
+  if (!job) {
+    body = (
+      <p className="font-mono text-xs text-muted-foreground/50">
+        Not audited on {device.toLowerCase()}
+      </p>
+    );
+  } else if (job.status === "done" && job.result) {
+    body = (
+      <div className="flex flex-col gap-3">
+        <ScoreRings scores={job.result.median.scores} size={48} />
+        <CoreWebVitalsStrip metrics={job.result.median.metrics} />
+      </div>
+    );
+  } else if (job.status === "error") {
+    body = (
+      <p className="text-sm text-score-poor">
+        {job.error?.message ?? "Audit failed."}
+      </p>
+    );
+  } else {
+    body = (
+      <div className="flex gap-5" aria-hidden>
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="flex flex-col items-center gap-2">
+            <Skeleton className="size-12 rounded-full" />
+            <Skeleton className="h-2 w-9" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  const content = (
+    <div className="flex flex-col gap-3">
+      {header}
+      {body}
+    </div>
+  );
+
+  if (interactive && job) {
+    return (
+      <button
+        type="button"
+        onClick={() => onSelect(job)}
+        aria-label={`View ${device.toLowerCase()} details for ${url}`}
+        className={cn(
+          "group/device block w-full rounded-lg text-left outline-none transition-colors",
+          "hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-ring",
+        )}
+      >
+        {content}
+      </button>
+    );
+  }
+  return content;
+}
+
+interface PairedAuditCardProps {
+  url: string;
+  mobile: AuditJob | null;
+  desktop: AuditJob | null;
+  onSelect: (job: AuditJob) => void;
+}
+
+/**
+ * One card per URL carrying BOTH device ring-sets (PRD §6 Phase 12). The header
+ * names the URL; the body stacks a Mobile and a Desktop {@link DeviceSection},
+ * each clickable into that device's detail sheet. Used only when a batch ran
+ * "both"; single-device batches keep the one-card-per-job {@link AuditJobCard}.
+ */
+const PairedAuditCard = memo(function PairedAuditCard({
+  url,
+  mobile,
+  desktop,
+  onSelect,
+}: PairedAuditCardProps) {
+  return (
+    <Card className="flex h-full flex-col gap-4 p-5">
+      <span
+        className="truncate font-mono text-sm text-foreground"
+        title={url}
+      >
+        {url.replace(/^https?:\/\//, "")}
+      </span>
+      <DeviceSection device="Mobile" job={mobile} url={url} onSelect={onSelect} />
+      <div className="border-t border-border/50" />
+      <DeviceSection device="Desktop" job={desktop} url={url} onSelect={onSelect} />
+    </Card>
+  );
+});
 
 interface AuditJobCardProps {
   job: AuditJob;

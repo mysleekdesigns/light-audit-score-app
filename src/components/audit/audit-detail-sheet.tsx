@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { ExternalLink, FileJson, TriangleAlert } from "lucide-react";
 
 import { DriftWarning } from "@/components/audit/drift-warning";
@@ -24,6 +25,10 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Spinner } from "@/components/ui/spinner";
+import {
+  ToggleGroup,
+  ToggleGroupItem,
+} from "@/components/ui/toggle-group";
 import { reportHtmlUrl, reportJsonUrl } from "@/lib/client/auditClient";
 import {
   assessDrift,
@@ -32,6 +37,7 @@ import {
 import { formatBenchmarkIndex } from "@/lib/lighthouse/environment-format";
 import {
   LIGHTHOUSE_CATEGORIES,
+  type FormFactor,
   type Opportunity,
 } from "@/lib/lighthouse/types";
 import type { AuditJob, AuditResultLite } from "@/lib/queue/types";
@@ -46,7 +52,15 @@ import {
 import { cn } from "@/lib/utils";
 
 interface AuditDetailSheetProps {
+  /** The job the user clicked — drives the title and the default shown device. */
   job: AuditJob | null;
+  /**
+   * The clicked job's device pair (PRD §6 Phase 12): the 1–2 jobs in the batch
+   * sharing its URL. When it holds both a mobile and a desktop job the header
+   * shows a device toggle that flips which job's detail renders; with one job it
+   * behaves exactly as before. Optional so older callers keep working.
+   */
+  jobs?: AuditJob[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
@@ -400,48 +414,119 @@ function PendingBody({ job }: { job: AuditJob }) {
   );
 }
 
+/** The single-job description line: median-of-N · device · Lighthouse version. */
+function jobDescription(job: AuditJob): string | null {
+  if (job.status === "done" && job.result) {
+    return `Median of ${job.result.runs} ${
+      job.result.runs === 1 ? "run" : "runs"
+    } · ${job.result.options.formFactor} · Lighthouse v${
+      job.result.lighthouseVersion
+    }`;
+  }
+  return null;
+}
+
+/** One job's body, switched on status (done → full detail, error, or pending). */
+function JobBody({ job }: { job: AuditJob }) {
+  if (job.status === "done" && job.result) {
+    return <DoneBody job={job} result={job.result} />;
+  }
+  if (job.status === "error") return <ErrorBody job={job} />;
+  return <PendingBody job={job} />;
+}
+
+interface SheetBodyProps {
+  /** The clicked job — seeds the active device and the title. */
+  clicked: AuditJob;
+  jobs: AuditJob[];
+}
+
+/**
+ * Device-aware sheet body. Splits the pair into mobile/desktop; when both are
+ * present it renders a header device toggle (defaulting to the clicked device)
+ * that flips which job's detail shows. Keyed by the clicked job id from the shell
+ * so the active-device state resets cleanly each time a new job is opened.
+ */
+function SheetBody({ clicked, jobs }: SheetBodyProps) {
+  const mobile = jobs.find((j) => j.device === "mobile") ?? null;
+  const desktop = jobs.find((j) => j.device === "desktop") ?? null;
+  const hasBoth = mobile !== null && desktop !== null;
+
+  const [device, setDevice] = useState<FormFactor>(clicked.device);
+  // The job whose detail is shown: the toggled device when paired, else the
+  // single job we have (falling back to the clicked one).
+  const active =
+    (device === "desktop" ? desktop : mobile) ?? mobile ?? desktop ?? clicked;
+
+  const title = active.result?.finalUrl ?? active.url;
+  const description = jobDescription(active);
+
+  function handleDeviceChange(value: string) {
+    if (value === "mobile" || value === "desktop") setDevice(value);
+  }
+
+  return (
+    <>
+      <SheetHeader className="border-b border-border/60 pr-12">
+        <SheetTitle className="truncate font-mono text-sm">{title}</SheetTitle>
+        {description ? (
+          <SheetDescription className="font-mono text-xs">
+            {description}
+          </SheetDescription>
+        ) : (
+          <SheetDescription className="sr-only">
+            Audit result detail
+          </SheetDescription>
+        )}
+        {hasBoth ? (
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            value={device}
+            onValueChange={handleDeviceChange}
+            aria-label="Device"
+            className="mt-1 w-full"
+          >
+            <ToggleGroupItem value="mobile" className="flex-1">
+              Mobile
+            </ToggleGroupItem>
+            <ToggleGroupItem value="desktop" className="flex-1">
+              Desktop
+            </ToggleGroupItem>
+          </ToggleGroup>
+        ) : null}
+      </SheetHeader>
+
+      <JobBody job={active} />
+    </>
+  );
+}
+
 export function AuditDetailSheet({
   job,
+  jobs,
   open,
   onOpenChange,
 }: AuditDetailSheetProps) {
-  const title = job ? job.result?.finalUrl ?? job.url : "";
-
-  const description =
-    job?.status === "done" && job.result
-      ? `Median of ${job.result.runs} ${
-          job.result.runs === 1 ? "run" : "runs"
-        } · ${job.result.options.formFactor} · Lighthouse v${
-          job.result.lighthouseVersion
-        }`
-      : null;
+  // Prefer the explicit pair; fall back to the single clicked job for older
+  // callers that don't pass `jobs`.
+  const pair = jobs && jobs.length > 0 ? jobs : job ? [job] : [];
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent
-        side="right"
-        className="w-full gap-0 p-0 sm:max-w-xl"
-      >
-        <SheetHeader className="border-b border-border/60 pr-12">
-          <SheetTitle className="truncate font-mono text-sm">{title}</SheetTitle>
-          {description ? (
-            <SheetDescription className="font-mono text-xs">
-              {description}
-            </SheetDescription>
-          ) : (
+      <SheetContent side="right" className="w-full gap-0 p-0 sm:max-w-xl">
+        {job ? (
+          // Key by the clicked job so the active-device state resets per open.
+          <SheetBody key={job.id} clicked={job} jobs={pair} />
+        ) : (
+          <SheetHeader className="border-b border-border/60 pr-12">
+            <SheetTitle className="truncate font-mono text-sm" />
             <SheetDescription className="sr-only">
               Audit result detail
             </SheetDescription>
-          )}
-        </SheetHeader>
-
-        {job?.status === "done" && job.result ? (
-          <DoneBody job={job} result={job.result} />
-        ) : job?.status === "error" ? (
-          <ErrorBody job={job} />
-        ) : job ? (
-          <PendingBody job={job} />
-        ) : null}
+          </SheetHeader>
+        )}
       </SheetContent>
     </Sheet>
   );

@@ -12,7 +12,7 @@
  */
 
 import {
-  type FormFactor,
+  type DeviceSelection,
   type LighthouseCategory,
   type Throttling,
   LIGHTHOUSE_CATEGORIES,
@@ -35,8 +35,12 @@ export type ResultsView = "table" | "cards";
 
 /** The full set of remembered audit defaults. */
 export interface AuditDefaults {
-  /** Default emulated device for a new audit. */
-  formFactor: FormFactor;
+  /**
+   * Default device selection for a new audit (PRD §6 Phase 12). Widened from a
+   * single {@link FormFactor} to a {@link DeviceSelection} so `"both"` (audit each
+   * URL on mobile AND desktop) can be remembered like any other device choice.
+   */
+  formFactor: DeviceSelection;
   /** Default throttling method (simulated = Lantern, applied = DevTools). */
   throttling: Throttling;
   /** Default median-of-N runs (MIN_RUNS..MAX_RUNS). */
@@ -107,8 +111,9 @@ export const MATCH_DEVTOOLS_PRESET: Partial<AuditDefaults> = {
  * blob — bump the suffix and old data is simply ignored (normaliser falls back).
  * v2 added throttling / accuracyMode / cpuSlowdownMultiplier (Phase 9).
  * v3 added resultsView (Phase 11).
+ * v4 widened formFactor to DeviceSelection — it can now hold "both" (Phase 12).
  */
-export const SETTINGS_STORAGE_KEY = "lighthouse:audit-defaults:v3";
+export const SETTINGS_STORAGE_KEY = "lighthouse:audit-defaults:v4";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -161,8 +166,14 @@ export function sanitizeThresholds(value: unknown): CategoryThresholds {
  */
 export function normalizeDefaults(raw: unknown): AuditDefaults {
   const source = isRecord(raw) ? raw : {};
-  const formFactor: FormFactor =
-    source.formFactor === "desktop" ? "desktop" : "mobile";
+  // Widened to DeviceSelection (Phase 12): "desktop" / "both" pass through,
+  // anything else (including legacy/garbage) coerces to "mobile".
+  const formFactor: DeviceSelection =
+    source.formFactor === "desktop"
+      ? "desktop"
+      : source.formFactor === "both"
+        ? "both"
+        : "mobile";
   const throttling: Throttling =
     source.throttling === "applied" ? "applied" : "simulated";
   return {
