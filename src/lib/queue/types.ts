@@ -141,6 +141,12 @@ export interface Batch {
    * are one click from the Phase-6 compare / trend of the same URLs.
    */
   priorBatchId?: string;
+  /**
+   * The schedule that fired this batch (PRD §6 Phase 14); `undefined` for ad-hoc
+   * batches. Surfaced so the Archive view can group batches by schedule for
+   * day-over-day trends.
+   */
+  scheduleId?: string;
   jobs: AuditJob[];
   counts: BatchCounts;
   createdAt: string;
@@ -201,6 +207,12 @@ export interface CreateBatchInput {
    * the new {@link Batch} (and persisted) for lineage; does not affect execution.
    */
   priorBatchId?: string;
+  /**
+   * When set, the id of the schedule that fired this batch (PRD §6 Phase 14).
+   * Recorded on the new {@link Batch} (and persisted) so the Archive view can
+   * group batches by schedule. Never affects execution.
+   */
+  scheduleId?: string;
 }
 
 /**

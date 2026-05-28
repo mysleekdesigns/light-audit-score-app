@@ -2,6 +2,7 @@
 
 import { useCallback, useId, useMemo, useState, type ReactNode } from "react";
 import {
+  CalendarPlus,
   Crosshair,
   Gauge,
   ListPlus,
@@ -14,6 +15,8 @@ import { parseUrls } from "@/lib/parseUrls";
 import type { CreateBatchRequest } from "@/lib/client/auditClient";
 import { CrawlPanel } from "@/components/audit/crawl-panel";
 import { RunConfigCard } from "@/components/audit/run-config-card";
+import { SaveScheduleDialog } from "@/components/archive/save-schedule-dialog";
+import type { ScheduleTarget } from "@/lib/schedules/types";
 import type {
   DeviceSelection,
   LighthouseCategory,
@@ -270,6 +273,22 @@ export function NewAuditForm({
     setCategories(next);
     update({ categories: next });
   }
+
+  // Save-as-daily dialog — opened by a small affordance next to "Match DevTools"
+  // (PRD §6 Phase 14). The dialog itself owns the POST + toast; here we only
+  // gate on whether the active tab actually has a target ready.
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+
+  // The schedule target seeded from the active tab. For the paste tab this is a
+  // straightforward `urls` target. For the crawl tab we persist the *resolved*
+  // discovered URLs (the panel doesn't surface its spec upstream), which the
+  // scheduler will fire as-is — re-discovery on each fire is a future iteration.
+  const scheduleTarget = useMemo<ScheduleTarget>(
+    () => ({ kind: "urls", urls }),
+    [urls],
+  );
+
+  const canSaveSchedule = urls.length > 0 && !isRunning;
 
   function handleSubmit() {
     if (!canSubmit) return;
@@ -591,6 +610,21 @@ export function NewAuditForm({
                       <Crosshair data-icon="inline-start" />
                       Match DevTools
                     </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setScheduleOpen(true)}
+                      disabled={!canSaveSchedule}
+                      title={
+                        canSaveSchedule
+                          ? "Save these targets + options as a daily schedule"
+                          : "Add at least one URL before saving as daily"
+                      }
+                    >
+                      <CalendarPlus data-icon="inline-start" />
+                      Save as daily
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -635,6 +669,22 @@ export function NewAuditForm({
       </Card>
 
       {results}
+
+      <SaveScheduleDialog
+        open={scheduleOpen}
+        onOpenChange={setScheduleOpen}
+        target={scheduleTarget}
+        options={{
+          formFactor: device === "both" ? "mobile" : device,
+          throttling,
+          categories,
+          runs,
+          cpuSlowdownMultiplier,
+        }}
+        concurrency={concurrency}
+        device={device}
+        accuracyMode={accuracyMode}
+      />
     </div>
   );
 }

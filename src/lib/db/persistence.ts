@@ -100,6 +100,11 @@ export interface BatchInfo {
    * Surfaced so a re-run card can show its lineage.
    */
   priorBatchId: string | null;
+  /**
+   * The schedule that fired this batch (PRD §6 Phase 14), or null for ad-hoc batches.
+   * The Archive view groups batches by `scheduleId` for day-over-day trends.
+   */
+  scheduleId: string | null;
   /** ISO timestamps for the batch lifecycle. */
   createdAt: string;
   startedAt: string | null;
@@ -147,6 +152,7 @@ export function recordBatch(batch: Batch): void {
         concurrency: batch.concurrency,
         total: batch.jobs.length,
         priorBatchId: batch.priorBatchId ?? null,
+        scheduleId: batch.scheduleId ?? null,
         createdAt: batch.createdAt,
         startedAt: batch.startedAt ?? null,
         finishedAt: batch.finishedAt ?? null,
@@ -415,6 +421,7 @@ function rowToBatchInfo(row: BatchRow): BatchInfo {
     concurrency: row.concurrency,
     total: row.total,
     priorBatchId: row.priorBatchId ?? null,
+    scheduleId: row.scheduleId ?? null,
     createdAt: row.createdAt,
     startedAt: row.startedAt,
     finishedAt: row.finishedAt,

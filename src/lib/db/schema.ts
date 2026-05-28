@@ -38,6 +38,11 @@ export const batches = sqliteTable("batches", {
    * are one click from the Phase-6 compare / trend of the same URLs.
    */
   priorBatchId: text("prior_batch_id"),
+  /**
+   * The schedule that fired this batch (PRD §6 Phase 14). Null for ad-hoc batches.
+   * Lets the Archive view group runs by schedule for day-over-day trends.
+   */
+  scheduleId: text("schedule_id"),
   /** ISO timestamps for the batch lifecycle. */
   createdAt: text("created_at").notNull(),
   startedAt: text("started_at"),
@@ -98,7 +103,52 @@ export const runs = sqliteTable("runs", {
   createdAt: text("created_at").notNull(),
 });
 
+/**
+ * Scheduled recurring batches (PRD §6 Phase 14 — Scheduled daily archive).
+ *
+ * One row per saved schedule. The target is *either* a fixed URL list (URLs JSON
+ * is non-empty, crawlSpec is null) *or* a crawl spec (crawlSpec JSON is non-null,
+ * URLs may be empty). Cadence is daily-at-HH:MM (24h, server-local), recorded as
+ * the literal string `HH:MM` so the local scheduler can resolve next-fire purely.
+ * `lastFiredAt` / `lastBatchId` close the loop with the existing `batches` table:
+ * the Archive view groups runs by `schedule_id` (via `batches.scheduleId`).
+ */
+export const schedules = sqliteTable("schedules", {
+  /** Schedule id (nanoid). */
+  id: text("id").primaryKey(),
+  /** Human-readable name (free text; defaults to a target-derived hint when empty). */
+  name: text("name").notNull(),
+  /** When false, the local scheduler will never fire this row. */
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  /** Cadence: daily at HH:MM (24h, server-local). */
+  cadence: text("cadence").notNull(),
+  /** "HH:MM" 24h. Validated by the scheduler module on read/write. */
+  time: text("time").notNull(),
+  /** Fixed URL list as JSON (`string[]`) — non-empty for `urls` targets. */
+  urls: text("urls"),
+  /** Crawl spec as JSON (`CrawlSpec`) — present for `crawl` targets. */
+  crawlSpec: text("crawl_spec"),
+  /** Resolved `AuditOptions` as JSON (same shape `batches.options` stores). */
+  options: text("options").notNull(),
+  /** Resolved (clamped) concurrency to run each batch with. */
+  concurrency: integer("concurrency").notNull(),
+  /** `device` (PRD §6 Phase 12): "mobile" | "desktop" | "both". */
+  device: text("device").notNull(),
+  /** Accuracy-mode flag (PRD §6 Phase 9) applied to each fire. */
+  accuracyMode: integer("accuracy_mode", { mode: "boolean" }).notNull().default(false),
+  /** ISO timestamp this schedule last fired, or null. */
+  lastFiredAt: text("last_fired_at"),
+  /** Last batch id this schedule produced (null until it has fired). */
+  lastBatchId: text("last_batch_id"),
+  /** ISO creation timestamp. */
+  createdAt: text("created_at").notNull(),
+  /** ISO timestamp of the last edit. */
+  updatedAt: text("updated_at").notNull(),
+});
+
 export type BatchRow = typeof batches.$inferSelect;
 export type NewBatchRow = typeof batches.$inferInsert;
 export type RunRow = typeof runs.$inferSelect;
 export type NewRunRow = typeof runs.$inferInsert;
+export type ScheduleRow = typeof schedules.$inferSelect;
+export type NewScheduleRow = typeof schedules.$inferInsert;

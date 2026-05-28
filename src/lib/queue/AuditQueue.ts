@@ -204,6 +204,9 @@ export class AuditQueue implements AuditQueueApi {
       concurrency,
       // Re-run lineage (PRD §6 Phase 13): null/undefined for fresh batches.
       priorBatchId: input.priorBatchId,
+      // Schedule lineage (PRD §6 Phase 14): set when fired by the local scheduler,
+      // undefined for ad-hoc batches.
+      scheduleId: input.scheduleId,
       jobs,
       counts: computeCounts(jobs),
       createdAt,

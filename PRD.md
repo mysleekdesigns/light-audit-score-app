@@ -11,7 +11,32 @@
 > (Phases 11–14). (The swing layout was analysed from a full-page screenshot — its live site blocks
 > automated fetch behind an invalid-cert-authority, so crawl/stealth/fetch all failed.)
 
-> **Status:** Phase 13 complete — **Re-run / Regenerate + crawl exclude-paths & max-count**, a small power-user
+> **Status:** Phase 14 complete — **all 15 phases (0–14) are done.** The **Scheduled daily archive** layer adds a tiny
+> `globalThis`-pinned scheduler that fires saved targets through the *existing* `AuditQueue.createBatch` path (no new
+> queue — just a new caller), with the dark "precision-instrument" identity preserved verbatim. A new `schedules` table
+> (migration `0003_sharp_professor_monster.sql`, self-healing on first DB access like Phases 4/10/13) stores `name`,
+> `enabled`, `cadence` (daily) + `time` (HH:MM 24h, server-local), a discriminated target (`urls` list OR re-runnable
+> `crawl` spec), the same `AuditOptions` shape the queue already consumes, plus `last_fired_at` / `last_batch_id` for
+> lifecycle; the migration also adds a nullable `batches.schedule_id` so the Archive view can group batches by schedule.
+> Pure unit-tested cadence math (`src/lib/schedules/cadence.ts` → `shouldFireNow`/`nextFireAt`) drives a minute-ticking
+> singleton (`getScheduler()`) booted from a new `src/instrumentation.ts` (Next 16's official Node-runtime startup
+> hook); each fire resolves the target (URL list direct, or re-runs `discover()` for a crawl spec), submits via the
+> unchanged queue with `scheduleId` set, and calls `recordScheduleFire(id, batchId)`. The seam threads `scheduleId`
+> through `CreateBatchInput` → `Batch` → `recordBatch` → `BatchInfo` (lineage only, never affects execution). A new
+> `/archive` route (SSR mirroring `/history`) renders a client `ArchiveConsole` with one card per schedule (telemetry
+> strip · Cadence · Next run · Last run · Total runs · per-`scheduleId` run-history strip), Run now / Pause / Enable /
+> Delete actions (POST `/api/schedules/:id/run`, PATCH/DELETE `/api/schedules/:id`, `router.refresh()` after each), and
+> a "Save as daily" affordance was wired into the New-Audit form via a shadcn `SaveScheduleDialog`. **Verified for
+> real:** a live `POST /api/schedules` created schedule `h4GrAlDxrhRPW5DDXIn0C`; `POST /api/schedules/:id/run`
+> force-fired it, producing batch `8Vs5WCjtzwyAPn_aG-epY` with `scheduleId` set, scores **`perf 100 / seo 80`**
+> (identical to the Phase-13 example.com baseline); the schedule's `lastFiredAt`/`lastBatchId` updated; SSR `/archive`
+> rendered the card with the action buttons; PATCH disable → re-enable round-tripped; an invalid `"25:99"` time → HTTP
+> 400 `{code:"invalid_request", issues:[{path:"time", …}]}`; DELETE → 204. The fast-forwarded-clock test
+> (`scheduler.test.ts`, 9 tests) asserts due → fire → record-lineage, second-tick no-op, disabled-skip, empty-URLs
+> guard, sibling-failure isolation, and `runNow` behaviour. Lint, typecheck, build, and **394 unit tests** all green
+> (Phase 14 added **49** new tests — 11 cadence, 29 schedules-schema, 9 scheduler).
+>
+> **Status (Phase 13):** Phase 13 complete — **Re-run / Regenerate + crawl exclude-paths & max-count**, a small power-user
 > pass with the dark "precision-instrument" identity preserved verbatim (no new colours/fonts; the re-run button,
 > lineage chip and exclude-paths field reuse only existing primitives). **Re-run** records lineage via a new
 > nullable `batches.prior_batch_id` (migration `0002`, self-healing) threaded `CreateBatchRequest` →
@@ -826,18 +851,70 @@ storage.
 effort; the only phase that adds architecture (a *local* scheduler, consistent with §5's "single-user,
 no Redis / cron" rationale).
 
-- [ ] **Schedule model**: a `schedules` table (target = a saved URL set *or* a crawl spec, + audit
+- [x] **Schedule model**: a `schedules` table (target = a saved URL set *or* a crawl spec, + audit
       options + cadence e.g. daily @ HH:MM + enabled flag) with a Drizzle migration (self-healing like
       Phase 4).
-- [ ] **Local scheduler**: a `globalThis`-pinned singleton (same HMR-safe pattern as `AuditQueue` / the
+      *Done: `schedules` (`src/lib/db/schema.ts`) carries `id`/`name`/`enabled`/`cadence`/`time`/`urls`/
+      `crawl_spec`/`options`/`concurrency`/`device`/`accuracy_mode`/`last_fired_at`/`last_batch_id`/
+      `created_at`/`updated_at`; the target is either a URL list (`urls` JSON non-null) or a crawl spec
+      (`crawl_spec` JSON non-null). Migration `0003_sharp_professor_monster.sql` adds the table **and**
+      a nullable `batches.schedule_id` so the Archive view can group batches by schedule (self-healing
+      on first DB access via the Phase-4 runtime migrator). The seam types are in
+      `src/lib/schedules/types.ts` (`Schedule`, `CreateScheduleInput`, `ScheduleTarget`, `isValidTime`)
+      and the never-throwing persistence layer is `src/lib/db/schedules.ts` (`createSchedule`,
+      `updateSchedule`, `recordScheduleFire`, `deleteSchedule`, `getSchedule`, `listSchedules`).*
+- [x] **Local scheduler**: a `globalThis`-pinned singleton (same HMR-safe pattern as `AuditQueue` / the
       DB client) that, on cadence, submits the saved target through the existing queue — no external
       cron / Redis, runs offline.
-- [ ] **Archive view** (`/archive`, new nav tab): list scheduled targets + their run history over time,
+      *Done: pure unit-tested cadence math (`src/lib/schedules/cadence.ts` → `shouldFireNow`/
+      `nextFireAt`/`lastDueMoment`; daily semantics: not-yet-fired ⇒ due once `now ≥ lastDueMoment`;
+      already fired ⇒ wait until the next cutoff) drives a tiny tick singleton
+      (`src/lib/schedules/scheduler.ts`, `getScheduler()` pinned to `globalThis`) booted from
+      `src/instrumentation.ts` (Next 16 startup hook, Node-runtime only, no-op in vitest via
+      `LH_SCHEDULER_DISABLED=1`). The scheduler ticks once a minute; each fire resolves the target
+      (URL list direct, or re-runs `discover()` for a crawl spec), submits via the unchanged
+      `getAuditQueue().createBatch({ …, scheduleId })`, and calls `recordScheduleFire`. `scheduleId`
+      threads through `CreateBatchInput` → `Batch` → `recordBatch` → `BatchInfo` (lineage only, never
+      affects execution). `fireSchedule` never throws, so a broken schedule can't poison the loop.*
+- [x] **Archive view** (`/archive`, new nav tab): list scheduled targets + their run history over time,
       reusing the Phase-6 trend / compare helpers for day-over-day deltas; create / pause / delete
       schedules here and via a "save as daily" affordance on the New-Audit form.
-- [ ] **Verify**: a schedule fires on cadence (fast-forwarded clock in test) → persisted batch; the
+      *Done: SSR `/archive` (`src/app/archive/page.tsx`, mirrors `/history/page.tsx`) reads
+      `listSchedules()` + `listBatches()` and renders a client `ArchiveConsole`
+      (`src/components/archive/archive-console.tsx`) — one card per schedule with a telemetry strip
+      (Cadence · Next run · Last run · Total runs), per-card actions Run now / Pause / Enable / Delete
+      (POST `/api/schedules/:id/run`, PATCH/DELETE `/api/schedules/:id`, `router.refresh()` after each),
+      and a dense per-`scheduleId` run-history strip. A new shadcn `SaveScheduleDialog` is wired into
+      `new-audit-form.tsx` as the "Save as daily" affordance (next to Match DevTools), seeded with the
+      form's current state (urls/options/concurrency/device/accuracyMode); the dialog captures name +
+      HH:MM and POSTs `/api/schedules`. The `site-header` gained an "Archive" nav entry. The visual
+      identity is preserved verbatim — dark cards with hairline borders, uppercase mono telemetry, no
+      new colours/fonts. **Deviation:** the form's "Save as daily" persists the resolved URL list (a
+      `urls` target), not the underlying crawl spec, when the user is on the Crawl tab — the
+      `CrawlPanel` doesn't currently expose its spec upstream and lifting it is out of scope for this
+      phase. The schedule shape (and `parseCreateScheduleBody`) already supports `crawl` targets so a
+      future iteration can offer "save crawl spec" without a schema change.*
+- [x] **Verify**: a schedule fires on cadence (fast-forwarded clock in test) → persisted batch; the
       Archive view shows its run history + day-over-day trend and survives a dev HMR reset;
       lint / types / build / tests green.
+      *Verified for real against a production `next start` build. **Fast-forwarded clock:** the
+      scheduler test suite (`src/lib/schedules/scheduler.test.ts`, 9 tests) drives `tick(now)` directly
+      with synthetic `Date`s and asserts a due schedule fires + records `lastFiredAt`/`lastBatchId` +
+      creates a batch carrying `scheduleId`; a second tick within the same cycle is a no-op; a
+      disabled schedule is skipped; an empty-URLs crawl target and a sibling-fire failure are isolated;
+      `runNow` succeeds and 404s on unknown id. **Live end-to-end:** `POST /api/schedules`
+      (`time:"09:00"`, target `https://example.com`, perf+seo, mobile · simulated · 1 run) created
+      schedule `h4GrAlDxrhRPW5DDXIn0C`; `POST /api/schedules/:id/run` force-fired it, producing batch
+      `8Vs5WCjtzwyAPn_aG-epY` with `scheduleId` set, scores `perf 100 / seo 80` (identical to the
+      Phase-13 example.com baseline); the schedule's `lastFiredAt` + `lastBatchId` updated; SSR
+      `/archive` rendered "Daily example.com" with Run now / Pause / Schedule controls. PATCH disable
+      → re-enable round-tripped; an invalid `"25:99"` time returned HTTP 400 `{code:"invalid_request",
+      issues:[{path:"time", message:"time must be HH:MM (24h)."}]}`; DELETE returned 204 and the
+      schedule was gone. **HMR survival:** the scheduler is the same `globalThis`-pinned singleton
+      pattern that `AuditQueue` / `getDb` already use (and which Phase 4 verified survives HMR);
+      `instrumentation.ts` is the official Next 16 boot hook and re-running it is a no-op by
+      construction. Lint, typecheck, build, and **394 unit tests** all green (Phase 14 added 49 new
+      tests — 11 cadence, 29 schedules-schema, 9 scheduler).*
 
 ---
 
