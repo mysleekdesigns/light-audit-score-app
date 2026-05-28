@@ -176,6 +176,25 @@ describe("parseCreateBatchBody — device selection", () => {
   });
 });
 
+describe("parseCreateBatchBody — re-run lineage (priorBatchId)", () => {
+  it("passes through an explicit priorBatchId", () => {
+    const result = parseCreateBatchBody({
+      urls: ["https://example.com"],
+      priorBatchId: "src-batch-123",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.priorBatchId).toBe("src-batch-123");
+  });
+
+  it("leaves priorBatchId undefined when omitted", () => {
+    const result = parseCreateBatchBody({ urls: ["https://example.com"] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.priorBatchId).toBeUndefined();
+  });
+});
+
 describe("parseCreateBatchBody — concurrency clamping", () => {
   it("clamps above MAX_CONCURRENCY down to MAX_CONCURRENCY", () => {
     const result = parseCreateBatchBody({

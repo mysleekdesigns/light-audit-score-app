@@ -135,6 +135,12 @@ export interface Batch {
   options: AuditOptions;
   /** Resolved (clamped) concurrency this batch was created with. */
   concurrency: number;
+  /**
+   * The batch this one was created from via Re-run / Regenerate (PRD §6 Phase 13);
+   * `undefined` for originally-submitted batches. Recorded so a re-run's new runs
+   * are one click from the Phase-6 compare / trend of the same URLs.
+   */
+  priorBatchId?: string;
   jobs: AuditJob[];
   counts: BatchCounts;
   createdAt: string;
@@ -190,6 +196,11 @@ export interface CreateBatchInput {
    * concurrency — it only affects this batch's effective run.
    */
   accuracyMode?: boolean;
+  /**
+   * When set, the id of the batch this one re-runs (PRD §6 Phase 13). Recorded on
+   * the new {@link Batch} (and persisted) for lineage; does not affect execution.
+   */
+  priorBatchId?: string;
 }
 
 /**

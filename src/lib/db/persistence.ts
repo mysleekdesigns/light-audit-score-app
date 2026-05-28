@@ -58,6 +58,13 @@ export interface HistoryRow {
   formFactor: FormFactor;
   /** Number of runs the median was taken over (null for failures). */
   runs: number | null;
+  /**
+   * Resolved {@link AuditOptions} the run used (parsed from the row's options JSON).
+   * Lets a Re-run (PRD §6 Phase 13) reproduce a single page with full fidelity
+   * (categories / throttling / cpu multiplier), not just its device. Falls back to
+   * a minimal mobile/simulated default if the column can't be parsed.
+   */
+  options: AuditOptions;
   /** Median category scores (0–100), assembled from the row's score columns. */
   scores: CategoryScores;
   /** Median Core Web Vitals (parsed from the row's JSON; null for failures). */
@@ -88,6 +95,11 @@ export interface BatchInfo {
   concurrency: number;
   /** Number of jobs in the batch. */
   total: number;
+  /**
+   * The batch this one re-runs (PRD §6 Phase 13), or null for a fresh batch.
+   * Surfaced so a re-run card can show its lineage.
+   */
+  priorBatchId: string | null;
   /** ISO timestamps for the batch lifecycle. */
   createdAt: string;
   startedAt: string | null;
@@ -134,6 +146,7 @@ export function recordBatch(batch: Batch): void {
         options: JSON.stringify(batch.options),
         concurrency: batch.concurrency,
         total: batch.jobs.length,
+        priorBatchId: batch.priorBatchId ?? null,
         createdAt: batch.createdAt,
         startedAt: batch.startedAt ?? null,
         finishedAt: batch.finishedAt ?? null,
@@ -353,6 +366,14 @@ function rowToEnvironment(row: RunRow): RunEnvironment | null {
   };
 }
 
+/** Minimal options fallback when a row's options JSON is missing/unparseable. */
+const FALLBACK_OPTIONS: AuditOptions = {
+  formFactor: "mobile",
+  throttling: "simulated",
+  categories: [],
+  runs: 1,
+};
+
 /** Flatten a `runs` row into a {@link HistoryRow}. */
 function rowToHistory(row: RunRow): HistoryRow {
   const scores: CategoryScores = {
@@ -370,6 +391,9 @@ function rowToHistory(row: RunRow): HistoryRow {
     errorMessage: row.errorMessage,
     formFactor: row.formFactor === "desktop" ? "desktop" : "mobile",
     runs: row.runs,
+    options:
+      safeParse<AuditOptions>(row.options, "rowToHistory:options") ??
+      FALLBACK_OPTIONS,
     scores,
     metrics: safeParse<CoreWebVitals>(row.metrics, "rowToHistory:metrics"),
     environment: rowToEnvironment(row),
@@ -385,14 +409,12 @@ function rowToBatchInfo(row: BatchRow): BatchInfo {
   return {
     id: row.id,
     status: row.status as BatchStatus,
-    options: (safeParse<AuditOptions>(row.options, "rowToBatchInfo:options") ?? {
-      formFactor: "mobile",
-      throttling: "simulated",
-      categories: [],
-      runs: 1,
-    }) as AuditOptions,
+    options:
+      safeParse<AuditOptions>(row.options, "rowToBatchInfo:options") ??
+      FALLBACK_OPTIONS,
     concurrency: row.concurrency,
     total: row.total,
+    priorBatchId: row.priorBatchId ?? null,
     createdAt: row.createdAt,
     startedAt: row.startedAt,
     finishedAt: row.finishedAt,

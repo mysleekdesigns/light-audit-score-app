@@ -202,6 +202,8 @@ export class AuditQueue implements AuditQueueApi {
       // job overrides this with its own `device` when the engine runs.
       options: { ...input.options, formFactor: formFactors[0] },
       concurrency,
+      // Re-run lineage (PRD §6 Phase 13): null/undefined for fresh batches.
+      priorBatchId: input.priorBatchId,
       jobs,
       counts: computeCounts(jobs),
       createdAt,

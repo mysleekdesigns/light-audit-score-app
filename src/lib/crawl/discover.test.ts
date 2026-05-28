@@ -10,7 +10,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { discover } from "@/lib/crawl/discover";
-import type { DiscoverInput } from "@/lib/crawl/types";
+import {
+  compileExcludePathMatcher,
+  type DiscoverInput,
+} from "@/lib/crawl/types";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -58,6 +61,7 @@ function input(overrides: Partial<DiscoverInput> = {}): DiscoverInput {
     useCrawl: false,
     maxDepth: 2,
     maxPages: 50,
+    excludePaths: [],
     ...overrides,
   };
 }
@@ -250,6 +254,109 @@ describe("discover — dedupe across sources + caps", () => {
     const result = await discover(input({ useSitemap: true, maxPages: 10 }));
     expect(result.totalFound).toBe(1);
     expect(result.warnings.some((w) => /truncated/i.test(w))).toBe(false);
+  });
+});
+
+describe("compileExcludePathMatcher", () => {
+  it("returns a predicate that is always false for empty patterns", () => {
+    const matcher = compileExcludePathMatcher([]);
+    expect(matcher("/")).toBe(false);
+    expect(matcher("/anything")).toBe(false);
+  });
+
+  it("ignores blank/whitespace-only patterns (→ always false)", () => {
+    const matcher = compileExcludePathMatcher(["", "   "]);
+    expect(matcher("/blog")).toBe(false);
+  });
+
+  it("prefix-matches a pattern without a wildcard", () => {
+    const matcher = compileExcludePathMatcher(["/blog"]);
+    expect(matcher("/blog")).toBe(true);
+    expect(matcher("/blog/")).toBe(true);
+    expect(matcher("/blog/post-1")).toBe(true);
+    expect(matcher("/about")).toBe(false);
+  });
+
+  it("normalizes a leading slash (pattern and pathname)", () => {
+    const matcher = compileExcludePathMatcher(["blog"]);
+    expect(matcher("/blog/post")).toBe(true);
+    expect(matcher("blog/post")).toBe(true);
+  });
+
+  it("glob-matches /admin/* against any sub-path", () => {
+    const matcher = compileExcludePathMatcher(["/admin/*"]);
+    expect(matcher("/admin/users")).toBe(true);
+    expect(matcher("/admin/deep/nested")).toBe(true);
+    expect(matcher("/public")).toBe(false);
+  });
+
+  it("glob-matches *.pdf as a suffix anchored at both ends", () => {
+    const matcher = compileExcludePathMatcher(["*.pdf"]);
+    expect(matcher("/docs/report.pdf")).toBe(true);
+    expect(matcher("/report.pdf")).toBe(true);
+    expect(matcher("/report.pdf.html")).toBe(false);
+    expect(matcher("/report.html")).toBe(false);
+  });
+
+  it("treats ? as a single-character wildcard", () => {
+    const matcher = compileExcludePathMatcher(["/page-?"]);
+    expect(matcher("/page-1")).toBe(true);
+    expect(matcher("/page-12")).toBe(false);
+  });
+
+  it("is case-sensitive", () => {
+    const matcher = compileExcludePathMatcher(["/Blog"]);
+    expect(matcher("/Blog")).toBe(true);
+    expect(matcher("/blog")).toBe(false);
+  });
+
+  it("escapes regex metacharacters in non-wildcard portions", () => {
+    const matcher = compileExcludePathMatcher(["/a.b*"]);
+    expect(matcher("/a.b/c")).toBe(true);
+    expect(matcher("/axb/c")).toBe(false);
+  });
+});
+
+describe("discover — exclude paths", () => {
+  it("omits matching URLs from BOTH sitemap and crawl, keeping the rest", async () => {
+    stubRoutes({
+      [`${ORIGIN}/sitemap.xml`]: SITEMAP_XML(
+        `${ORIGIN}/admin/dashboard`, // crawl: excluded by /admin/*
+        `${ORIGIN}/about`, // kept
+      ),
+      [`${ORIGIN}/`]: page(`${ORIGIN}/blog/post-1`, `${ORIGIN}/contact`),
+      [`${ORIGIN}/contact`]: page(),
+    });
+    const result = await discover(
+      input({
+        useSitemap: true,
+        useCrawl: true,
+        maxDepth: 1,
+        excludePaths: ["/admin/*", "/blog"],
+      }),
+    );
+    const urls = result.urls.map((u) => u.url);
+    // Sitemap-sourced excluded URL is gone; sitemap-sourced kept URL remains.
+    expect(urls).not.toContain(`${ORIGIN}/admin/dashboard`);
+    expect(urls).toContain(`${ORIGIN}/about`);
+    // Crawl-sourced excluded link (the /blog prefix) is gone; sibling remains.
+    expect(urls.some((u) => u.includes("/blog"))).toBe(false);
+    expect(urls).toContain(`${ORIGIN}/contact`);
+    // One summarizing warning is pushed.
+    expect(
+      result.warnings.some((w) => /excluded \d+ url\(s\)/i.test(w)),
+    ).toBe(true);
+  });
+
+  it("does not warn about exclusions when nothing matches", async () => {
+    stubRoutes({
+      [`${ORIGIN}/sitemap.xml`]: SITEMAP_XML(`${ORIGIN}/about`),
+    });
+    const result = await discover(
+      input({ useSitemap: true, excludePaths: ["/admin/*"] }),
+    );
+    expect(result.urls.map((u) => u.url)).toEqual([`${ORIGIN}/about`]);
+    expect(result.warnings.some((w) => /excluded/i.test(w))).toBe(false);
   });
 });
 

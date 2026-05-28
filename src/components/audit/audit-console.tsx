@@ -9,6 +9,10 @@
  *  - renders {@link AuditResults} (the live per-URL grid) off the streamed batch;
  *  - opens {@link AuditDetailSheet} for a selected job;
  *  - raises sonner toasts on submit failure and on batch completion.
+ *
+ * `initialBatchId` (PRD §6 Phase 13) lets a Re-run elsewhere (Batch summary /
+ * History) deep-link here via `/?watch=<batchId>` to watch the re-run stream live
+ * — it just seeds the watched batch; the SSE handler replays a snapshot on connect.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -25,8 +29,13 @@ import {
 } from "@/lib/client/auditClient";
 import type { AuditJob } from "@/lib/queue/types";
 
-export function AuditConsole() {
-  const [batchId, setBatchId] = useState<string | null>(null);
+export function AuditConsole({
+  initialBatchId,
+}: {
+  /** Seed a batch to watch live (e.g. a Re-run deep-linked via `/?watch=<id>`). */
+  initialBatchId?: string;
+} = {}) {
+  const [batchId, setBatchId] = useState<string | null>(initialBatchId ?? null);
   const [submitting, setSubmitting] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);

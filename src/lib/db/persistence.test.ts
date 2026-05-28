@@ -307,4 +307,33 @@ describe("persistence", () => {
   it("listBatches returns [] when there are no batches", () => {
     expect(listBatches()).toEqual([]);
   });
+
+  it("persists and reads back a re-run's priorBatchId (null for fresh batches)", () => {
+    // PRD §6 Phase 13: a fresh batch records no lineage; a re-run records the source.
+    const fresh = makeBatch("b-fresh", [makeJob("rf", 0, "https://f.test/")]);
+    recordBatch(fresh);
+    const rerun: Batch = {
+      ...makeBatch("b-rerun", [makeJob("rr", 0, "https://f.test/")]),
+      priorBatchId: "b-fresh",
+    };
+    recordBatch(rerun);
+
+    const byId = new Map(listBatches().map((b) => [b.id, b]));
+    expect(byId.get("b-fresh")!.priorBatchId).toBeNull();
+    expect(byId.get("b-rerun")!.priorBatchId).toBe("b-fresh");
+  });
+
+  it("exposes the run's resolved options on each HistoryRow (for single-page re-run)", async () => {
+    // PRD §6 Phase 13: a History row carries its full AuditOptions so a re-run can
+    // reproduce the page with the same categories / throttling, not just its device.
+    const job = makeJob("r-opts", 0, "https://opts.test/");
+    const batch = makeBatch("b-opts", [job]);
+    recordBatch(batch);
+    await recordRun(batch, job, makeResult("https://opts.test/"));
+
+    const row = listHistory().find((r) => r.id === "r-opts")!;
+    expect(row.options.categories).toEqual(OPTIONS.categories);
+    expect(row.options.throttling).toBe("simulated");
+    expect(row.options.runs).toBe(3);
+  });
 });

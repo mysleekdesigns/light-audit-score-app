@@ -154,6 +154,29 @@ describe("AuditQueue", () => {
     });
   });
 
+  it("records a re-run's priorBatchId on the batch (undefined for a fresh batch)", () => {
+    // PRD §6 Phase 13: lineage is recorded but does not affect execution.
+    mockRunAudit.mockResolvedValue(makeResult("https://a.test/", 90));
+    const queue = new AuditQueue();
+
+    const fresh = queue.createBatch({
+      urls: ["https://a.test/"],
+      device: "mobile",
+      options: OPTIONS,
+      concurrency: 1,
+    });
+    expect(fresh.priorBatchId).toBeUndefined();
+
+    const rerun = queue.createBatch({
+      urls: ["https://a.test/"],
+      device: "mobile",
+      options: OPTIONS,
+      concurrency: 1,
+      priorBatchId: fresh.id,
+    });
+    expect(rerun.priorBatchId).toBe(fresh.id);
+  });
+
   it("fans a 'both' batch out into a mobile + desktop job per URL with contiguous indices", () => {
     mockRunAudit.mockResolvedValue(makeResult("https://a.test/", 90));
     const queue = new AuditQueue();

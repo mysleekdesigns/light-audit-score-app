@@ -25,6 +25,8 @@ import {
   DEFAULT_PAGES,
   DEFAULT_USE_CRAWL,
   DEFAULT_USE_SITEMAP,
+  MAX_EXCLUDE_PATH_LENGTH,
+  MAX_EXCLUDE_PATHS,
   type DiscoverInput,
 } from "./types";
 
@@ -59,7 +61,32 @@ const httpUrlSchema = z
  *  - `useSitemap` / `useCrawl`: optional booleans, defaulted per the contract.
  *  - `maxDepth` / `maxPages`: optional finite numbers, resolved via
  *    `clampDepth` / `clampPages` and defaulted when omitted.
+ *  - `excludePaths`: optional `string[]`, defaulted to `[]`. Reject more than
+ *    `MAX_EXCLUDE_PATHS` entries; per entry, reject empty/whitespace-only and
+ *    anything longer than `MAX_EXCLUDE_PATH_LENGTH` chars. On success each entry
+ *    is normalized to its trimmed form. An invalid entry rejects the whole
+ *    request (→ structured 400), so the engine only ever sees clean patterns.
  */
+const excludePathSchema = z
+  .string("Each exclude path must be a string.")
+  .superRefine((value, ctx) => {
+    const trimmed = value.trim();
+    if (trimmed === "") {
+      ctx.addIssue({
+        code: "custom",
+        message: "Exclude path must not be empty.",
+      });
+      return;
+    }
+    if (trimmed.length > MAX_EXCLUDE_PATH_LENGTH) {
+      ctx.addIssue({
+        code: "custom",
+        message: `Exclude path must be at most ${MAX_EXCLUDE_PATH_LENGTH} characters.`,
+      });
+    }
+  })
+  .transform((value) => value.trim());
+
 export const discoverBodySchema = z.object({
   url: httpUrlSchema,
   useSitemap: z.boolean().optional().default(DEFAULT_USE_SITEMAP),
@@ -72,6 +99,11 @@ export const discoverBodySchema = z.object({
     .number("maxPages must be a number.")
     .optional()
     .transform((n) => (n === undefined ? DEFAULT_PAGES : clampPages(n))),
+  excludePaths: z
+    .array(excludePathSchema)
+    .max(MAX_EXCLUDE_PATHS, `At most ${MAX_EXCLUDE_PATHS} exclude paths allowed.`)
+    .optional()
+    .default([]),
 });
 
 /**
@@ -113,6 +145,10 @@ export function parseDiscoverBody(raw: unknown): ParseDiscoverResult {
   if (!result.success) {
     return { ok: false, issues: toApiIssues(result.error) };
   }
-  const { url, useSitemap, useCrawl, maxDepth, maxPages } = result.data;
-  return { ok: true, value: { url, useSitemap, useCrawl, maxDepth, maxPages } };
+  const { url, useSitemap, useCrawl, maxDepth, maxPages, excludePaths } =
+    result.data;
+  return {
+    ok: true,
+    value: { url, useSitemap, useCrawl, maxDepth, maxPages, excludePaths },
+  };
 }

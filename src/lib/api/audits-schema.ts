@@ -76,6 +76,9 @@ export const createBatchBodySchema = z.object({
   // Accuracy mode (PRD §6 Phase 9): when true the queue forces effective
   // concurrency to 1 if Performance is in scope, for DevTools-panel parity.
   accuracyMode: z.boolean().optional().default(false),
+  // Re-run lineage (PRD §6 Phase 13): the id of the batch this request re-runs.
+  // Optional and free-form (a nanoid) — recorded for lineage, never executed on.
+  priorBatchId: z.string().optional(),
 });
 
 /** Discriminated result of {@link parseCreateBatchBody}. */
@@ -105,10 +108,13 @@ export function parseCreateBatchBody(raw: unknown): ParseCreateBatchResult {
   }
   // `result.data` already satisfies CreateBatchInput (urls/options/concurrency
   // resolved); the explicit shape keeps the contract obvious to readers.
-  const { urls, options, concurrency, accuracyMode } = result.data;
+  const { urls, options, concurrency, accuracyMode, priorBatchId } = result.data;
   // Resolve the effective device (PRD §6 Phase 12): an explicit `device` wins;
   // otherwise an omitted device defaults to the options' concrete `formFactor`,
   // so older bodies (no `device`) behave as a single-device run unchanged.
   const device = result.data.device ?? result.data.options.formFactor;
-  return { ok: true, value: { urls, device, options, concurrency, accuracyMode } };
+  return {
+    ok: true,
+    value: { urls, device, options, concurrency, accuracyMode, priorBatchId },
+  };
 }

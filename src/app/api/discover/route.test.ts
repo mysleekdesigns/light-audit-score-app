@@ -59,6 +59,7 @@ describe("POST /api/discover — success", () => {
       useCrawl: true,
       maxDepth: 2,
       maxPages: 25,
+      excludePaths: [],
     });
   });
 

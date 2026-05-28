@@ -22,6 +22,12 @@ function makeRow(overrides: Partial<HistoryRow> & { id: string }): HistoryRow {
     errorMessage: overrides.errorMessage ?? null,
     formFactor: overrides.formFactor ?? "mobile",
     runs: overrides.runs ?? 3,
+    options: overrides.options ?? {
+      formFactor: "mobile",
+      throttling: "simulated",
+      categories: ["performance", "accessibility", "best-practices", "seo"],
+      runs: 3,
+    },
     scores: overrides.scores ?? {},
     metrics: overrides.metrics ?? null,
     environment: overrides.environment ?? null,

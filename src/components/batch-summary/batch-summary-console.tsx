@@ -18,6 +18,7 @@ import {
   ExternalLink,
   FileJson,
   Loader2,
+  RotateCw,
   Sheet,
   TriangleAlert,
 } from "lucide-react";
@@ -25,6 +26,7 @@ import { toast } from "sonner";
 
 import { DriftWarning } from "@/components/audit/drift-warning";
 import { EnvironmentBadge } from "@/components/audit/environment-badge";
+import { RerunBatchButton } from "@/components/audit/rerun-batch-button";
 import { ScoreRing } from "@/components/audit/score-ring";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -54,7 +56,10 @@ import {
 import { rowsToCsv, rowsToJson } from "@/lib/export/exporters";
 import { assessDrift, benchmarkIndexSpread } from "@/lib/lighthouse/drift";
 import { formatBenchmarkIndex } from "@/lib/lighthouse/environment-format";
-import { LIGHTHOUSE_CATEGORIES } from "@/lib/lighthouse/types";
+import {
+  LIGHTHOUSE_CATEGORIES,
+  type DeviceSelection,
+} from "@/lib/lighthouse/types";
 import { hasBothDevices } from "@/lib/pairing/devicePairs";
 import type { CategoryThresholds } from "@/lib/settings/defaults";
 import {
@@ -288,11 +293,18 @@ function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
   const StatusIcon = status.icon;
   const shortId = batch.id.slice(0, 8);
 
+  // Unique URLs across the runs, preserving order. A "both" batch lists each URL
+  // twice (mobile + desktop), so dedupe — the re-run's `device:"both"` re-fans it.
+  const rerunUrls = useMemo(
+    () => [...new Set(rows.map((row) => row.url))],
+    [rows],
+  );
+
   return (
     <Card>
       <CardHeader className="gap-3 border-b border-border/60 pb-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <span className="font-mono text-sm text-foreground tabular-nums">
               {shortId}
             </span>
@@ -309,9 +321,33 @@ function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
               />
               {status.label}
             </Badge>
+            {batch.priorBatchId ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge
+                    variant="outline"
+                    className="gap-1 border-border/60 font-mono text-[0.625rem] uppercase tracking-[0.14em] text-muted-foreground tabular-nums"
+                  >
+                    <RotateCw aria-hidden className="size-2.5" />
+                    re-run of {batch.priorBatchId.slice(0, 8)}
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent className="font-mono">
+                  Re-run of batch {batch.priorBatchId}
+                </TooltipContent>
+              </Tooltip>
+            ) : null}
           </div>
           <div className="flex items-center gap-3">
-            <BatchActions rows={rows} shortId={shortId} />
+            <BatchActions
+              rows={rows}
+              shortId={shortId}
+              rerunUrls={rerunUrls}
+              device={deviceLabel}
+              options={batch.options}
+              concurrency={batch.concurrency}
+              priorBatchId={batch.id}
+            />
             <span className="font-mono text-xs text-muted-foreground tabular-nums">
               {formatBatchAt(batch.createdAt)}
             </span>
@@ -424,14 +460,34 @@ function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
 interface BatchActionsProps {
   rows: HistoryRow[];
   shortId: string;
+  /** Unique URLs across the batch's runs (order-preserving), for the re-run. */
+  rerunUrls: string[];
+  /** Derived device selection for the batch (`"both"` re-fans mobile + desktop). */
+  device: DeviceSelection;
+  /** Resolved options the batch ran with, to reproduce on re-run. */
+  options: BatchInfo["options"];
+  /** Resolved concurrency the batch ran at, to reproduce on re-run. */
+  concurrency: number;
+  /** This batch's id — recorded as lineage on the re-run. */
+  priorBatchId: string;
 }
 
 /**
- * Per-batch export + bulk-open toolbar. Serializes this batch's runs to a file
- * (in the click handler, never on render) and opens every run that has a stored
- * HTML report in a new tab — warning via toast if the popup blocker stopped any.
+ * Per-batch re-run + export + bulk-open toolbar. Re-submits the batch's exact
+ * URLs + options through `POST /api/audits` (recording lineage) and deep-links
+ * to the live stream; serializes this batch's runs to a file (in the click
+ * handler, never on render); and opens every run that has a stored HTML report
+ * in a new tab — warning via toast if the popup blocker stopped any.
  */
-function BatchActions({ rows, shortId }: BatchActionsProps) {
+function BatchActions({
+  rows,
+  shortId,
+  rerunUrls,
+  device,
+  options,
+  concurrency,
+  priorBatchId,
+}: BatchActionsProps) {
   // Runs in this batch that actually have an HTML report to open.
   const openableHrefs = useMemo(
     () =>
@@ -470,6 +526,13 @@ function BatchActions({ rows, shortId }: BatchActionsProps) {
 
   return (
     <div className="flex items-center gap-1">
+      <RerunBatchButton
+        urls={rerunUrls}
+        device={device}
+        options={options}
+        concurrency={concurrency}
+        priorBatchId={priorBatchId}
+      />
       <Tooltip>
         <TooltipTrigger asChild>
           <Button

@@ -15,6 +15,7 @@ import { toast } from "sonner";
 
 import { CoreWebVitalsStrip } from "@/components/audit/core-web-vitals";
 import { EnvironmentBadge } from "@/components/audit/environment-badge";
+import { RerunBatchButton } from "@/components/audit/rerun-batch-button";
 import { ResultsViewToggle } from "@/components/audit/results-view-toggle";
 import { ScoreRings } from "@/components/audit/score-rings";
 import { Badge } from "@/components/ui/badge";
@@ -255,6 +256,27 @@ function ReportLinks({ row }: { row: HistoryRow }) {
   );
 }
 
+/**
+ * Per-run action cluster: re-run this single page (PRD §6 Phase 13) plus the
+ * report links. The re-run is available even for errored rows (re-run to retry),
+ * so it sits outside the report links (which collapse to `—` for failures).
+ */
+function RowActions({ row }: { row: HistoryRow }) {
+  return (
+    <div className="flex items-center justify-end gap-0.5">
+      <RerunBatchButton
+        iconOnly
+        urls={[row.url]}
+        device={row.formFactor}
+        options={row.options}
+        concurrency={1}
+        priorBatchId={row.batchId}
+      />
+      <ReportLinks row={row} />
+    </div>
+  );
+}
+
 /** The archive empty state, shared by the table and cards views. */
 function HistoryEmptyState({ isFiltering }: { isFiltering: boolean }) {
   return (
@@ -335,7 +357,7 @@ function HistoryRunCard({ row }: { row: HistoryRow }) {
           <EnvironmentBadge variant="compact" environment={row.environment} />
         ) : null}
         <div className="flex items-center justify-end">
-          <ReportLinks row={row} />
+          <RowActions row={row} />
         </div>
       </CardContent>
     </Card>
@@ -660,7 +682,7 @@ export function HistoryTable({ rows }: HistoryTableProps) {
                         </span>
                       </TableCell>
                       <TableCell className={cn(COMPACT_CELL, "text-right")}>
-                        <ReportLinks row={row} />
+                        <RowActions row={row} />
                       </TableCell>
                     </TableRow>
                   );

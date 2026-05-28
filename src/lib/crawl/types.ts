@@ -38,6 +38,11 @@ export const DEFAULT_USE_SITEMAP = true;
 /** Shallow BFS crawl on by default. */
 export const DEFAULT_USE_CRAWL = true;
 
+/** Max number of exclude-path patterns a request may carry. */
+export const MAX_EXCLUDE_PATHS = 50;
+/** Max length (chars) of a single exclude-path pattern. */
+export const MAX_EXCLUDE_PATH_LENGTH = 200;
+
 /** Clamp an arbitrary number into the allowed depth band (floored to int). */
 export function clampDepth(n: number): number {
   if (!Number.isFinite(n)) return DEFAULT_DEPTH;
@@ -48,6 +53,74 @@ export function clampDepth(n: number): number {
 export function clampPages(n: number): number {
   if (!Number.isFinite(n)) return DEFAULT_PAGES;
   return Math.min(MAX_PAGES, Math.max(MIN_PAGES, Math.floor(n)));
+}
+
+// --- Exclude-path matching --------------------------------------------------
+
+/** Regex-escape every character that is special in a JS RegExp. */
+function escapeRegExp(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Compile a set of exclude-path patterns into a pure, total predicate over a
+ * URL **pathname**. The returned function never throws and is the single source
+ * of truth for "should this URL be excluded?" (used by both the BFS crawl and
+ * the sitemap merge in `discover.ts`).
+ *
+ * Semantics (case-sensitive, matched against the pathname only):
+ *  - Each pattern is trimmed; empty entries are ignored (validation lives in
+ *    `schema.ts` — the matcher itself is tolerant so it can never throw).
+ *  - A leading `/` is optional: `blog` and `/blog` are equivalent (both the
+ *    pattern and the tested pathname are normalized to start with `/`).
+ *  - A pattern WITHOUT a `*` is a **prefix** match: `/blog` excludes `/blog`,
+ *    `/blog/`, and `/blog/post-1`.
+ *  - A pattern WITH `*` (or `?`) is a **glob** anchored at both ends, where `*`
+ *    matches any run of characters and `?` matches exactly one. All other regex
+ *    metacharacters are escaped. e.g. `*.pdf` excludes any path ending `.pdf`;
+ *    `/admin/*` excludes `/admin/anything`.
+ *  - When `patterns` is empty (after trimming), the predicate always returns
+ *    `false`.
+ */
+export function compileExcludePathMatcher(
+  patterns: string[],
+): (pathname: string) => boolean {
+  /** Normalize a pathname/pattern so it always starts with a single `/`. */
+  const withLeadingSlash = (value: string): string =>
+    value.startsWith("/") ? value : `/${value}`;
+
+  const prefixes: string[] = [];
+  const globs: RegExp[] = [];
+
+  for (const raw of patterns) {
+    const trimmed = raw.trim();
+    if (trimmed === "") continue;
+    if (trimmed.includes("*") || trimmed.includes("?")) {
+      const normalized = withLeadingSlash(trimmed);
+      // Escape everything, then re-open the `*` / `?` wildcards.
+      const body = escapeRegExp(normalized)
+        .replace(/\\\*/g, ".*")
+        .replace(/\\\?/g, ".");
+      globs.push(new RegExp(`^${body}$`));
+    } else {
+      prefixes.push(withLeadingSlash(trimmed));
+    }
+  }
+
+  if (prefixes.length === 0 && globs.length === 0) {
+    return () => false;
+  }
+
+  return (pathname: string): boolean => {
+    const path = withLeadingSlash(pathname);
+    for (const prefix of prefixes) {
+      if (path === prefix || path.startsWith(prefix)) return true;
+    }
+    for (const glob of globs) {
+      if (glob.test(path)) return true;
+    }
+    return false;
+  };
 }
 
 // --- Request / resolved-input shapes ---------------------------------------
@@ -69,6 +142,13 @@ export interface DiscoverRequest {
   maxDepth?: number;
   /** Max pages to return. Clamped to [{@link MIN_PAGES}, {@link MAX_PAGES}]. */
   maxPages?: number;
+  /**
+   * Same-origin path patterns to exclude. Each is a prefix (`/blog`) or a glob
+   * (`/admin/*`, `*.pdf`); matched against the URL pathname during both the
+   * crawl and the sitemap merge. Defaults to `[]`. Capped at
+   * {@link MAX_EXCLUDE_PATHS} entries. See {@link compileExcludePathMatcher}.
+   */
+  excludePaths?: string[];
 }
 
 /**
@@ -83,6 +163,11 @@ export interface DiscoverInput {
   useCrawl: boolean;
   maxDepth: number;
   maxPages: number;
+  /**
+   * Resolved same-origin exclude-path patterns (trimmed; always present, `[]`
+   * when none). Feed to {@link compileExcludePathMatcher} to filter results.
+   */
+  excludePaths: string[];
 }
 
 // --- Result shape -----------------------------------------------------------

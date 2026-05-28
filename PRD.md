@@ -11,7 +11,27 @@
 > (Phases 11–14). (The swing layout was analysed from a full-page screenshot — its live site blocks
 > automated fetch behind an invalid-cert-authority, so crawl/stealth/fetch all failed.)
 
-> **Status:** Phase 12 complete — **Desktop + Mobile paired audits**. `device: "mobile" | "desktop" | "both"`
+> **Status:** Phase 13 complete — **Re-run / Regenerate + crawl exclude-paths & max-count**, a small power-user
+> pass with the dark "precision-instrument" identity preserved verbatim (no new colours/fonts; the re-run button,
+> lineage chip and exclude-paths field reuse only existing primitives). **Re-run** records lineage via a new
+> nullable `batches.prior_batch_id` (migration `0002`, self-healing) threaded `CreateBatchRequest` →
+> `createBatchBodySchema` → `CreateBatchInput` → `Batch` → `recordBatch`/`BatchInfo` (lineage only, never affects
+> execution); a shared `RerunBatchButton` re-submits the exact URLs + options through the unchanged
+> `POST /api/audits` then deep-links to a live stream at `/?watch=<batchId>` (a new optional
+> `AuditConsole.initialBatchId` seeded by `app/page.tsx` reading `?watch`). The Batch card re-runs the whole batch
+> (+ a muted "↻ re-run of <prior>" chip); History re-runs a single page with its own persisted options (a new
+> `HistoryRow.options`) — History isn't batch-grouped, so per-run is the documented analogue. **Crawl exclude-paths**
+> adds `excludePaths` to the discovery contract: a pure unit-tested `compileExcludePathMatcher` (pathname match —
+> wildcard-free = prefix, `*`/`?` = anchored glob) filters at the single `add(...)` chokepoint (sitemap + crawl) and
+> skips following excluded links in the BFS; `schema.ts` validates them (≤50, non-empty, ≤200 chars) so an invalid
+> entry is the existing structured 400. The crawl panel gained an exclude-paths Textarea and a numeric max-pages
+> Input (replacing the 50-item Select). **Verified for real**: a live `example.com` re-run reproduced the original's
+> scores + options and rendered the SSR lineage chip; excluding `/history` from a depth-1 crawl of the local app
+> returned exactly the other three pages; `excludePaths:["   "]` → HTTP 400 (`excludePaths.0`); `/?watch=` rendered.
+> Lint, typecheck, build, and **345 unit tests** all green (Phase 13 added exclude-matcher/schema, `priorBatchId`
+> pass-through, queue-lineage, and `HistoryRow.options` tests). Next up: Phase 14 (Scheduled daily archive).
+>
+> **Status (Phase 12):** Phase 12 complete — **Desktop + Mobile paired audits**. `device: "mobile" | "desktop" | "both"`
 > is a request-level fan-out, not an engine concept: `AuditOptions.formFactor` stays a concrete `FormFactor`,
 > a pure `resolveFormFactors` (in `options.ts`) expands `"both"` → both factors, and `AuditQueue.createBatch`
 > fans each `"both"` URL into two independent isolated-Chrome jobs (`AuditJob.device`, distinct ids → they
@@ -28,8 +48,7 @@
 > derived **"both"** badge and `/history` both device rows; a **headless-Chrome 1920px** pass drove the form
 > (URL → Both → Run) and rendered the live **paired table (8 score pills, Mobile|Desktop headers, 2/2 done)**
 > with **zero console errors**. Lint, typecheck, build, and **323 unit tests** all green (Phase 12 added 9
-> pairing tests + fan-out/schema/defaults coverage). Next up: Phase 13 (Re-run / Regenerate + crawl
-> exclude-paths & max-count).
+> pairing tests + fan-out/schema/defaults coverage).
 >
 > **Status (Phase 11):** Phase 11 complete — the **full-bleed density & wide-screen reclaim** pass is in, a pure
 > *layout + tooling* change with the dark "precision-instrument" identity preserved verbatim (no new
@@ -752,19 +771,55 @@ storage.
 ### Phase 13 — Re-run / Regenerate + crawl exclude-paths & max-count
 **Why:** small, high-value power-user tools from swing's input panel and run list.
 
-- [ ] **Re-run / Regenerate**: a button on each Batch card (`batch-summary-console.tsx`) and the History
+- [x] **Re-run / Regenerate**: a button on each Batch card (`batch-summary-console.tsx`) and the History
       batch group that re-submits that batch's exact URLs + options through the *existing*
       `POST /api/audits` path; record the prior batch id so the result is one click from the Phase-6
       compare / trend.
-- [ ] **Crawl exclude-paths**: extend `DiscoverRequest` + `src/lib/crawl/discover.ts` with
+      *Done: a nullable `prior_batch_id` column was added to `batches` (migration `0002_empty_bastion.sql`,
+      self-healing on first DB access like Phase 4/10) and `priorBatchId` threaded through the seam —
+      `CreateBatchRequest`/`createBatchBodySchema` → `CreateBatchInput` → `Batch` → `recordBatch` →
+      `BatchInfo` (it never affects execution, only lineage). A shared client `RerunBatchButton`
+      (`src/components/audit/rerun-batch-button.tsx`) re-submits via `createBatch(...)` then deep-links to
+      the live stream at `/?watch=<batchId>` (a new optional `AuditConsole` `initialBatchId` seeded by
+      `app/page.tsx` reading `?watch`; the SSE handler replays a snapshot on connect). The Batch card
+      renders a labelled "Re-run" (re-running the batch's deduped URLs + `batch.options`/`device`/
+      `concurrency`) plus a muted "↻ re-run of <prior>" lineage chip when `batch.priorBatchId` is set.
+      **Deviation:** History is a flat run list (not batch-grouped), so the History affordance is a
+      **per-run** re-run icon — re-running that one page with its own persisted options (a new
+      `HistoryRow.options`, parsed from the stored `runs.options`, gives full fidelity: categories /
+      throttling / multiplier, not just device) — which is the History analogue of "the batch group" and
+      also retries errored rows.*
+- [x] **Crawl exclude-paths**: extend `DiscoverRequest` + `src/lib/crawl/discover.ts` with
       `excludePaths: string[]` (prefix / glob, same-origin), filtered during *both* the BFS crawl and
       the sitemap merge; add an "exclude paths" textarea to `crawl-panel.tsx` (swing's "Don't crawl
       these links").
-- [ ] **Max-count control**: surface a user `maxPages` input in the crawl panel (the engine already
+      *Done: `excludePaths` added to `DiscoverRequest`/`DiscoverInput`; a pure, unit-tested
+      `compileExcludePathMatcher` (in `crawl/types.ts`, import-safe) matches against the URL **pathname**
+      (case-sensitive, leading `/` optional) — a wildcard-free pattern is a **prefix** match (`/blog`),
+      a pattern with `*`/`?` is a both-ends-anchored **glob** (`/admin/*`, `*.pdf`). `discover.ts` builds
+      it once and filters at the single `add(...)` chokepoint (so sitemap + crawl results drop uniformly)
+      and also skips *following* excluded links during the BFS (mirroring robots). `schema.ts` validates
+      `excludePaths` (≤ `MAX_EXCLUDE_PATHS` = 50, each non-empty after trim and ≤ 200 chars) → an invalid
+      entry is the existing structured 400. `crawl-panel.tsx` gained an "Exclude paths" Textarea
+      (one pattern/line, newline-split + trimmed).*
+- [x] **Max-count control**: surface a user `maxPages` input in the crawl panel (the engine already
       clamps to `MAX_PAGES` = 50 = the batch cap).
-- [ ] **Verify**: re-run reproduces a batch (same URLs / options → new runs, compare works); a crawl with
+      *Done: the clunky 50-item Max-pages `Select` was replaced with a numeric `Input`
+      (`type="number"`, `min`/`max`/`step`, clamped via `clampPages` on blur), bound to the existing
+      `maxPages` state that already flows to the engine clamp.*
+- [x] **Verify**: re-run reproduces a batch (same URLs / options → new runs, compare works); a crawl with
       an exclude pattern omits matching URLs and keeps the rest; an invalid pattern → structured 400;
       tests green.
+      *Verified for real against a production `next start` build. **Re-run:** a live `example.com` batch
+      (mobile · runs 1 · [performance, seo]) scored `perf 100 / seo 80`; re-submitting it with
+      `priorBatchId` produced a second batch with the **identical** scores + identical persisted options,
+      the SSR `/batches` page rendered the **"re-run of <prior>"** lineage chip on the re-run's card, and
+      `/api/history` carried both runs (grouped by URL for compare/trend). `GET /?watch=<id>` returned 200
+      and rendered the live console. **Crawl exclude:** discovering the local app (depth 1) returned
+      `/ · /history · /compare · /batches`; adding `excludePaths:["/history"]` returned exactly the other
+      three; `excludePaths:["   "]` → **HTTP 400** `{code:"invalid_request", issues:[{path:"excludePaths.0",
+      …}]}`. Lint, typecheck, build, and **345 unit tests** all green (Phase 13 added the
+      exclude-matcher/schema, `priorBatchId` pass-through, queue-lineage, and `HistoryRow.options` tests).*
 
 ### Phase 14 — Scheduled daily archive
 **Why:** swing's "Daily archive" / Archive tab — recurring re-runs with a browsable history. Largest

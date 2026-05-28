@@ -1,0 +1,1 @@
+ALTER TABLE `batches` ADD `prior_batch_id` text;

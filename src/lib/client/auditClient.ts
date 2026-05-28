@@ -28,6 +28,11 @@ export interface CreateBatchRequest {
    * scope (DevTools-panel parity, PRD §6 Phase 9). Optional; defaults to false.
    */
   accuracyMode?: boolean;
+  /**
+   * The id of the batch this request re-runs (PRD §6 Phase 13). Optional; recorded
+   * as lineage on the new batch so its runs are one click from compare / trend.
+   */
+  priorBatchId?: string;
 }
 
 /** Thrown by every client call on a non-2xx response; carries the structured envelope. */

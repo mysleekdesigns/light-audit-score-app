@@ -32,6 +32,12 @@ export const batches = sqliteTable("batches", {
   concurrency: integer("concurrency").notNull(),
   /** Number of jobs in the batch. */
   total: integer("total").notNull(),
+  /**
+   * The batch this one was created from via Re-run / Regenerate (PRD §6 Phase 13).
+   * Null for originally-submitted batches. Records lineage so a re-run's new runs
+   * are one click from the Phase-6 compare / trend of the same URLs.
+   */
+  priorBatchId: text("prior_batch_id"),
   /** ISO timestamps for the batch lifecycle. */
   createdAt: text("created_at").notNull(),
   startedAt: text("started_at"),

@@ -12,6 +12,8 @@ import {
   DEFAULT_USE_CRAWL,
   DEFAULT_USE_SITEMAP,
   MAX_DEPTH,
+  MAX_EXCLUDE_PATH_LENGTH,
+  MAX_EXCLUDE_PATHS,
   MAX_PAGES,
   MIN_DEPTH,
   MIN_PAGES,
@@ -28,6 +30,7 @@ describe("parseDiscoverBody — valid bodies", () => {
       useCrawl: DEFAULT_USE_CRAWL,
       maxDepth: DEFAULT_DEPTH,
       maxPages: DEFAULT_PAGES,
+      excludePaths: [],
     });
   });
 
@@ -85,6 +88,72 @@ describe("parseDiscoverBody — bounds clamping", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.maxPages).toBe(MIN_PAGES);
+  });
+});
+
+describe("parseDiscoverBody — excludePaths", () => {
+  it("defaults excludePaths to [] when omitted", () => {
+    const result = parseDiscoverBody({ url: "https://example.com" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.excludePaths).toEqual([]);
+  });
+
+  it("passes valid patterns through, trimmed", () => {
+    const result = parseDiscoverBody({
+      url: "https://example.com",
+      excludePaths: ["  /blog  ", "/admin/*", "*.pdf"],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.excludePaths).toEqual(["/blog", "/admin/*", "*.pdf"]);
+  });
+
+  it("rejects an empty/whitespace-only entry with an issue on the excludePaths path", () => {
+    const result = parseDiscoverBody({
+      url: "https://example.com",
+      excludePaths: ["/blog", "   "],
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.issues.some((i) => i.path.startsWith("excludePaths"))).toBe(
+      true,
+    );
+  });
+
+  it("rejects more than MAX_EXCLUDE_PATHS entries", () => {
+    const result = parseDiscoverBody({
+      url: "https://example.com",
+      excludePaths: Array.from(
+        { length: MAX_EXCLUDE_PATHS + 1 },
+        (_, i) => `/p${i}`,
+      ),
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.issues.some((i) => i.path.startsWith("excludePaths"))).toBe(
+      true,
+    );
+  });
+
+  it("rejects an over-length entry", () => {
+    const result = parseDiscoverBody({
+      url: "https://example.com",
+      excludePaths: [`/${"a".repeat(MAX_EXCLUDE_PATH_LENGTH + 1)}`],
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.issues.some((i) => i.path.startsWith("excludePaths"))).toBe(
+      true,
+    );
+  });
+
+  it("rejects a non-string entry", () => {
+    const result = parseDiscoverBody({
+      url: "https://example.com",
+      excludePaths: [123],
+    });
+    expect(result.ok).toBe(false);
   });
 });
 

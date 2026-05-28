@@ -15,6 +15,13 @@
       "when": 1779917631249,
       "tag": "0001_curly_lockjaw",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1779931566723,
+      "tag": "0002_empty_bastion",
+      "breakpoints": true
     }
   ]
 }

@@ -35,11 +35,13 @@ import {
 
 import { discoverSite } from "@/lib/client/crawlClient";
 import {
+  clampPages,
   DEFAULT_DEPTH,
   DEFAULT_PAGES,
   DEFAULT_USE_CRAWL,
   DEFAULT_USE_SITEMAP,
   MAX_DEPTH,
+  MAX_EXCLUDE_PATHS,
   MAX_PAGES,
   MIN_DEPTH,
   MIN_PAGES,
@@ -70,6 +72,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
+import { Textarea } from "@/components/ui/textarea";
 import {
   ToggleGroup,
   ToggleGroupItem,
@@ -81,7 +84,18 @@ function range(from: number, to: number): number[] {
 }
 
 const DEPTH_OPTIONS = range(MIN_DEPTH, MAX_DEPTH);
-const PAGE_OPTIONS = range(MIN_PAGES, MAX_PAGES);
+
+/**
+ * Parse the exclude-paths textarea into a clean `string[]`: one pattern per
+ * line, trimmed, blank lines dropped. The route's zod schema is the validation
+ * authority (rejects empties/over-long/too-many) — this just shapes the input.
+ */
+function parseExcludePaths(raw: string): string[] {
+  return raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
 
 /**
  * Normalize a raw seed into an absolute http/https URL string.
@@ -121,11 +135,14 @@ export function CrawlPanel({ onUrlsChange, disabled = false }: CrawlPanelProps) 
   const depthId = useId();
   const pagesId = useId();
   const scopeId = useId();
+  const excludeId = useId();
   const resultsId = useId();
 
   const [seed, setSeed] = useState("");
   const [depth, setDepth] = useState(DEFAULT_DEPTH);
   const [maxPages, setMaxPages] = useState(DEFAULT_PAGES);
+  // Raw textarea text; parsed into a clean string[] only when discovering.
+  const [excludeText, setExcludeText] = useState("");
   // Discovery scope toggles, both on by default. Stored as a string[] for the
   // multiple-ToggleGroup; resolved to the two booleans the request needs.
   const [scope, setScope] = useState<string[]>(
@@ -174,6 +191,7 @@ export function CrawlPanel({ onUrlsChange, disabled = false }: CrawlPanelProps) 
         useCrawl,
         maxDepth: depth,
         maxPages,
+        excludePaths: parseExcludePaths(excludeText),
       });
       setResult(res);
       // Select everything by default — the user curates down from the full set.
@@ -190,7 +208,7 @@ export function CrawlPanel({ onUrlsChange, disabled = false }: CrawlPanelProps) 
     } finally {
       setIsDiscovering(false);
     }
-  }, [seed, useSitemap, useCrawl, depth, maxPages]);
+  }, [seed, useSitemap, useCrawl, depth, maxPages, excludeText]);
 
   function toggleOne(url: string) {
     setSelected((prev) => {
@@ -307,25 +325,27 @@ export function CrawlPanel({ onUrlsChange, disabled = false }: CrawlPanelProps) 
 
           <Field>
             <FieldLabel htmlFor={pagesId}>Max pages</FieldLabel>
-            <Select
-              value={String(maxPages)}
-              onValueChange={(value) => setMaxPages(Number(value))}
+            <Input
+              id={pagesId}
+              type="number"
+              inputMode="numeric"
+              min={MIN_PAGES}
+              max={MAX_PAGES}
+              step={1}
+              value={maxPages}
+              onChange={(event) => {
+                // Track the typed value live; clamp on blur so typing isn't
+                // fought mid-keystroke. Empty/NaN falls back to the default.
+                const next = event.target.valueAsNumber;
+                setMaxPages(Number.isNaN(next) ? DEFAULT_PAGES : next);
+              }}
+              onBlur={() => setMaxPages((n) => clampPages(n))}
               disabled={disabled || isDiscovering}
-            >
-              <SelectTrigger id={pagesId} className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {PAGE_OPTIONS.map((n) => (
-                    <SelectItem key={n} value={String(n)}>
-                      {n} {n === 1 ? "page" : "pages"}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <FieldDescription>Hard cap on discovered URLs.</FieldDescription>
+              className="font-mono text-sm tabular-nums"
+            />
+            <FieldDescription>
+              Hard cap on discovered URLs ({MIN_PAGES}–{MAX_PAGES}).
+            </FieldDescription>
           </Field>
         </div>
 
@@ -351,6 +371,29 @@ export function CrawlPanel({ onUrlsChange, disabled = false }: CrawlPanelProps) 
           </ToggleGroup>
           <FieldDescription>
             At least one source stays enabled.
+          </FieldDescription>
+        </Field>
+
+        <Field>
+          <FieldLabel htmlFor={excludeId}>Exclude paths</FieldLabel>
+          <Textarea
+            id={excludeId}
+            value={excludeText}
+            onChange={(event) => setExcludeText(event.target.value)}
+            disabled={disabled || isDiscovering}
+            spellCheck={false}
+            autoComplete="off"
+            autoCapitalize="off"
+            rows={3}
+            className="font-mono text-xs"
+            placeholder={"/admin/*\n/drafts\n*.pdf"}
+          />
+          <FieldDescription>
+            One path per line. Prefix (
+            <span className="font-mono">/blog</span>) or glob (
+            <span className="font-mono">/admin/*</span>,{" "}
+            <span className="font-mono">*.pdf</span>). Same-origin. Up to{" "}
+            {MAX_EXCLUDE_PATHS}.
           </FieldDescription>
         </Field>
       </FieldGroup>

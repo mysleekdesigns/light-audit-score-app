@@ -30,10 +30,11 @@ import * as cheerio from "cheerio";
 
 import { fetchRobots, ROBOTS_USER_AGENT, type RobotsMatcher } from "./robots";
 import { gatherSitemapUrls } from "./sitemap";
-import type {
-  DiscoveredUrl,
-  DiscoverInput,
-  DiscoverResult,
+import {
+  compileExcludePathMatcher,
+  type DiscoveredUrl,
+  type DiscoverInput,
+  type DiscoverResult,
 } from "./types";
 
 /** Per-request fetch timeout (ms) for HTML page fetches during the crawl. */
@@ -132,7 +133,8 @@ function extractLinks(html: string, baseUrl: string, origin: string): string[] {
  * Run a shallow BFS crawl from the seed. Returns crawl-sourced URLs (with the
  * depth first found), appending any non-fatal notes to `warnings`. Bounded by
  * `maxDepth`, `maxPages` (collection budget), {@link MAX_CRAWL_FETCHES}, robots,
- * and same-origin.
+ * same-origin, and the caller's `isExcluded` predicate (excluded links are not
+ * even followed, mirroring robots-disallowed links).
  */
 async function crawl(
   seed: string,
@@ -140,6 +142,7 @@ async function crawl(
   maxDepth: number,
   collectBudget: number,
   robots: RobotsMatcher,
+  isExcluded: (pathname: string) => boolean,
   warnings: string[],
 ): Promise<DiscoveredUrl[]> {
   const found = new Map<string, DiscoveredUrl>();
@@ -178,6 +181,9 @@ async function crawl(
 
     for (const link of extractLinks(html, url, origin)) {
       if (enqueued.has(link)) continue;
+      // Don't follow excluded links (the central `add` collector also drops
+      // them, but skipping the fetch keeps the crawl cheap and on-budget).
+      if (isExcluded(new URL(link).pathname)) continue;
       // Honour robots for paths we'd fetch/follow.
       if (!robots.isAllowed(pathForRobots(link))) {
         robotsSkipped++;
@@ -211,15 +217,26 @@ export async function discover(input: DiscoverInput): Promise<DiscoverResult> {
   const seedPath = pathForRobots(input.url);
   const robotsBlocked = !robots.isAllowed(seedPath);
 
+  // Single source of truth for exclude-path matching, applied to BOTH sources.
+  const isExcluded = compileExcludePathMatcher(input.excludePaths);
+
   // Collect by source; dedupe across sources afterwards (first source wins).
   const collected: DiscoveredUrl[] = [];
   const seen = new Set<string>();
+  let excludedCount = 0;
 
   function add(url: string, source: DiscoveredUrl["source"], depth?: number) {
     const normalized = normalizeUrl(url);
     if (!normalized) return;
     if (!isSameOrigin(normalized, origin)) return;
     if (seen.has(normalized)) return;
+    // Single exclusion chokepoint: drop URLs matching the exclude patterns,
+    // whatever their source. Marked seen so a later source can't re-add them.
+    if (isExcluded(new URL(normalized).pathname)) {
+      seen.add(normalized);
+      excludedCount++;
+      return;
+    }
     seen.add(normalized);
     collected.push(
       source === "crawl"
@@ -263,10 +280,17 @@ export async function discover(input: DiscoverInput): Promise<DiscoverResult> {
         input.maxDepth,
         MAX_CRAWL_FETCHES,
         robots,
+        isExcluded,
         warnings,
       );
       for (const item of crawled) add(item.url, "crawl", item.depth);
     }
+  }
+
+  if (excludedCount > 0) {
+    warnings.push(
+      `Excluded ${excludedCount} URL(s) matching your exclude patterns.`,
+    );
   }
 
   const totalFound = collected.length;
