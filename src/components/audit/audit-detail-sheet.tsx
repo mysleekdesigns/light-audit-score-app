@@ -515,7 +515,20 @@ export function AuditDetailSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full gap-0 p-0 sm:max-w-xl">
+      {/*
+        Width override. The Sheet primitive's defaults are
+        `data-[side=right]:w-3/4 data-[side=right]:sm:max-w-sm` — the
+        `data-[side=right]:` qualifier outranks an unqualified `sm:max-w-xl` by
+        CSS specificity, which silently capped this sheet at 384px and chopped
+        off the SEO score, metric values, and opportunity displayValues. We
+        re-qualify with `data-[side=right]:` so tw-merge can actually replace
+        the base, and tier the cap so the dense readout earns more width as the
+        viewport grows: 672px at sm+, 768px at lg+, 896px at 2xl+.
+      */}
+      <SheetContent
+        side="right"
+        className="w-full gap-0 p-0 data-[side=right]:sm:max-w-2xl lg:data-[side=right]:max-w-3xl 2xl:data-[side=right]:max-w-4xl"
+      >
         {job ? (
           // Key by the clicked job so the active-device state resets per open.
           <SheetBody key={job.id} clicked={job} jobs={pair} />

@@ -39,14 +39,7 @@ import { useAuditDefaults } from "@/hooks/useAuditDefaults";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import {
   Field,
   FieldContent,
@@ -302,289 +295,315 @@ export function NewAuditForm({
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Dense horizontal control bar — every run-config lever in one instrument
-          toolbar so the textarea + live results below get the full width. */}
+      {/* Single instrument panel: Targets (primary input) + Run config (dials),
+          divided by a hairline that rotates — horizontal at narrow, vertical at
+          ≥1440px. Targets owns the 3fr column on the left so its textarea / crawl
+          panel get the dominant width; Run config takes 2fr on the right. One
+          shared CardFooter governs both with the Run audit action. */}
       <Card>
-        <CardHeader className="gap-1.5">
-          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-            <CardTitle>Run config</CardTitle>
-            <CardDescription className="font-mono text-[0.65rem] uppercase tracking-[0.18em]">
-              The biggest levers on score accuracy.
-            </CardDescription>
-          </div>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          {/* Row 1: the controls, re-flowed into a wrapping grid that goes dense
-              on wide screens. Each cell keeps its own label + handler + wiring. */}
-          <div className="grid grid-cols-2 gap-x-5 gap-y-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
-            <Field>
-              <FieldLabel htmlFor={deviceId}>Device</FieldLabel>
-              <ToggleGroup
-                id={deviceId}
-                type="single"
-                variant="outline"
-                value={device}
-                onValueChange={handleDeviceChange}
-                disabled={isRunning}
-                className="w-full"
-              >
-                <ToggleGroupItem value="mobile" className="flex-1">
-                  Mobile
-                </ToggleGroupItem>
-                <ToggleGroupItem value="desktop" className="flex-1">
-                  Desktop
-                </ToggleGroupItem>
-                <ToggleGroupItem
-                  value="both"
-                  className="flex-1"
-                  title="Audit each URL on mobile and desktop"
+        <CardContent className="px-4">
+          <div className="grid gap-0 min-[1440px]:grid-cols-[3fr_2fr]">
+            {/* Targets — left/top. Container query so the section adapts to its
+                own column width when it shares the row with Run config. */}
+            <section
+              aria-labelledby="audit-targets-heading"
+              className="@container flex flex-col gap-4 pb-6 min-[1440px]:pb-0 min-[1440px]:pr-6"
+            >
+              <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                <h2
+                  id="audit-targets-heading"
+                  className="font-heading text-base font-medium leading-snug"
                 >
-                  Both
-                </ToggleGroupItem>
-              </ToggleGroup>
-            </Field>
-
-            <Field>
-              <FieldLabel htmlFor={throttlingId}>Throttling</FieldLabel>
-              <ToggleGroup
-                id={throttlingId}
-                type="single"
-                variant="outline"
-                value={throttling}
-                onValueChange={handleThrottlingChange}
-                disabled={isRunning}
-                className="w-full"
-              >
-                <ToggleGroupItem value="simulated" className="flex-1">
-                  Simulated
-                </ToggleGroupItem>
-                <ToggleGroupItem value="applied" className="flex-1">
-                  Applied
-                </ToggleGroupItem>
-              </ToggleGroup>
-            </Field>
-
-            <Field>
-              <FieldLabel htmlFor={cpuId}>CPU slowdown</FieldLabel>
-              <Select
-                value={cpuSelectValue(cpuSlowdownMultiplier)}
-                onValueChange={handleCpuChange}
-                disabled={isRunning}
-              >
-                <SelectTrigger id={cpuId} className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value={CPU_AUTO}>
-                      Auto (Lighthouse 4×)
-                    </SelectItem>
-                    {CPU_OPTIONS.map((n) => (
-                      <SelectItem key={n} value={String(n)}>
-                        {n}× slowdown
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </Field>
-
-            <Field>
-              <FieldLabel htmlFor={runsId}>Runs per URL</FieldLabel>
-              <Select
-                value={String(runs)}
-                onValueChange={handleRunsChange}
-                disabled={isRunning}
-              >
-                <SelectTrigger id={runsId} className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {RUN_OPTIONS.map((n) => (
-                      <SelectItem key={n} value={String(n)}>
-                        {n} {n === 1 ? "run" : "runs"} (median)
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </Field>
-
-            <Field>
-              <FieldLabel htmlFor={concurrencyId}>Concurrency</FieldLabel>
-              <Select
-                value={String(concurrency)}
-                onValueChange={handleConcurrencyChange}
-                disabled={isRunning}
-              >
-                <SelectTrigger id={concurrencyId} className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {CONCURRENCY_OPTIONS.map((n) => (
-                      <SelectItem key={n} value={String(n)}>
-                        {n} parallel
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </Field>
-
-            <Field orientation="horizontal" className="items-end">
-              <FieldContent>
-                <FieldLabel htmlFor={accuracyId}>Accuracy mode</FieldLabel>
-              </FieldContent>
-              <Toggle
-                id={accuracyId}
-                variant="outline"
-                size="sm"
-                pressed={accuracyMode}
-                onPressedChange={handleAccuracyModeChange}
-                disabled={isRunning}
-                aria-label="Accuracy mode"
-                className="shrink-0 font-mono text-[0.65rem] uppercase tracking-[0.18em] data-[state=on]:bg-score-good/15 data-[state=on]:text-score-good data-[state=on]:border-score-good/40"
-              >
-                {accuracyMode ? "On" : "Off"}
-              </Toggle>
-            </Field>
-          </div>
-
-          <Separator />
-
-          {/* Row 2: categories + parity (calibration readout + Calibrate /
-              Match-DevTools), flowing horizontally on wide screens. */}
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-            <FieldSet className="gap-2">
-              <FieldLegend variant="label">Categories</FieldLegend>
-              <ToggleGroup
-                type="multiple"
-                variant="outline"
-                value={categories}
-                onValueChange={handleCategoriesChange}
-                disabled={isRunning}
-                className="flex-wrap"
-              >
-                {LIGHTHOUSE_CATEGORIES.map((category) => (
-                  <ToggleGroupItem key={category} value={category} size="sm">
-                    {CATEGORY_LABELS[category]}
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-            </FieldSet>
-
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
-              <RunConfigCard
-                throttling={throttling}
-                cpuSlowdownMultiplier={cpuSlowdownMultiplier}
-                calibration={calibration}
-              />
-              <div className="flex shrink-0 flex-col gap-2 sm:justify-center">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={handleCalibrate}
-                  disabled={isRunning || !calibration}
-                  title={
-                    calibration
-                      ? `Apply the recommended ${calibration.recommendedMultiplier}× for this host`
-                      : "Run an audit first to read this host's benchmark"
-                  }
-                >
-                  <Gauge data-icon="inline-start" />
-                  Calibrate
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={handleMatchDevTools}
-                  disabled={isRunning}
-                  title="Mobile · simulated · 1 run · concurrency 1 · accuracy on"
-                >
-                  <Crosshair data-icon="inline-start" />
-                  Match DevTools
-                </Button>
-              </div>
-            </div>
-          </div>
-
-          <Alert>
-            <TriangleAlert className="text-score-average" />
-            <AlertDescription>
-              High concurrency causes CPU contention that distorts performance
-              scores. Keep it low for trustworthy numbers.
-            </AlertDescription>
-          </Alert>
-        </CardContent>
-      </Card>
-
-      {/* Targets — full width — with the primary action, then the live results. */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Target URLs</CardTitle>
-          <CardDescription>
-            One URL per line. Each is audited independently.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Tabs value={tab} onValueChange={handleTabChange} className="gap-4">
-            <TabsList>
-              <TabsTrigger value="paste">
-                <ListPlus data-icon="inline-start" />
-                Paste list
-              </TabsTrigger>
-              <TabsTrigger value="crawl">
-                <Radar data-icon="inline-start" />
-                Crawl site
-              </TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="paste" className="flex flex-col gap-3">
-              <Textarea
-                rows={10}
-                value={text}
-                onChange={(event) => setText(event.target.value)}
-                disabled={isRunning}
-                aria-label="Target URLs"
-                spellCheck={false}
-                autoComplete="off"
-                className="resize-none font-mono text-sm"
-                placeholder={
-                  "https://example.com\nhttps://example.com/pricing\nhttps://example.com/blog"
-                }
-              />
-              <div
-                aria-live="polite"
-                className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1"
-              >
-                <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">
-                  {pastedUrls.length}{" "}
-                  {pastedUrls.length === 1 ? "URL" : "URLs"} queued
+                  Target URLs
+                </h2>
+                <p className="font-mono text-[0.65rem] uppercase tracking-[0.18em] text-muted-foreground">
+                  One URL per line · audited independently
                 </p>
-                {invalid.length > 0 ? (
-                  <p className="font-mono text-xs uppercase tracking-[0.18em] text-score-average">
-                    {invalid.length}{" "}
-                    {invalid.length === 1 ? "line" : "lines"} ignored
-                    <span className="text-muted-foreground/70 normal-case tracking-normal">
-                      {" "}
-                      ({invalid.map((entry) => `L${entry.line}`).join(", ")})
-                    </span>
-                  </p>
-                ) : null}
-              </div>
-            </TabsContent>
+              </header>
+              <Tabs value={tab} onValueChange={handleTabChange} className="gap-4">
+                <TabsList>
+                  <TabsTrigger value="paste">
+                    <ListPlus data-icon="inline-start" />
+                    Paste list
+                  </TabsTrigger>
+                  <TabsTrigger value="crawl">
+                    <Radar data-icon="inline-start" />
+                    Crawl site
+                  </TabsTrigger>
+                </TabsList>
 
-            <TabsContent value="crawl">
-              <CrawlPanel
-                onUrlsChange={handleCrawlUrlsChange}
-                disabled={isRunning}
-              />
-            </TabsContent>
-          </Tabs>
+                <TabsContent value="paste" className="flex flex-col gap-3">
+                  <Textarea
+                    rows={10}
+                    value={text}
+                    onChange={(event) => setText(event.target.value)}
+                    disabled={isRunning}
+                    aria-label="Target URLs"
+                    spellCheck={false}
+                    autoComplete="off"
+                    className="resize-none font-mono text-sm"
+                    placeholder={
+                      "https://example.com\nhttps://example.com/pricing\nhttps://example.com/blog"
+                    }
+                  />
+                  <div
+                    aria-live="polite"
+                    className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1"
+                  >
+                    <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                      {pastedUrls.length}{" "}
+                      {pastedUrls.length === 1 ? "URL" : "URLs"} queued
+                    </p>
+                    {invalid.length > 0 ? (
+                      <p className="font-mono text-xs uppercase tracking-[0.18em] text-score-average">
+                        {invalid.length}{" "}
+                        {invalid.length === 1 ? "line" : "lines"} ignored
+                        <span className="text-muted-foreground/70 normal-case tracking-normal">
+                          {" "}
+                          ({invalid.map((entry) => `L${entry.line}`).join(", ")})
+                        </span>
+                      </p>
+                    ) : null}
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="crawl">
+                  <CrawlPanel
+                    onUrlsChange={handleCrawlUrlsChange}
+                    disabled={isRunning}
+                  />
+                </TabsContent>
+              </Tabs>
+            </section>
+
+            {/* Run config — right/bottom. Rotating hairline: border-t at narrow
+                (under Targets), border-l at ≥1440px (beside Targets). Container
+                query so the controls grid + categories row re-flow to this
+                section's *own* width, not the viewport. */}
+            <section
+              aria-labelledby="audit-runconfig-heading"
+              className="@container flex flex-col gap-4 border-t border-border/60 pt-6 min-[1440px]:border-t-0 min-[1440px]:border-l min-[1440px]:pl-6 min-[1440px]:pt-0"
+            >
+              <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                <h2
+                  id="audit-runconfig-heading"
+                  className="font-heading text-base font-medium leading-snug"
+                >
+                  Run config
+                </h2>
+                <p className="font-mono text-[0.65rem] uppercase tracking-[0.18em] text-muted-foreground">
+                  The biggest levers on score accuracy.
+                </p>
+              </header>
+
+              {/* 6 controls — even-divisible at 2, 3, 6 cols (avoid 4/5 to skip
+                  orphan-row layouts). Thresholds: @md=448px, @5xl=1024px. */}
+              <div className="grid grid-cols-2 gap-x-5 gap-y-4 @md:grid-cols-3 @5xl:grid-cols-6">
+                <Field>
+                  <FieldLabel htmlFor={deviceId}>Device</FieldLabel>
+                  <ToggleGroup
+                    id={deviceId}
+                    type="single"
+                    variant="outline"
+                    value={device}
+                    onValueChange={handleDeviceChange}
+                    disabled={isRunning}
+                    className="w-full"
+                  >
+                    <ToggleGroupItem value="mobile" className="flex-1">
+                      Mobile
+                    </ToggleGroupItem>
+                    <ToggleGroupItem value="desktop" className="flex-1">
+                      Desktop
+                    </ToggleGroupItem>
+                    <ToggleGroupItem
+                      value="both"
+                      className="flex-1"
+                      title="Audit each URL on mobile and desktop"
+                    >
+                      Both
+                    </ToggleGroupItem>
+                  </ToggleGroup>
+                </Field>
+
+                <Field>
+                  <FieldLabel htmlFor={throttlingId}>Throttling</FieldLabel>
+                  <ToggleGroup
+                    id={throttlingId}
+                    type="single"
+                    variant="outline"
+                    value={throttling}
+                    onValueChange={handleThrottlingChange}
+                    disabled={isRunning}
+                    className="w-full"
+                  >
+                    <ToggleGroupItem value="simulated" className="flex-1">
+                      Simulated
+                    </ToggleGroupItem>
+                    <ToggleGroupItem value="applied" className="flex-1">
+                      Applied
+                    </ToggleGroupItem>
+                  </ToggleGroup>
+                </Field>
+
+                <Field>
+                  <FieldLabel htmlFor={cpuId}>CPU slowdown</FieldLabel>
+                  <Select
+                    value={cpuSelectValue(cpuSlowdownMultiplier)}
+                    onValueChange={handleCpuChange}
+                    disabled={isRunning}
+                  >
+                    <SelectTrigger id={cpuId} className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value={CPU_AUTO}>
+                          Auto (Lighthouse 4×)
+                        </SelectItem>
+                        {CPU_OPTIONS.map((n) => (
+                          <SelectItem key={n} value={String(n)}>
+                            {n}× slowdown
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+
+                <Field>
+                  <FieldLabel htmlFor={runsId}>Runs per URL</FieldLabel>
+                  <Select
+                    value={String(runs)}
+                    onValueChange={handleRunsChange}
+                    disabled={isRunning}
+                  >
+                    <SelectTrigger id={runsId} className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {RUN_OPTIONS.map((n) => (
+                          <SelectItem key={n} value={String(n)}>
+                            {n} {n === 1 ? "run" : "runs"} (median)
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+
+                <Field>
+                  <FieldLabel htmlFor={concurrencyId}>Concurrency</FieldLabel>
+                  <Select
+                    value={String(concurrency)}
+                    onValueChange={handleConcurrencyChange}
+                    disabled={isRunning}
+                  >
+                    <SelectTrigger id={concurrencyId} className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {CONCURRENCY_OPTIONS.map((n) => (
+                          <SelectItem key={n} value={String(n)}>
+                            {n} parallel
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+
+                <Field orientation="horizontal" className="items-end">
+                  <FieldContent>
+                    <FieldLabel htmlFor={accuracyId}>Accuracy mode</FieldLabel>
+                  </FieldContent>
+                  <Toggle
+                    id={accuracyId}
+                    variant="outline"
+                    size="sm"
+                    pressed={accuracyMode}
+                    onPressedChange={handleAccuracyModeChange}
+                    disabled={isRunning}
+                    aria-label="Accuracy mode"
+                    className="shrink-0 font-mono text-[0.65rem] uppercase tracking-[0.18em] data-[state=on]:bg-score-good/15 data-[state=on]:text-score-good data-[state=on]:border-score-good/40"
+                  >
+                    {accuracyMode ? "On" : "Off"}
+                  </Toggle>
+                </Field>
+              </div>
+
+              <Separator />
+
+              {/* Categories + parity readout flow horizontally once the section
+                  itself is wide enough (@4xl=896px). At narrow widths or inside
+                  the 2fr side-by-side column they stack. */}
+              <div className="flex flex-col gap-4 @4xl:flex-row @4xl:items-end @4xl:justify-between">
+                <FieldSet className="gap-2">
+                  <FieldLegend variant="label">Categories</FieldLegend>
+                  <ToggleGroup
+                    type="multiple"
+                    variant="outline"
+                    value={categories}
+                    onValueChange={handleCategoriesChange}
+                    disabled={isRunning}
+                    className="flex-wrap"
+                  >
+                    {LIGHTHOUSE_CATEGORIES.map((category) => (
+                      <ToggleGroupItem key={category} value={category} size="sm">
+                        {CATEGORY_LABELS[category]}
+                      </ToggleGroupItem>
+                    ))}
+                  </ToggleGroup>
+                </FieldSet>
+
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+                  <RunConfigCard
+                    throttling={throttling}
+                    cpuSlowdownMultiplier={cpuSlowdownMultiplier}
+                    calibration={calibration}
+                  />
+                  <div className="flex shrink-0 flex-col gap-2 sm:justify-center">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleCalibrate}
+                      disabled={isRunning || !calibration}
+                      title={
+                        calibration
+                          ? `Apply the recommended ${calibration.recommendedMultiplier}× for this host`
+                          : "Run an audit first to read this host's benchmark"
+                      }
+                    >
+                      <Gauge data-icon="inline-start" />
+                      Calibrate
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleMatchDevTools}
+                      disabled={isRunning}
+                      title="Mobile · simulated · 1 run · concurrency 1 · accuracy on"
+                    >
+                      <Crosshair data-icon="inline-start" />
+                      Match DevTools
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              <Alert>
+                <TriangleAlert className="text-score-average" />
+                <AlertDescription>
+                  High concurrency causes CPU contention that distorts
+                  performance scores. Keep it low for trustworthy numbers.
+                </AlertDescription>
+              </Alert>
+            </section>
+          </div>
         </CardContent>
         <CardFooter className="flex-col-reverse items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-center font-mono text-[0.65rem] uppercase tracking-[0.18em] text-muted-foreground sm:text-left">

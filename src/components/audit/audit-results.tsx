@@ -205,7 +205,7 @@ function CardsGrid({ jobs, onSelect }: CardsGridProps) {
       (job) => job.device,
     );
     return (
-      <ul className="grid list-none gap-4 p-0 pt-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+      <ul className="grid list-none gap-4 p-0 pt-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 min-[1920px]:grid-cols-5 min-[2400px]:grid-cols-6">
         {pairs.map((pair) => (
           <li key={pair.url}>
             <PairedAuditCard
@@ -221,7 +221,7 @@ function CardsGrid({ jobs, onSelect }: CardsGridProps) {
   }
 
   return (
-    <ul className="grid list-none gap-4 p-0 pt-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+    <ul className="grid list-none gap-4 p-0 pt-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 min-[1920px]:grid-cols-6 min-[2400px]:grid-cols-7">
       {jobs.map((job) => (
         <li key={job.id}>
           <AuditJobCard job={job} onSelect={onSelect} />
