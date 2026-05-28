@@ -73,12 +73,15 @@ function escapeRegExp(literal: string): string {
  *    `schema.ts` — the matcher itself is tolerant so it can never throw).
  *  - A leading `/` is optional: `blog` and `/blog` are equivalent (both the
  *    pattern and the tested pathname are normalized to start with `/`).
- *  - A pattern WITHOUT a `*` is a **prefix** match: `/blog` excludes `/blog`,
- *    `/blog/`, and `/blog/post-1`.
- *  - A pattern WITH `*` (or `?`) is a **glob** anchored at both ends, where `*`
- *    matches any run of characters and `?` matches exactly one. All other regex
- *    metacharacters are escaped. e.g. `*.pdf` excludes any path ending `.pdf`;
- *    `/admin/*` excludes `/admin/anything`.
+ *  - A pattern WITHOUT a `*` or `?` is a **directory-prefix** match bounded at
+ *    `/`: `/blog` excludes `/blog`, `/blog/`, and `/blog/post-1` — but NOT
+ *    `/blogger` (the prefix must be followed by either end-of-string or `/`).
+ *  - A pattern WITH `*` (or `?`) is a **glob** anchored at both ends. `*` is
+ *    any run of characters, `?` is exactly one; all other regex metacharacters
+ *    are escaped. e.g. `*.pdf` excludes any path ending `.pdf`. As a UX-driven
+ *    extension, a trailing `/*` also excludes the bare parent: `/admin/*`
+ *    excludes `/admin`, `/admin/`, AND `/admin/anything` (matching the typical
+ *    user reading of "everything under this section").
  *  - When `patterns` is empty (after trimming), the predicate always returns
  *    `false`.
  */
@@ -88,6 +91,13 @@ export function compileExcludePathMatcher(
   /** Normalize a pathname/pattern so it always starts with a single `/`. */
   const withLeadingSlash = (value: string): string =>
     value.startsWith("/") ? value : `/${value}`;
+
+  /**
+   * Drop a single trailing `/` so the directory-prefix check can simply append
+   * `/` when looking for sub-paths (keeps `"/"` itself unchanged).
+   */
+  const stripTrailingSlash = (value: string): string =>
+    value.length > 1 && value.endsWith("/") ? value.slice(0, -1) : value;
 
   const prefixes: string[] = [];
   const globs: RegExp[] = [];
@@ -102,8 +112,18 @@ export function compileExcludePathMatcher(
         .replace(/\\\*/g, ".*")
         .replace(/\\\?/g, ".");
       globs.push(new RegExp(`^${body}$`));
+      // UX-driven: `/admin/*` (trailing `/*`) also excludes the bare `/admin`
+      // parent. The typical user reading is "exclude this section"; without
+      // this, the section root slips through and feels broken. Only applies to
+      // directory-shaped globs — `*.pdf` has no `/*` ending so isn't affected.
+      if (/\/\*$/.test(normalized)) {
+        const parent = stripTrailingSlash(normalized.slice(0, -2));
+        if (parent.length > 0 && !parent.includes("*") && !parent.includes("?")) {
+          prefixes.push(parent);
+        }
+      }
     } else {
-      prefixes.push(withLeadingSlash(trimmed));
+      prefixes.push(stripTrailingSlash(withLeadingSlash(trimmed)));
     }
   }
 
@@ -114,7 +134,12 @@ export function compileExcludePathMatcher(
   return (pathname: string): boolean => {
     const path = withLeadingSlash(pathname);
     for (const prefix of prefixes) {
-      if (path === prefix || path.startsWith(prefix)) return true;
+      // A bare `/` prefix means "exclude everything" — preserve that without
+      // tripping the `prefix + "/"` check below (which would never fire).
+      if (prefix === "/") return true;
+      if (path === prefix) return true;
+      // Bounded at `/`: `/blog` matches `/blog/foo` but not `/blogger`.
+      if (path.startsWith(prefix + "/")) return true;
     }
     for (const glob of globs) {
       if (glob.test(path)) return true;

@@ -13,7 +13,11 @@
  *     `source: "crawl"` with the depth first seen at.
  *
  * Politeness + safety are first-class:
- *  - Everything is filtered to the seed's **origin** (protocol+host+port).
+ *  - Everything is filtered to the seed's **canonical origin**. We resolve the
+ *    seed with one initial fetch (`redirect: "follow"`) so that an apex → www
+ *    (or http → https) redirect picks the redirect target as authoritative,
+ *    and we treat `host` and `www.host` as the same site so dedupe collapses
+ *    the two host variants. All other subdomains stay strictly separate.
  *  - We honour `robots.txt`: if the seed itself is disallowed we set
  *    `robotsBlocked` and skip crawling entirely (we still read the sitemap,
  *    which the owner publishes deliberately). During the crawl, disallowed
@@ -53,19 +57,60 @@ const MAX_CRAWL_FETCHES = 100;
  */
 const MAX_SITEMAP_COLLECT = 500;
 
-/** Normalize a seed URL to its origin (e.g. `https://example.com`). */
-function toOrigin(url: string): string {
-  return new URL(url).origin;
+/** Drop a leading `www.` (case-insensitive) from a host. */
+function stripWww(host: string): string {
+  return host.replace(/^www\./i, "");
 }
 
 /**
- * Normalize a URL for dedupe: drop the hash fragment, keep everything else.
- * Returns `null` if it doesn't parse or isn't http/https.
+ * Resolve `raw` (optionally against `base`) into the canonical URL string used
+ * everywhere for filtering and dedupe, returning `null` if it's not http(s) or
+ * not "same-site" with `origin`.
+ *
+ * "Same-site" is a deliberate, narrow relaxation of strict same-origin: same
+ * protocol + port, and hosts that match after stripping a leading `www.` —
+ * `example.com` and `www.example.com` are treated as the same site, but every
+ * other subdomain (`blog.example.com`, `cdn.example.com`) stays separate. This
+ * fixes the common case where a seed (`example.com`) redirects to `www` or
+ * where the sitemap/canonical absolute links use the opposite variant.
+ *
+ * The hash fragment is dropped; the host is rewritten to `origin`'s host so
+ * dedupe collapses `example.com/x` and `www.example.com/x` to a single entry.
  */
-function normalizeUrl(raw: string, base?: string): string | null {
+function canonicalize(
+  raw: string,
+  origin: string,
+  base?: string,
+): string | null {
+  let u: URL;
+  try {
+    u = base ? new URL(raw, base) : new URL(raw);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+  let o: URL;
+  try {
+    o = new URL(origin);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== o.protocol) return null;
+  if (u.port !== o.port) return null;
+  if (stripWww(u.host) !== stripWww(o.host)) return null;
+  u.hash = "";
+  u.host = o.host;
+  return u.toString();
+}
+
+/**
+ * Lightweight normalization for the seed (no origin check yet — that happens
+ * after we resolve the canonical origin via {@link resolveSeed}).
+ */
+function normalizeSeed(raw: string): string | null {
   let parsed: URL;
   try {
-    parsed = base ? new URL(raw, base) : new URL(raw);
+    parsed = new URL(raw);
   } catch {
     return null;
   }
@@ -74,23 +119,26 @@ function normalizeUrl(raw: string, base?: string): string | null {
   return parsed.toString();
 }
 
-/** Same-origin test: identical protocol + host + port. */
-function isSameOrigin(url: string, origin: string): boolean {
-  try {
-    return new URL(url).origin === origin;
-  } catch {
-    return false;
-  }
-}
-
 /** The pathname + search of a URL, used for robots matching. */
 function pathForRobots(url: string): string {
   const u = new URL(url);
   return `${u.pathname}${u.search}`;
 }
 
-/** Fetch a page as HTML text, or `null` (non-200, non-HTML, error, timeout). */
-async function fetchHtml(url: string): Promise<string | null> {
+/**
+ * One HTTP fetch + its final URL after redirects (empty string when the runtime
+ * doesn't populate `Response.url`, e.g. our test stubs — callers fall back to
+ * the requested URL in that case).
+ */
+interface FetchedPage {
+  /** Final URL after redirects, or `""` if unavailable. */
+  finalUrl: string;
+  /** Response body as text, only when status is OK and content-type is HTML. */
+  html: string | null;
+}
+
+/** Fetch a page following redirects; return its final URL and (if HTML) body. */
+async function fetchHtml(url: string): Promise<FetchedPage> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PAGE_FETCH_TIMEOUT_MS);
   try {
@@ -99,19 +147,46 @@ async function fetchHtml(url: string): Promise<string | null> {
       headers: { "user-agent": ROBOTS_USER_AGENT },
       redirect: "follow",
     });
-    if (!res.ok) return null;
+    const finalUrl = res.url || "";
+    if (!res.ok) return { finalUrl, html: null };
     const contentType = res.headers.get("content-type") ?? "";
     // Only parse HTML; skip PDFs, images, JSON, etc.
-    if (!contentType.includes("text/html")) return null;
-    return await res.text();
+    if (!contentType.includes("text/html")) return { finalUrl, html: null };
+    return { finalUrl, html: await res.text() };
   } catch {
-    return null;
+    return { finalUrl: "", html: null };
   } finally {
     clearTimeout(timer);
   }
 }
 
-/** Extract same-origin, http(s) `<a href>` targets from HTML (normalized, deduped). */
+/**
+ * Resolve the seed URL into a canonical form by performing one initial fetch
+ * (`redirect: "follow"`). This lets us choose the post-redirect origin as
+ * authoritative, which handles the very common apex↔www / http↔https redirect
+ * case (e.g. seed `https://example.com` → final `https://www.example.com/`).
+ *
+ * Best-effort: any failure (network error, timeout, non-OK, non-HTML) falls
+ * back to the seed's own origin and a `null` html — discovery still proceeds.
+ * The returned `html` is reused by the crawl to avoid a second seed fetch.
+ */
+async function resolveSeed(seed: string): Promise<{
+  canonicalUrl: string;
+  canonicalOrigin: string;
+  html: string | null;
+}> {
+  const { finalUrl, html } = await fetchHtml(seed);
+  const canonicalUrl = finalUrl || seed;
+  let canonicalOrigin: string;
+  try {
+    canonicalOrigin = new URL(canonicalUrl).origin;
+  } catch {
+    canonicalOrigin = new URL(seed).origin;
+  }
+  return { canonicalUrl, canonicalOrigin, html };
+}
+
+/** Extract same-site, http(s) `<a href>` targets from HTML (canonicalized, deduped). */
 function extractLinks(html: string, baseUrl: string, origin: string): string[] {
   const $ = cheerio.load(html);
   const out: string[] = [];
@@ -119,12 +194,11 @@ function extractLinks(html: string, baseUrl: string, origin: string): string[] {
   $("a[href]").each((_, el) => {
     const href = $(el).attr("href");
     if (!href) return;
-    const normalized = normalizeUrl(href, baseUrl);
-    if (!normalized) return;
-    if (!isSameOrigin(normalized, origin)) return;
-    if (seen.has(normalized)) return;
-    seen.add(normalized);
-    out.push(normalized);
+    const canonical = canonicalize(href, origin, baseUrl);
+    if (!canonical) return;
+    if (seen.has(canonical)) return;
+    seen.add(canonical);
+    out.push(canonical);
   });
   return out;
 }
@@ -138,6 +212,7 @@ function extractLinks(html: string, baseUrl: string, origin: string): string[] {
  */
 async function crawl(
   seed: string,
+  seedHtml: string | null,
   origin: string,
   maxDepth: number,
   collectBudget: number,
@@ -147,12 +222,12 @@ async function crawl(
 ): Promise<DiscoveredUrl[]> {
   const found = new Map<string, DiscoveredUrl>();
   const enqueued = new Set<string>();
-  const queue: { url: string; depth: number }[] = [];
+  const queue: { url: string; depth: number; html: string | null }[] = [];
 
-  const seedNorm = normalizeUrl(seed);
-  if (seedNorm) {
-    queue.push({ url: seedNorm, depth: 0 });
-    enqueued.add(seedNorm);
+  const seedCanonical = canonicalize(seed, origin);
+  if (seedCanonical) {
+    queue.push({ url: seedCanonical, depth: 0, html: seedHtml });
+    enqueued.add(seedCanonical);
   }
 
   let fetches = 0;
@@ -162,7 +237,7 @@ async function crawl(
     if (fetches >= MAX_CRAWL_FETCHES) break;
     if (found.size >= collectBudget) break;
 
-    const { url, depth } = queue.shift()!;
+    const { url, depth, html: cachedHtml } = queue.shift()!;
 
     // Record the page itself (seed included) as a discovered URL.
     if (!found.has(url)) {
@@ -172,14 +247,26 @@ async function crawl(
     // Only expand (fetch + parse) while within the depth bound.
     if (depth >= maxDepth) continue;
 
-    const html = await fetchHtml(url);
-    fetches++;
+    // Reuse the seed body from resolveSeed when available; otherwise fetch.
+    // The base URL for link resolution is the page's final URL after redirects
+    // (`finalUrl`), falling back to the requested URL when unavailable.
+    let html: string | null;
+    let baseUrl: string;
+    if (cachedHtml !== null) {
+      html = cachedHtml;
+      baseUrl = url;
+    } else {
+      const fetched = await fetchHtml(url);
+      fetches++;
+      html = fetched.html;
+      baseUrl = fetched.finalUrl || url;
+    }
     if (html === null) {
       warnings.push(`Could not fetch page for crawl: ${url}`);
       continue;
     }
 
-    for (const link of extractLinks(html, url, origin)) {
+    for (const link of extractLinks(html, baseUrl, origin)) {
       if (enqueued.has(link)) continue;
       // Don't follow excluded links (the central `add` collector also drops
       // them, but skipping the fetch keeps the crawl cheap and on-budget).
@@ -190,7 +277,7 @@ async function crawl(
         continue;
       }
       enqueued.add(link);
-      queue.push({ url: link, depth: depth + 1 });
+      queue.push({ url: link, depth: depth + 1, html: null });
     }
   }
 
@@ -209,12 +296,20 @@ async function crawl(
  */
 export async function discover(input: DiscoverInput): Promise<DiscoverResult> {
   const warnings: string[] = [];
-  const origin = toOrigin(input.url);
+
+  // Resolve the seed via one initial fetch so the canonical origin reflects any
+  // redirect (e.g. apex → www, http → https). Defends against the common case
+  // where the sitemap and canonical absolute links use a different host variant
+  // than the user typed. Best-effort: failure falls back to the seed's origin.
+  const seed = normalizeSeed(input.url) ?? input.url;
+  const { canonicalUrl, canonicalOrigin, html: seedHtml } =
+    await resolveSeed(seed);
+  const origin = canonicalOrigin;
 
   // robots.txt drives crawl politeness and may declare sitemaps.
   const robots = await fetchRobots(origin);
 
-  const seedPath = pathForRobots(input.url);
+  const seedPath = pathForRobots(canonicalUrl);
   const robotsBlocked = !robots.isAllowed(seedPath);
 
   // Single source of truth for exclude-path matching, applied to BOTH sources.
@@ -226,22 +321,21 @@ export async function discover(input: DiscoverInput): Promise<DiscoverResult> {
   let excludedCount = 0;
 
   function add(url: string, source: DiscoveredUrl["source"], depth?: number) {
-    const normalized = normalizeUrl(url);
-    if (!normalized) return;
-    if (!isSameOrigin(normalized, origin)) return;
-    if (seen.has(normalized)) return;
+    const canonical = canonicalize(url, origin);
+    if (!canonical) return;
+    if (seen.has(canonical)) return;
     // Single exclusion chokepoint: drop URLs matching the exclude patterns,
     // whatever their source. Marked seen so a later source can't re-add them.
-    if (isExcluded(new URL(normalized).pathname)) {
-      seen.add(normalized);
+    if (isExcluded(new URL(canonical).pathname)) {
+      seen.add(canonical);
       excludedCount++;
       return;
     }
-    seen.add(normalized);
+    seen.add(canonical);
     collected.push(
       source === "crawl"
-        ? { url: normalized, source, depth }
-        : { url: normalized, source },
+        ? { url: canonical, source, depth }
+        : { url: canonical, source },
     );
   }
 
@@ -260,11 +354,13 @@ export async function discover(input: DiscoverInput): Promise<DiscoverResult> {
       // gatherSitemapUrls is itself best-effort, but belt-and-suspenders.
       sitemapUrls = [];
     }
-    const sameOrigin = sitemapUrls.filter((u) => isSameOrigin(u, origin));
-    if (sameOrigin.length === 0) {
+    const sameSite = sitemapUrls
+      .map((u) => canonicalize(u, origin))
+      .filter((u): u is string => u !== null);
+    if (sameSite.length === 0) {
       warnings.push("No URLs found in sitemap.");
     }
-    for (const u of sameOrigin) add(u, "sitemap");
+    for (const u of sameSite) add(u, "sitemap");
   }
 
   // --- Crawl (skipped entirely if robots disallows the seed) ----------------
@@ -275,7 +371,8 @@ export async function discover(input: DiscoverInput): Promise<DiscoverResult> {
       );
     } else {
       const crawled = await crawl(
-        input.url,
+        canonicalUrl,
+        seedHtml,
         origin,
         input.maxDepth,
         MAX_CRAWL_FETCHES,

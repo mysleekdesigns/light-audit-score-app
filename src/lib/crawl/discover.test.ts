@@ -290,6 +290,60 @@ describe("compileExcludePathMatcher", () => {
     expect(matcher("/public")).toBe(false);
   });
 
+  it("trailing /* also excludes the bare parent (DWIM section exclude)", () => {
+    const matcher = compileExcludePathMatcher(["/events/*"]);
+    // The user's expected behaviour: "everything under /events" includes
+    // the section root itself, not just its sub-paths.
+    expect(matcher("/events")).toBe(true);
+    expect(matcher("/events/")).toBe(true);
+    expect(matcher("/events/summer-tour")).toBe(true);
+    // But cleanly bounded at the slash — must not match sibling names.
+    expect(matcher("/eventsplanner")).toBe(false);
+    expect(matcher("/about")).toBe(false);
+  });
+
+  it("nested trailing /* excludes the nested parent only", () => {
+    const matcher = compileExcludePathMatcher(["/foo/bar/*"]);
+    expect(matcher("/foo/bar")).toBe(true);
+    expect(matcher("/foo/bar/baz")).toBe(true);
+    // /foo by itself is unaffected — only /foo/bar is the section root.
+    expect(matcher("/foo")).toBe(false);
+    expect(matcher("/foo/barbarian")).toBe(false);
+  });
+
+  it("does NOT apply the parent-prefix DWIM to non-directory globs", () => {
+    // `*.pdf` has no `/*` ending → strict glob, no parent inferred.
+    const matcher = compileExcludePathMatcher(["*.pdf"]);
+    expect(matcher("/report.pdf")).toBe(true);
+    expect(matcher("/")).toBe(false);
+    expect(matcher("/anything")).toBe(false);
+  });
+
+  it("prefix is bounded at /: /blog must not match /blogger", () => {
+    const matcher = compileExcludePathMatcher(["/blog"]);
+    expect(matcher("/blog")).toBe(true);
+    expect(matcher("/blog/")).toBe(true);
+    expect(matcher("/blog/post-1")).toBe(true);
+    // Critical: these previously matched via raw startsWith — they must not.
+    expect(matcher("/blogger")).toBe(false);
+    expect(matcher("/blog-archive")).toBe(false);
+  });
+
+  it("strips a trailing slash from prefix patterns (still matches sub-paths)", () => {
+    const matcher = compileExcludePathMatcher(["/blog/"]);
+    expect(matcher("/blog")).toBe(true);
+    expect(matcher("/blog/")).toBe(true);
+    expect(matcher("/blog/post")).toBe(true);
+    expect(matcher("/blogger")).toBe(false);
+  });
+
+  it("a bare / pattern still excludes everything (escape hatch preserved)", () => {
+    const matcher = compileExcludePathMatcher(["/"]);
+    expect(matcher("/")).toBe(true);
+    expect(matcher("/anything")).toBe(true);
+    expect(matcher("/deep/nested/path")).toBe(true);
+  });
+
   it("glob-matches *.pdf as a suffix anchored at both ends", () => {
     const matcher = compileExcludePathMatcher(["*.pdf"]);
     expect(matcher("/docs/report.pdf")).toBe(true);
@@ -348,6 +402,32 @@ describe("discover — exclude paths", () => {
     ).toBe(true);
   });
 
+  it("a /section/* exclude drops the bare section root from the sitemap", async () => {
+    // Mirrors the user's example.com setup: the sitemap lists section roots
+    // (/events, /clubs, …) AND their sub-pages; the user types `/events/*`
+    // expecting BOTH to be dropped.
+    stubRoutes({
+      [`${ORIGIN}/sitemap.xml`]: SITEMAP_XML(
+        `${ORIGIN}/events`,
+        `${ORIGIN}/events/summer-tour`,
+        `${ORIGIN}/clubs`,
+        `${ORIGIN}/clubs/downtown`,
+        `${ORIGIN}/about`, // kept
+      ),
+    });
+    const result = await discover(
+      input({
+        useSitemap: true,
+        excludePaths: ["/events/*", "/clubs/*"],
+      }),
+    );
+    const urls = result.urls.map((u) => u.url);
+    expect(urls).toEqual([`${ORIGIN}/about`]);
+    expect(
+      result.warnings.some((w) => /excluded \d+ url\(s\)/i.test(w)),
+    ).toBe(true);
+  });
+
   it("does not warn about exclusions when nothing matches", async () => {
     stubRoutes({
       [`${ORIGIN}/sitemap.xml`]: SITEMAP_XML(`${ORIGIN}/about`),
@@ -357,6 +437,137 @@ describe("discover — exclude paths", () => {
     );
     expect(result.urls.map((u) => u.url)).toEqual([`${ORIGIN}/about`]);
     expect(result.warnings.some((w) => /excluded/i.test(w))).toBe(false);
+  });
+});
+
+describe("discover — apex ↔ www same-site", () => {
+  const APEX = "https://example.com";
+  const WWW = "https://www.example.com";
+
+  it("treats www and apex variants as the same site (apex seed)", async () => {
+    stubRoutes({
+      // Apex seed redirects nowhere in the test runtime (Response.url is "");
+      // we exercise the host-rewriting path via the sitemap.
+      [`${APEX}/`]: page(),
+      [`${APEX}/sitemap.xml`]: SITEMAP_XML(
+        `${WWW}/a`,
+        `${WWW}/b`,
+        `https://blog.example.com/x`, // different subdomain → still filtered out
+      ),
+    });
+    const result = await discover(
+      input({ url: `${APEX}/`, useSitemap: true }),
+    );
+    // www URLs are accepted AND rewritten to the apex host (canonical form).
+    expect(result.urls.map((u) => u.url)).toEqual([
+      `${APEX}/a`,
+      `${APEX}/b`,
+    ]);
+    expect(result.urls.every((u) => u.source === "sitemap")).toBe(true);
+    // blog. subdomain is NOT a www variant → stays filtered out.
+    expect(result.urls.some((u) => u.url.includes("blog."))).toBe(false);
+    expect(result.warnings.some((w) => /no urls found/i.test(w))).toBe(false);
+  });
+
+  it("dedupes apex and www variants of the same path into one entry", async () => {
+    stubRoutes({
+      [`${APEX}/sitemap.xml`]: SITEMAP_XML(`${APEX}/shared`, `${WWW}/shared`),
+    });
+    const result = await discover(
+      input({ url: `${APEX}/`, useSitemap: true }),
+    );
+    expect(result.urls.map((u) => u.url)).toEqual([`${APEX}/shared`]);
+  });
+
+  it("does not treat a non-www subdomain as same-site", async () => {
+    stubRoutes({
+      [`${APEX}/sitemap.xml`]: SITEMAP_XML(
+        `https://shop.example.com/x`,
+        `https://cdn.example.com/y`,
+        `${WWW}/keep`,
+      ),
+    });
+    const result = await discover(
+      input({ url: `${APEX}/`, useSitemap: true }),
+    );
+    expect(result.urls.map((u) => u.url)).toEqual([`${APEX}/keep`]);
+  });
+
+  it("rewrites absolute www links found while crawling an apex seed", async () => {
+    stubRoutes({
+      // The seed page mixes a relative apex link with an absolute www link —
+      // a common Next.js / canonicalized-URL pattern. Both should be kept
+      // and stored under the seed's host.
+      [`${APEX}/`]: page(`/about`, `${WWW}/blog`),
+      [`${APEX}/about`]: page(),
+      [`${APEX}/blog`]: page(),
+    });
+    const result = await discover(
+      input({ url: `${APEX}/`, useCrawl: true, maxDepth: 1 }),
+    );
+    const urls = result.urls.map((u) => u.url);
+    expect(urls).toContain(`${APEX}/about`);
+    // www absolute link kept, but rewritten to the apex host.
+    expect(urls).toContain(`${APEX}/blog`);
+    expect(urls.some((u) => u.startsWith(WWW))).toBe(false);
+  });
+});
+
+describe("discover — seed redirect resolution", () => {
+  it("uses the post-redirect origin as canonical (apex → www)", async () => {
+    const APEX = "https://example.com";
+    const WWW = "https://www.example.com";
+
+    // `Response.url` is read-only and not settable via constructor; we patch
+    // it per-response with Object.defineProperty so resolveSeed sees the
+    // post-redirect URL it would see in real `fetch()`.
+    function withUrl(res: Response, url: string): Response {
+      Object.defineProperty(res, "url", { value: url, configurable: true });
+      return res;
+    }
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string) => {
+        const requested = String(input);
+        // The seed under apex "redirects" to www — Response.url reflects the
+        // final URL after the redirect.
+        if (requested === `${APEX}/`) {
+          return withUrl(
+            new Response("<html></html>", {
+              status: 200,
+              headers: { "content-type": "text/html" },
+            }),
+            `${WWW}/`,
+          );
+        }
+        if (requested === `${WWW}/robots.txt`) {
+          return new Response(`Sitemap: ${WWW}/sitemap.xml`, { status: 200 });
+        }
+        if (requested === `${WWW}/sitemap.xml`) {
+          return new Response(SITEMAP_XML(`${WWW}/a`, `${WWW}/b`).body, {
+            status: 200,
+            headers: { "content-type": "application/xml" },
+          });
+        }
+        // Default robots.txt for anything else → empty (allow all).
+        if (requested.endsWith("/robots.txt"))
+          return new Response("", { status: 200 });
+        return new Response("", { status: 404 });
+      }),
+    );
+
+    const result = await discover(
+      input({ url: `${APEX}/`, useSitemap: true, useCrawl: false }),
+    );
+    // The canonical origin is the post-redirect www host; sitemap URLs are
+    // kept and presented under that canonical host.
+    expect(result.origin).toBe(WWW);
+    expect(result.urls.map((u) => u.url)).toEqual([
+      `${WWW}/a`,
+      `${WWW}/b`,
+    ]);
+    expect(result.warnings.some((w) => /no urls found/i.test(w))).toBe(false);
   });
 });
 
