@@ -21,7 +21,7 @@ import {
 } from "@/lib/queue/types";
 
 /** Maximum URLs accepted in a single batch — bounds abuse / runaway batches. */
-export const MAX_URLS = 250;
+export const MAX_URLS = 500;
 
 /**
  * Validate a single URL string: trim it, require a parseable absolute URL, and
