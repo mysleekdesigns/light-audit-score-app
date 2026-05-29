@@ -28,6 +28,7 @@ export const dynamic = "force-dynamic";
 const TERMINAL_BATCH_STATUSES = new Set<Batch["status"]>([
   "completed",
   "completed_with_errors",
+  "cancelled",
 ]);
 
 export async function GET(
@@ -88,7 +89,7 @@ export async function GET(
       // 1. Subscribe BEFORE snapshotting so we can't miss an event in the gap.
       unsubscribe = queue.subscribe(id, (event) => {
         send(event);
-        if (event.type === "batch-completed") {
+        if (event.type === "batch-completed" || event.type === "batch-cancelled") {
           teardown();
         }
       });

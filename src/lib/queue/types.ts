@@ -66,14 +66,15 @@ export function resolveEffectiveConcurrency(
 // --- Job / batch model -----------------------------------------------------
 
 /** Lifecycle of a single per-URL audit job. */
-export type JobStatus = "queued" | "running" | "done" | "error";
+export type JobStatus = "queued" | "running" | "done" | "error" | "cancelled";
 
 /** Lifecycle of a batch (set of jobs). */
 export type BatchStatus =
   | "queued"
   | "running"
   | "completed"
-  | "completed_with_errors";
+  | "completed_with_errors"
+  | "cancelled";
 
 /**
  * Lhr-stripped audit result surfaced through the API/SSE. The raw `median.lhr`
@@ -118,6 +119,7 @@ export interface BatchCounts {
   running: number;
   done: number;
   error: number;
+  cancelled: number;
 }
 
 /** A batch: many per-URL jobs sharing one set of audit options. */
@@ -159,8 +161,9 @@ export interface Batch {
 /**
  * Events emitted as a batch progresses. The stream handler sends `batch-snapshot`
  * immediately on subscribe (full current state), then incremental events, then
- * `batch-completed` (after which it closes the stream). All payloads are
- * lhr-stripped views.
+ * `batch-completed` (after which it closes the stream). A user-initiated cancel
+ * ends the stream with `batch-cancelled` instead (also terminal). All payloads
+ * are lhr-stripped views.
  */
 export type ProgressEvent =
   | { type: "batch-snapshot"; batch: Batch }
@@ -172,7 +175,8 @@ export type ProgressEvent =
       counts: BatchCounts;
     }
   | { type: "job-failed"; batchId: string; job: AuditJob; counts: BatchCounts }
-  | { type: "batch-completed"; batch: Batch };
+  | { type: "batch-completed"; batch: Batch }
+  | { type: "batch-cancelled"; batch: Batch };
 
 /** Listener registered via {@link AuditQueueApi.subscribe}. */
 export type ProgressListener = (event: ProgressEvent) => void;
@@ -229,6 +233,16 @@ export interface AuditQueueApi {
 
   /** Current snapshot of a batch, or `undefined` if unknown. */
   getBatch(id: string): Batch | undefined;
+
+  /**
+   * Cancel a batch in flight: drop its queued jobs, kill any running worker
+   * children, and transition the batch to the terminal `cancelled` status
+   * (emitting `batch-cancelled`). Jobs that already settled (`done`/`error`) are
+   * left intact so their persisted runs survive. Idempotent: a batch that is
+   * already terminal is returned unchanged. Returns the cancelled snapshot, or
+   * `undefined` if the batch is unknown.
+   */
+  cancelBatch(id: string): Batch | undefined;
 
   /**
    * The full (lhr-bearing) {@link AuditResult} for a completed job/run, for the

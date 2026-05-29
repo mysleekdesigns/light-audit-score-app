@@ -93,6 +93,42 @@ export async function getBatch(id: string): Promise<Batch> {
   return (await response.json()) as Batch;
 }
 
+/**
+ * Cancel a batch in flight and return its (terminal) snapshot. Queued jobs are
+ * dropped and running workers killed; already-completed jobs keep their results.
+ * Throws {@link ApiError} (e.g. 404) on failure.
+ */
+export async function cancelBatch(id: string): Promise<Batch> {
+  const response = await fetch(
+    `/api/audits/${encodeURIComponent(id)}/cancel`,
+    { method: "POST" },
+  );
+  if (!response.ok) throw await toApiError(response);
+  return (await response.json()) as Batch;
+}
+
+/** Delete a single persisted run (row + stored reports). Throws {@link ApiError} on failure. */
+export async function deleteRun(runId: string): Promise<void> {
+  const response = await fetch(`/api/history/${encodeURIComponent(runId)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) throw await toApiError(response);
+}
+
+/** Counts removed by {@link clearHistory}. */
+export interface ClearHistoryResult {
+  runs: number;
+  batches: number;
+}
+
+/** Delete ALL persisted runs/batches and their stored reports. Throws {@link ApiError} on failure. */
+export async function clearHistory(): Promise<ClearHistoryResult> {
+  const response = await fetch("/api/history", { method: "DELETE" });
+  if (!response.ok) throw await toApiError(response);
+  const body = (await response.json()) as { cleared: ClearHistoryResult };
+  return body.cleared;
+}
+
 /** URL of the raw Lighthouse Result JSON for a completed run. */
 export function reportJsonUrl(runId: string): string {
   return `/api/reports/${encodeURIComponent(runId)}`;

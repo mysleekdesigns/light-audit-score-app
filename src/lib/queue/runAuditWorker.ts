@@ -62,15 +62,31 @@ function lastLine(text: string): string {
   return lines.length > 0 ? lines[lines.length - 1] : "";
 }
 
+/** Error thrown when a worker is killed by an {@link AbortSignal} (user cancel). */
+export class WorkerAbortError extends Error {
+  constructor(url: string) {
+    super(`Audit cancelled for ${url}`);
+    this.name = "WorkerAbortError";
+  }
+}
+
 /**
  * Run one audit (`runAudit`) in an isolated child process. Resolves with the
  * full {@link AuditResult} (including `median.lhr`) on success, or rejects with a
  * descriptive `Error` on failure/timeout. The temp result file is always removed.
+ *
+ * Pass an {@link AbortSignal} to support user-initiated cancellation: when it
+ * fires the child is SIGKILLed and the promise rejects with a
+ * {@link WorkerAbortError}, which the queue treats as a cancel (not an error).
  */
 export async function runAuditInWorker(
   url: string,
   options: AuditOptions,
+  signal?: AbortSignal,
 ): Promise<AuditResult> {
+  if (signal?.aborted) {
+    throw new WorkerAbortError(url);
+  }
   // The worker is an out-of-bundle Node script launched with `fork`, NOT an app
   // module. We resolve its real path here, but hand `fork` (below) a bare
   // `process.env` lookup the bundler can't statically trace — otherwise Turbopack
@@ -111,6 +127,7 @@ export async function runAuditInWorker(
 
     let settled = false;
     let timedOut = false;
+    let aborted = false;
     let stderr = "";
     let lastMessage: { ok: boolean; message?: string } | undefined;
 
@@ -118,6 +135,7 @@ export async function runAuditInWorker(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (signal) signal.removeEventListener("abort", onAbort);
       fn();
     };
 
@@ -125,6 +143,14 @@ export async function runAuditInWorker(
       timedOut = true;
       child.kill("SIGKILL");
     }, WORKER_TIMEOUT_MS);
+
+    // User-initiated cancel: kill the child; the `exit` handler resolves the
+    // rejection via the `aborted` flag (mirrors the timeout path).
+    const onAbort = (): void => {
+      aborted = true;
+      child.kill("SIGKILL");
+    };
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
 
     child.stderr?.on("data", (chunk: Buffer) => {
       if (stderr.length < MAX_STDERR) stderr += chunk.toString();
@@ -141,7 +167,15 @@ export async function runAuditInWorker(
       });
     });
 
-    child.on("exit", (code, signal) => {
+    child.on("exit", (code, exitSignal) => {
+      if (aborted) {
+        finish(() => {
+          removeOutFile();
+          reject(new WorkerAbortError(url));
+        });
+        return;
+      }
+
       if (timedOut) {
         finish(() => {
           removeOutFile();
@@ -168,7 +202,7 @@ export async function runAuditInWorker(
           removeOutFile();
           reject(
             new Error(
-              `Audit worker exited with code ${code}${signal ? `/${signal}` : ""} for ${url}` +
+              `Audit worker exited with code ${code}${exitSignal ? `/${exitSignal}` : ""} for ${url}` +
                 (tail ? `: ${tail}` : ""),
             ),
           );

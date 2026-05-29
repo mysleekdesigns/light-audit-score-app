@@ -55,6 +55,7 @@ function makeBatch(id: string, jobs: AuditJob[]): Batch {
       running: 0,
       done: 0,
       error: 0,
+      cancelled: 0,
     },
     createdAt: new Date().toISOString(),
   };

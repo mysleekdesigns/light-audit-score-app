@@ -10,13 +10,23 @@
  */
 
 import { apiError } from "@/lib/api/errors";
-import { listHistory } from "@/lib/db/persistence";
+import { clearHistory, listHistory } from "@/lib/db/persistence";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(): Promise<Response> {
   return Response.json({ runs: listHistory() }, { status: 200 });
+}
+
+/**
+ * `DELETE /api/history` — clear ALL persisted history (every run + batch and
+ * their stored report files). Returns the counts removed. Schedules are left
+ * untouched.
+ */
+export async function DELETE(): Promise<Response> {
+  const cleared = await clearHistory();
+  return Response.json({ cleared }, { status: 200 });
 }
 
 // Reject unsupported methods with a structured 405 rather than Next's default.

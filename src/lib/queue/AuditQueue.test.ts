@@ -17,7 +17,11 @@ import type { AuditResult } from "@/lib/lighthouse/types";
 
 // Mock the process-isolated runner before importing the queue so the mock is
 // wired in (no real fork / Chrome launch during unit tests).
-vi.mock("@/lib/queue/runAuditWorker", () => ({ runAuditInWorker: vi.fn() }));
+vi.mock("@/lib/queue/runAuditWorker", () => ({
+  runAuditInWorker: vi.fn(),
+  // The queue references this class (instanceof) on the cancel path.
+  WorkerAbortError: class WorkerAbortError extends Error {},
+}));
 
 // Mock the persistence seam so the queue's DB/disk side effects don't touch the
 // real SQLite file or write report files during unit tests.
@@ -152,6 +156,7 @@ describe("AuditQueue", () => {
       running: 0,
       done: 0,
       error: 0,
+      cancelled: 0,
     });
   });
 
@@ -532,5 +537,83 @@ describe("AuditQueue", () => {
     const err = awaitBatch(queue, errBatch.id);
     await err.done;
     expect(mockRecordFailedRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancelBatch keeps completed jobs, cancels queued + running, emits batch-cancelled", async () => {
+    // A worker that never resolves until its AbortSignal fires (then rejects) —
+    // models the real worker being SIGKILLed on cancel.
+    const abortable = (signal?: AbortSignal): Promise<AuditResult> =>
+      new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+          once: true,
+        });
+      });
+    // a → completes; b, c → hang until cancelled. Concurrency 1 so a finishes,
+    // b is running, c is still queued when we cancel.
+    mockRunAudit.mockImplementation((url, _opts, signal) =>
+      url === "https://a.test/"
+        ? Promise.resolve(makeResult(url, 90))
+        : abortable(signal),
+    );
+    const queue = new AuditQueue();
+    const initial = queue.createBatch({
+      urls: ["https://a.test/", "https://b.test/", "https://c.test/"],
+      device: "mobile",
+      options: OPTIONS,
+      concurrency: 1,
+    });
+
+    // Wait until a is done and b is running.
+    const events: ProgressEvent[] = [];
+    await new Promise<void>((resolve) => {
+      queue.subscribe(initial.id, (event) => {
+        events.push(event);
+        const snap = queue.getBatch(initial.id)!;
+        if (snap.counts.done === 1 && snap.counts.running === 1) resolve();
+      });
+    });
+
+    const cancelled = queue.cancelBatch(initial.id);
+    expect(cancelled?.status).toBe("cancelled");
+
+    const byUrl = (u: string) => cancelled!.jobs.find((j) => j.url === u)!;
+    expect(byUrl("https://a.test/").status).toBe("done"); // kept
+    expect(byUrl("https://b.test/").status).toBe("cancelled"); // was running
+    expect(byUrl("https://c.test/").status).toBe("cancelled"); // was queued
+    expect(cancelled!.counts).toMatchObject({
+      done: 1,
+      cancelled: 2,
+      running: 0,
+      queued: 0,
+    });
+    expect(events.some((e) => e.type === "batch-cancelled")).toBe(true);
+    expect(persistence.updateBatchStatus).toHaveBeenCalledWith(
+      initial.id,
+      expect.objectContaining({ status: "cancelled" }),
+    );
+    // The cancelled run is NOT persisted as a failure.
+    expect(mockRecordFailedRun).not.toHaveBeenCalled();
+  });
+
+  it("cancelBatch is a no-op on an already-terminal batch", async () => {
+    mockRunAudit.mockResolvedValue(makeResult("https://a.test/", 90));
+    const queue = new AuditQueue();
+    const initial = queue.createBatch({
+      urls: ["https://a.test/"],
+      device: "mobile",
+      options: OPTIONS,
+      concurrency: 1,
+    });
+    const { done } = awaitBatch(queue, initial.id);
+    await done;
+    expect(queue.getBatch(initial.id)?.status).toBe("completed");
+
+    // Cancelling a completed batch leaves it completed (idempotent no-op).
+    expect(queue.cancelBatch(initial.id)?.status).toBe("completed");
+  });
+
+  it("cancelBatch returns undefined for an unknown batch id", () => {
+    const queue = new AuditQueue();
+    expect(queue.cancelBatch("does-not-exist")).toBeUndefined();
   });
 });

@@ -294,6 +294,81 @@ export function recordFailedRun(batch: Batch, job: AuditJob): void {
   }
 }
 
+// --- Deletion --------------------------------------------------------------
+
+/** Remove a run's stored report files (best-effort; never throws). */
+async function removeReportFiles(runId: string): Promise<void> {
+  try {
+    await Promise.all([
+      fs.rm(reportJsonPath(runId), { force: true }),
+      fs.rm(reportHtmlPath(runId), { force: true }),
+    ]);
+  } catch (err) {
+    warn("removeReportFiles", err);
+  }
+}
+
+/**
+ * Delete a single persisted run: its row, its stored report files, and — if it
+ * was the batch's last remaining run — the now-orphaned `batches` row too (child
+ * runs are deleted first to respect the FK). Returns whether a row was removed.
+ * Never throws.
+ */
+export async function deleteRun(runId: string): Promise<boolean> {
+  try {
+    const db = getDb();
+    const row = db.select().from(runs).where(eq(runs.id, runId)).get();
+    if (!row) return false;
+
+    db.delete(runs).where(eq(runs.id, runId)).run();
+    await removeReportFiles(runId);
+
+    // Orphan cleanup: drop the parent batch once it has no runs left.
+    const remaining = db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(eq(runs.batchId, row.batchId))
+      .limit(1)
+      .all();
+    if (remaining.length === 0) {
+      db.delete(batches).where(eq(batches.id, row.batchId)).run();
+    }
+    return true;
+  } catch (err) {
+    warn("deleteRun", err);
+    return false;
+  }
+}
+
+/**
+ * Delete ALL persisted history: every `runs` and `batches` row plus the entire
+ * reports directory. Runs are deleted before batches to respect the
+ * `runs.batchId → batches.id` FK. The `schedules` table is left untouched (it's
+ * config, not history). Returns the counts removed. Never throws.
+ */
+export async function clearHistory(): Promise<{ runs: number; batches: number }> {
+  try {
+    const db = getDb();
+    const runCount = db.select({ id: runs.id }).from(runs).all().length;
+    const batchCount = db.select({ id: batches.id }).from(batches).all().length;
+
+    db.delete(runs).run();
+    db.delete(batches).run();
+
+    // Wipe report files wholesale; the directory is recreated lazily by recordRun.
+    try {
+      await fs.rm(getReportsDir(), { recursive: true, force: true });
+    } catch (err) {
+      warn("clearHistory:reports", err);
+    }
+
+    return { runs: runCount, batches: batchCount };
+  } catch (err) {
+    warn("clearHistory", err);
+    return { runs: 0, batches: 0 };
+  }
+}
+
 // --- Reads -----------------------------------------------------------------
 
 /** Every persisted run, newest first. Returns `[]` on any error. */

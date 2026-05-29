@@ -13,6 +13,7 @@
 
 import { useCallback, useId, useMemo } from "react";
 import {
+  Ban,
   CheckCircle2,
   Clock,
   ExternalLink,
@@ -104,6 +105,12 @@ const STATUS_META: Record<
     variant: "outline",
     icon: TriangleAlert,
     className: "border-score-average/40 text-score-average",
+  },
+  cancelled: {
+    label: "Cancelled",
+    variant: "outline",
+    icon: Ban,
+    className: "border-border/60 text-muted-foreground",
   },
 };
 

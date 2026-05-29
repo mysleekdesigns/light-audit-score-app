@@ -46,6 +46,7 @@ export interface UseBatchStreamResult {
 const TERMINAL_STATUSES = new Set<BatchStatus>([
   "completed",
   "completed_with_errors",
+  "cancelled",
 ]);
 
 /** Named SSE events forwarded by the stream route (must match `ProgressEvent["type"]`). */
@@ -55,6 +56,7 @@ const EVENT_TYPES = [
   "job-completed",
   "job-failed",
   "batch-completed",
+  "batch-cancelled",
 ] as const;
 
 /**
@@ -66,6 +68,7 @@ function reduce(prev: Batch | null, event: AuditProgressEvent): Batch | null {
   switch (event.type) {
     case "batch-snapshot":
     case "batch-completed":
+    case "batch-cancelled":
       return event.batch;
     case "job-started":
     case "job-completed":
@@ -134,7 +137,7 @@ export function useBatchStream(batchId: string | null): UseBatchStreamResult {
       setError(null);
       setConnection("open");
 
-      if (event.type === "batch-completed") {
+      if (event.type === "batch-completed" || event.type === "batch-cancelled") {
         finish(event.batch);
         return;
       }
@@ -155,7 +158,15 @@ export function useBatchStream(batchId: string | null): UseBatchStreamResult {
     };
     source.onerror = () => {
       if (completed) return;
-      // EventSource auto-retries; reflect that rather than treating it as fatal.
+      // A non-200 response (e.g. the batch is gone after a server restart) puts
+      // the source in CLOSED with no auto-retry — surface it as a terminal close
+      // so callers can drop a stale id rather than spin on "reconnecting".
+      if (source.readyState === EventSource.CLOSED) {
+        setConnection("closed");
+        setError("Stream closed — the batch is no longer available.");
+        return;
+      }
+      // Otherwise EventSource auto-retries; reflect that rather than treating it as fatal.
       setConnection("reconnecting");
       setError("Connection interrupted — reconnecting…");
     };

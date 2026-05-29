@@ -8,7 +8,7 @@
  */
 
 import { memo } from "react";
-import { Radio } from "lucide-react";
+import { Ban, Radio } from "lucide-react";
 
 import { CoreWebVitalsStrip } from "@/components/audit/core-web-vitals";
 import { EnvironmentBadge } from "@/components/audit/environment-badge";
@@ -16,6 +16,7 @@ import { ResultsTable } from "@/components/audit/results-table";
 import { ResultsViewToggle } from "@/components/audit/results-view-toggle";
 import { ScoreRings } from "@/components/audit/score-rings";
 import { JobStatusBadge } from "@/components/audit/status-badge";
+import { Button } from "@/components/ui/button";
 import {
   Accordion,
   AccordionContent,
@@ -36,6 +37,10 @@ interface AuditResultsProps {
   batch: Batch;
   connection: StreamConnection;
   onSelect: (job: AuditJob) => void;
+  /** Cancel the in-flight batch (queued jobs dropped, running workers killed). */
+  onCancel: () => void;
+  /** True while a cancel request is in flight (disables the button). */
+  cancelling: boolean;
 }
 
 /** Whole-batch progress as a 0–100 percentage of finished (done + error) jobs. */
@@ -50,6 +55,7 @@ const STATUS_LABEL: Record<Batch["status"], string> = {
   running: "Auditing",
   completed: "Complete",
   completed_with_errors: "Complete · with errors",
+  cancelled: "Cancelled",
 };
 
 interface HostGroup {
@@ -78,12 +84,20 @@ function groupJobsByHost(jobs: AuditJob[]): HostGroup[] {
   return Array.from(groups, ([host, hostJobs]) => ({ host, jobs: hostJobs }));
 }
 
-export function AuditResults({ batch, connection, onSelect }: AuditResultsProps) {
+export function AuditResults({
+  batch,
+  connection,
+  onSelect,
+  onCancel,
+  cancelling,
+}: AuditResultsProps) {
   const { defaults, update } = useAuditDefaults();
   const view = defaults.resultsView;
   const pct = batchProgress(batch);
   const { total, done, error, running } = batch.counts;
   const groups = groupJobsByHost(batch.jobs);
+  // The batch can still be stopped while any job is outstanding.
+  const canCancel = batch.status === "queued" || batch.status === "running";
   // Only the first website opens on load; the rest start collapsed. Keyed by
   // batch id so a new batch resets to "first open".
   const firstHost = groups[0]?.host;
@@ -127,6 +141,20 @@ export function AuditResults({ batch, connection, onSelect }: AuditResultsProps)
               value={view}
               onChange={(next) => update({ resultsView: next })}
             />
+            {canCancel ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={onCancel}
+                disabled={cancelling}
+                aria-label="Cancel audit"
+                className="border-score-poor/40 font-mono text-[0.7rem] uppercase tracking-[0.16em] text-score-poor hover:bg-score-poor/10 hover:text-score-poor"
+              >
+                <Ban data-icon="inline-start" />
+                {cancelling ? "Cancelling…" : "Cancel"}
+              </Button>
+            ) : null}
           </div>
         </div>
         <Progress value={pct} aria-label="Batch progress" />
@@ -278,6 +306,12 @@ function DeviceSection({ device, job, url, onSelect }: DeviceSectionProps) {
         {job.error?.message ?? "Audit failed."}
       </p>
     );
+  } else if (job.status === "cancelled") {
+    body = (
+      <p className="font-mono text-xs text-muted-foreground/60">
+        Cancelled before scoring.
+      </p>
+    );
   } else {
     body = (
       <div className="flex gap-5" aria-hidden>
@@ -404,6 +438,10 @@ const AuditJobCard = memo(function AuditJobCard({
       ) : job.status === "error" ? (
         <p className="text-sm text-score-poor">
           {job.error?.message ?? "Audit failed."}
+        </p>
+      ) : job.status === "cancelled" ? (
+        <p className="font-mono text-xs text-muted-foreground/60">
+          Cancelled before scoring.
         </p>
       ) : (
         <div className="flex flex-col gap-4" aria-hidden>

@@ -40,7 +40,7 @@ import {
 } from "@/lib/db/persistence";
 import { resolveFormFactors } from "@/lib/lighthouse/options";
 import type { AuditResult } from "@/lib/lighthouse/types";
-import { runAuditInWorker } from "@/lib/queue/runAuditWorker";
+import { runAuditInWorker, WorkerAbortError } from "@/lib/queue/runAuditWorker";
 import {
   type AuditJob,
   type AuditQueueApi,
@@ -77,6 +77,7 @@ function computeCounts(jobs: AuditJob[]): BatchCounts {
     running: 0,
     done: 0,
     error: 0,
+    cancelled: 0,
   };
   for (const job of jobs) {
     counts[job.status] += 1;
@@ -136,6 +137,13 @@ export class AuditQueue implements AuditQueueApi {
 
   /** Per-batch progress listeners. Lazily created on first subscribe/emit. */
   private readonly emitter = new EventEmitter();
+
+  /**
+   * Per-batch {@link AbortController}, created in `createBatch`. Aborting it
+   * (via {@link cancelBatch}) SIGKILLs every running worker child for that batch
+   * — each `runJob` passes its batch's `signal` into {@link runAuditInWorker}.
+   */
+  private readonly batchControllers = new Map<string, AbortController>();
 
   constructor(concurrency: number = clampConcurrency(Number.NaN)) {
     // EventEmitter defaults to a 10-listener warning; a batch may legitimately
@@ -213,6 +221,8 @@ export class AuditQueue implements AuditQueueApi {
     };
 
     this.batches.set(batchId, batch);
+    // One AbortController per batch; `cancelBatch` aborts it to kill running workers.
+    this.batchControllers.set(batchId, new AbortController());
 
     // Index the freshly-created batch (pure side effect; never throws).
     recordBatch(batch);
@@ -239,6 +249,47 @@ export class AuditQueue implements AuditQueueApi {
   getBatch(id: string): Batch | undefined {
     const batch = this.batches.get(id);
     return batch ? cloneBatch(batch) : undefined;
+  }
+
+  /**
+   * Cancel a batch in flight (see {@link AuditQueueApi.cancelBatch}). Flips every
+   * not-yet-settled job to `cancelled`, aborts the batch's worker children, marks
+   * the batch terminal, and emits `batch-cancelled`. Already-settled jobs
+   * (`done`/`error`) are untouched so their persisted runs survive. Idempotent.
+   */
+  cancelBatch(id: string): Batch | undefined {
+    const batch = this.batches.get(id);
+    if (!batch) return undefined;
+    // Already terminal — nothing to cancel; return the current snapshot.
+    if (
+      batch.status === "completed" ||
+      batch.status === "completed_with_errors" ||
+      batch.status === "cancelled"
+    ) {
+      return cloneBatch(batch);
+    }
+
+    const finishedAt = now();
+    batch.status = "cancelled";
+    batch.finishedAt = finishedAt;
+    // Stop queued jobs from ever launching (runJob bails on non-`queued`) and
+    // mark in-flight jobs cancelled; the abort below kills their workers. Jobs
+    // already done/errored keep their result and persisted run.
+    for (const job of batch.jobs) {
+      if (job.status === "queued" || job.status === "running") {
+        job.status = "cancelled";
+        job.finishedAt = finishedAt;
+      }
+    }
+
+    // SIGKILL any running worker children for this batch.
+    this.batchControllers.get(id)?.abort();
+
+    // Mirror the terminal status to the persistence index.
+    updateBatchStatus(id, { status: "cancelled", finishedAt });
+
+    this.emit(id, { type: "batch-cancelled", batch: cloneBatch(batch) });
+    return cloneBatch(batch);
   }
 
   /**
@@ -277,6 +328,13 @@ export class AuditQueue implements AuditQueueApi {
     const job = batch.jobs.find((j) => j.id === jobId);
     if (!job) return;
 
+    // If the job is no longer `queued` it was cancelled before its turn (see
+    // `cancelBatch`, which flips queued jobs to `cancelled`). Don't launch a
+    // worker; the batch is already terminal so there's nothing to finalize.
+    if (job.status !== "queued") return;
+
+    const signal = this.batchControllers.get(batchId)?.signal;
+
     // --- start ---
     job.status = "running";
     job.startedAt = now();
@@ -302,10 +360,25 @@ export class AuditQueue implements AuditQueueApi {
       // Phase 12). For a single-device batch this equals `batch.options`; for a
       // `"both"` batch it pins the per-job device so the persisted run records
       // the right one (`result.options.formFactor` flows straight through).
-      const result = await runAuditInWorker(job.url, {
-        ...batch.options,
-        formFactor: job.device,
-      });
+      const result = await runAuditInWorker(
+        job.url,
+        {
+          ...batch.options,
+          formFactor: job.device,
+        },
+        signal,
+      );
+      // A cancel that landed after the worker finished but before we recorded:
+      // drop the result and mark the job cancelled (cancelBatch set it already,
+      // but a late-completing worker would otherwise overwrite that here).
+      if (signal?.aborted) {
+        if (job.status === "running") {
+          job.status = "cancelled";
+          job.finishedAt = now();
+        }
+        this.maybeFinalizeBatch(batch);
+        return;
+      }
       // Stash the heavy, lhr-bearing result under the runId for the report
       // endpoint; surface only the lite view on the job.
       this.results.set(job.id, result);
@@ -323,17 +396,27 @@ export class AuditQueue implements AuditQueueApi {
         counts: computeCounts(batch.jobs),
       });
     } catch (err) {
-      job.status = "error";
-      job.finishedAt = now();
-      job.error = { message: errorMessage(err) };
-      // Index the failed run BEFORE announcing the failure.
-      recordFailedRun(batch, job);
-      this.emit(batchId, {
-        type: "job-failed",
-        batchId,
-        job: cloneJob(job),
-        counts: computeCounts(batch.jobs),
-      });
+      // A cancel (worker SIGKILLed via AbortSignal) is not a failure: mark the
+      // job cancelled and persist nothing. `cancelBatch` may have already set
+      // this; either way we never record a failed run for a cancellation.
+      if (err instanceof WorkerAbortError || signal?.aborted) {
+        if (job.status === "running") {
+          job.status = "cancelled";
+          job.finishedAt = now();
+        }
+      } else {
+        job.status = "error";
+        job.finishedAt = now();
+        job.error = { message: errorMessage(err) };
+        // Index the failed run BEFORE announcing the failure.
+        recordFailedRun(batch, job);
+        this.emit(batchId, {
+          type: "job-failed",
+          batchId,
+          job: cloneJob(job),
+          counts: computeCounts(batch.jobs),
+        });
+      }
     }
 
     this.maybeFinalizeBatch(batch);
@@ -345,11 +428,20 @@ export class AuditQueue implements AuditQueueApi {
    * in a terminal state is left untouched.
    */
   private maybeFinalizeBatch(batch: BatchRecord): void {
-    if (batch.status === "completed" || batch.status === "completed_with_errors") {
+    if (
+      batch.status === "completed" ||
+      batch.status === "completed_with_errors" ||
+      batch.status === "cancelled"
+    ) {
+      // Already terminal — `cancelBatch` owns the cancelled transition, and a
+      // late-rejecting killed worker must not flip the batch back.
       return;
     }
     const allSettled = batch.jobs.every(
-      (j) => j.status === "done" || j.status === "error",
+      (j) =>
+        j.status === "done" ||
+        j.status === "error" ||
+        j.status === "cancelled",
     );
     if (!allSettled) return;
 

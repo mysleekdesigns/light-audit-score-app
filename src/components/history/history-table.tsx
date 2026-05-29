@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useId, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Archive,
   ChevronDown,
@@ -10,6 +11,7 @@ import {
   FileJson,
   Search,
   Sheet,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -18,6 +20,17 @@ import { EnvironmentBadge } from "@/components/audit/environment-badge";
 import { RerunBatchButton } from "@/components/audit/rerun-batch-button";
 import { ResultsViewToggle } from "@/components/audit/results-view-toggle";
 import { ScoreRings } from "@/components/audit/score-rings";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -37,7 +50,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useAuditDefaults } from "@/hooks/useAuditDefaults";
-import { reportHtmlUrl, reportJsonUrl } from "@/lib/client/auditClient";
+import {
+  clearHistory,
+  deleteRun,
+  reportHtmlUrl,
+  reportJsonUrl,
+} from "@/lib/client/auditClient";
 import type { HistoryRow } from "@/lib/db/persistence";
 import {
   downloadCsv,
@@ -257,9 +275,140 @@ function ReportLinks({ row }: { row: HistoryRow }) {
 }
 
 /**
- * Per-run action cluster: re-run this single page (PRD §6 Phase 13) plus the
- * report links. The re-run is available even for errored rows (re-run to retry),
- * so it sits outside the report links (which collapse to `—` for failures).
+ * Per-run delete: a destructive icon button guarded by a confirm dialog. On
+ * confirm it removes the run (row + stored reports) and refreshes the server
+ * component so the row disappears.
+ */
+function DeleteRunButton({ row }: { row: HistoryRow }) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  async function handleDelete() {
+    setDeleting(true);
+    try {
+      await deleteRun(row.id);
+      toast.success("Run deleted.");
+      setOpen(false);
+      router.refresh();
+    } catch {
+      toast.error("Could not delete the run.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <AlertDialog open={open} onOpenChange={setOpen}>
+      <AlertDialogTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label={`Delete run for ${row.url}`}
+          className="text-muted-foreground hover:text-destructive"
+        >
+          <Trash2 />
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete this run?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This permanently removes the run for{" "}
+            <span className="font-mono text-foreground">{row.url}</span> and its
+            stored reports. This can&apos;t be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={deleting}
+            onClick={(event) => {
+              // Keep the dialog mounted through the async call; we close it once
+              // the delete settles (success path) instead of on click.
+              event.preventDefault();
+              void handleDelete();
+            }}
+          >
+            {deleting ? "Deleting…" : "Delete run"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+/**
+ * Toolbar "Clear history" action: wipes every persisted run + batch and all
+ * stored reports, behind a confirm dialog. Disabled when there's nothing to clear.
+ */
+function ClearHistoryButton({ count }: { count: number }) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [clearing, setClearing] = useState(false);
+
+  async function handleClear() {
+    setClearing(true);
+    try {
+      const { runs } = await clearHistory();
+      toast.success(
+        `History cleared — ${runs} run${runs === 1 ? "" : "s"} removed.`,
+      );
+      setOpen(false);
+      router.refresh();
+    } catch {
+      toast.error("Could not clear history.");
+    } finally {
+      setClearing(false);
+    }
+  }
+
+  return (
+    <AlertDialog open={open} onOpenChange={setOpen}>
+      <AlertDialogTrigger asChild>
+        <Button
+          type="button"
+          variant="destructive"
+          size="sm"
+          disabled={count === 0}
+          aria-label="Clear all history"
+        >
+          <Trash2 data-icon="inline-start" />
+          Clear history
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Clear all history?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This permanently deletes all {count} run{count === 1 ? "" : "s"} and
+            their stored reports. Saved schedules are not affected. This can&apos;t
+            be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={clearing}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={clearing}
+            onClick={(event) => {
+              event.preventDefault();
+              void handleClear();
+            }}
+          >
+            {clearing ? "Clearing…" : "Clear everything"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+/**
+ * Per-run action cluster: re-run this single page (PRD §6 Phase 13), delete it,
+ * plus the report links. Re-run and delete are available even for errored rows,
+ * so they sit outside the report links (which collapse to `—` for failures).
  */
 function RowActions({ row }: { row: HistoryRow }) {
   return (
@@ -273,6 +422,7 @@ function RowActions({ row }: { row: HistoryRow }) {
         priorBatchId={row.batchId}
       />
       <ReportLinks row={row} />
+      <DeleteRunButton row={row} />
     </div>
   );
 }
@@ -575,6 +725,9 @@ export function HistoryTable({ rows }: HistoryTableProps) {
               </TooltipContent>
             </Tooltip>
             </div>
+
+            {/* Clear all persisted history (every run, regardless of filter). */}
+            <ClearHistoryButton count={rows.length} />
           </div>
         </div>
 

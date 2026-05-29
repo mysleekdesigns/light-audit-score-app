@@ -39,7 +39,14 @@ function makeBatch(id: string, jobs: AuditJob[]): Batch {
     options: OPTIONS,
     concurrency: 3,
     jobs,
-    counts: { total: jobs.length, queued: jobs.length, running: 0, done: 0, error: 0 },
+    counts: {
+      total: jobs.length,
+      queued: jobs.length,
+      running: 0,
+      done: 0,
+      error: 0,
+      cancelled: 0,
+    },
     createdAt: new Date().toISOString(),
   };
 }

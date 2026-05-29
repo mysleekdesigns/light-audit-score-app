@@ -404,11 +404,16 @@ function ErrorBody({ job }: { job: AuditJob }) {
 
 function PendingBody({ job }: { job: AuditJob }) {
   const running = job.status === "running";
+  const cancelled = job.status === "cancelled";
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
       {running ? <Spinner className="text-primary" /> : null}
       <p className="text-sm text-muted-foreground">
-        {running ? "Audit in progress…" : "Queued — waiting to start…"}
+        {cancelled
+          ? "Cancelled before scoring."
+          : running
+            ? "Audit in progress…"
+            : "Queued — waiting to start…"}
       </p>
     </div>
   );

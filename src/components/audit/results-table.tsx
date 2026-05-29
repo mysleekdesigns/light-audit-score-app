@@ -125,7 +125,8 @@ function scoreContent(
   if (job.status === "done" && job.result) {
     return <ScorePill score={job.result.median.scores[category]} />;
   }
-  if (job.status === "error") {
+  // Settled-but-unscored (error / cancelled) shows a dash, not a loading skeleton.
+  if (job.status === "error" || job.status === "cancelled") {
     return <span className="text-muted-foreground/50">—</span>;
   }
   return <Skeleton className="ml-auto h-6 w-9 rounded-md" />;

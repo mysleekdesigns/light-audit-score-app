@@ -1,4 +1,4 @@
-import { Check, Clock, TriangleAlert } from "lucide-react";
+import { Ban, Check, Clock, TriangleAlert } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -49,6 +49,16 @@ export function JobStatusBadge({ status, className }: JobStatusBadgeProps) {
         <Badge variant="destructive" className={baseClass}>
           <TriangleAlert data-icon="inline-start" />
           Error
+        </Badge>
+      );
+    case "cancelled":
+      return (
+        <Badge
+          variant="outline"
+          className={cn(baseClass, "border-border/60 text-muted-foreground")}
+        >
+          <Ban data-icon="inline-start" />
+          Cancelled
         </Badge>
       );
   }
