@@ -316,12 +316,12 @@ export function NewAuditForm({
     <div className="flex flex-col gap-6">
       {/* Single instrument panel: Targets (primary input) + Run config (dials),
           divided by a hairline that rotates — horizontal at narrow, vertical at
-          ≥1440px. Targets owns the 3fr column on the left so its textarea / crawl
-          panel get the dominant width; Run config takes 2fr on the right. One
-          shared CardFooter governs both with the Run audit action. */}
+          ≥1440px. The two sections split the row 50/50 when side by side, so the
+          textarea / crawl panel and the dials each get half the width. One shared
+          CardFooter governs both with the Run audit action. */}
       <Card>
         <CardContent className="px-4">
-          <div className="grid gap-0 min-[1440px]:grid-cols-[3fr_2fr]">
+          <div className="grid gap-0 min-[1440px]:grid-cols-2">
             {/* Targets — left/top. Container query so the section adapts to its
                 own column width when it shares the row with Run config. */}
             <section

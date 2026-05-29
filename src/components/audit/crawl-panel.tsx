@@ -86,15 +86,17 @@ function range(from: number, to: number): number[] {
 const DEPTH_OPTIONS = range(MIN_DEPTH, MAX_DEPTH);
 
 /**
- * Parse the exclude-paths textarea into a clean `string[]`: one pattern per
- * line, trimmed, blank lines dropped. The route's zod schema is the validation
- * authority (rejects empties/over-long/too-many) — this just shapes the input.
+ * Parse the exclude-paths textarea into a clean `string[]`: patterns split on
+ * newlines and/or commas, trimmed, blank entries dropped. Lets the user list
+ * several patterns on one line (`/admin/*, /drafts`) or one per line — or mix
+ * both. The route's zod schema is the validation authority (rejects
+ * empties/over-long/too-many) — this just shapes the input.
  */
 function parseExcludePaths(raw: string): string[] {
   return raw
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+    .split(/[\n,]+/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
 }
 
 /**
@@ -158,6 +160,9 @@ export function CrawlPanel({ onUrlsChange, disabled = false }: CrawlPanelProps) 
 
   const useSitemap = scope.includes("sitemap");
   const useCrawl = scope.includes("crawl");
+  // True once the user has typed a seed — flips Discover to the cyan primary
+  // variant (mirroring the Run audit button) to signal it's ready to fire.
+  const hasSeed = seed.trim().length > 0;
 
   // Push the live selected set up whenever it (or the discovered set) changes.
   // The parent treats this tab as a pure "source of string[]".
@@ -271,9 +276,9 @@ export function CrawlPanel({ onUrlsChange, disabled = false }: CrawlPanelProps) 
             />
             <Button
               type="button"
-              variant="secondary"
+              variant={hasSeed ? "default" : "secondary"}
               onClick={() => void handleDiscover()}
-              disabled={disabled || isDiscovering || seed.trim().length === 0}
+              disabled={disabled || isDiscovering || !hasSeed}
             >
               {isDiscovering ? (
                 <>
@@ -386,10 +391,10 @@ export function CrawlPanel({ onUrlsChange, disabled = false }: CrawlPanelProps) 
             autoCapitalize="off"
             rows={3}
             className="font-mono text-xs"
-            placeholder={"/admin/*\n/drafts\n*.pdf"}
+            placeholder={"/admin/*, /drafts, *.pdf"}
           />
           <FieldDescription>
-            One path per line. Prefix (
+            One path per line or comma-separated. Prefix (
             <span className="font-mono">/blog</span>) or glob (
             <span className="font-mono">/admin/*</span>,{" "}
             <span className="font-mono">*.pdf</span>). Same-origin. Up to{" "}
@@ -577,18 +582,7 @@ export function CrawlPanel({ onUrlsChange, disabled = false }: CrawlPanelProps) 
             </p>
           ) : null}
         </>
-      ) : (
-        <div className="flex flex-col items-start gap-2 rounded-md border border-dashed border-border/70 bg-muted/20 p-6">
-          <Network className="size-5 text-muted-foreground" />
-          <p className="text-sm font-medium text-foreground">
-            Discover a site to build a list
-          </p>
-          <p className="text-sm text-muted-foreground">
-            Enter a domain, then Discover. Sitemap + a shallow same-origin crawl
-            populate the list — preview and trim it before auditing.
-          </p>
-        </div>
-      )}
+      ) : null}
     </div>
   );
 }
