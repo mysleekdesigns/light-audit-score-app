@@ -61,6 +61,10 @@ export const auditOptionsSchema = z.object({
   // warm-up navigation so scores match the DevTools Lighthouse panel (warm /
   // repeat-visit) instead of a cold first visit. See AuditOptions.warmCache.
   warmCache: z.boolean().default(true),
+  // Optional emulated page UA override (parity lever for bot-sensitive sites).
+  // No default: when omitted the engine passes no flag and Lighthouse uses its
+  // config-default device UA. See AuditOptions.emulatedUserAgent.
+  emulatedUserAgent: z.string().optional(),
 });
 
 /**

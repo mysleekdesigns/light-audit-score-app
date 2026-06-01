@@ -10,6 +10,7 @@
  *   --cpu=N                  CPU slowdown multiplier (1–20; omit = Lighthouse 4×)
  *   --categories=performance,accessibility,best-practices,seo
  *   --no-warm-cache          cold first-visit (default is warm = DevTools parity)
+ *   --user-agent="…"         override the emulated page UA (alias: --ua)
  *   --json                   print the raw AuditResult JSON instead of a summary
  *
  * Exercises the real engine end-to-end (isolated Chrome → lighthouse() →
@@ -84,6 +85,9 @@ function parseArgs(argv: string[]): ParsedArgs {
       .map((c) => c.trim())
       .filter(Boolean);
   }
+  // Optional emulated-UA override (parity lever for bot-sensitive sites).
+  const ua = raw["user-agent"] ?? raw["ua"];
+  if (typeof ua === "string") optionInput.emulatedUserAgent = ua;
 
   return { urls, json: raw["json"] === true, options: optionInput };
 }
@@ -134,6 +138,24 @@ function printSummary(result: AuditResult): void {
   console.log(`  Per-run scores:\n    ${formatPerRunSpread(result.perRunScores)}`);
   console.log(`  Core Web Vitals:\n    ${formatMetrics(result.median.metrics)}`);
 
+  const bp = result.median.bestPractices;
+  if (bp.length > 0) {
+    const weighted = bp.filter((a) => a.weight > 0);
+    const passW = weighted
+      .filter((a) => a.state === "passed")
+      .reduce((sum, a) => sum + a.weight, 0);
+    const totW = weighted.reduce((sum, a) => sum + a.weight, 0);
+    const failed = bp.filter((a) => a.state === "failed");
+    console.log(
+      `  Best Practices audits: ${passW}/${totW} weight passing` +
+        (failed.length > 0 ? `, ${failed.length} failing` : ""),
+    );
+    for (const a of failed) {
+      const dv = a.displayValue ? ` — ${a.displayValue}` : "";
+      console.log(`    ✗ ${a.title} (w${a.weight})${dv}`);
+    }
+  }
+
   const top = result.median.opportunities.slice(0, 5);
   if (top.length > 0) {
     console.log("  Top opportunities:");
@@ -183,10 +205,10 @@ async function main(): Promise<void> {
       if (json) {
         // Drop the bulky raw LHR from stdout JSON; keep the parsed result.
         const { median, ...rest } = result;
-        const { scores, metrics, opportunities } = median;
+        const { scores, metrics, opportunities, bestPractices } = median;
         console.log(
           JSON.stringify(
-            { ...rest, median: { scores, metrics, opportunities } },
+            { ...rest, median: { scores, metrics, opportunities, bestPractices } },
             null,
             2,
           ),

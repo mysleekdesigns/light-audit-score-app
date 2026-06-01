@@ -25,6 +25,10 @@ import {
   clampConcurrency,
   DEFAULT_CONCURRENCY,
 } from "@/lib/queue/types";
+import {
+  type UserAgentPreset,
+  sanitizeUserAgentPreset,
+} from "@/lib/lighthouse/user-agents";
 import { GOOD_THRESHOLD } from "@/lib/scores";
 
 /** Per-category pass threshold (0–100). A score ≥ threshold passes. */
@@ -66,6 +70,20 @@ export interface AuditDefaults {
   resultsView: ResultsView;
   /** Per-category pass thresholds for the Batch Summary view. */
   thresholds: CategoryThresholds;
+  /**
+   * Warm-cache mode (default true) — reuse a Chrome profile + a discarded warm-up
+   * navigation so scores match the DevTools panel's warm/repeat-visit number. Set
+   * false to clear storage between runs (cold first visit), matching the DevTools
+   * panel's own "Clear storage" default. Surfaced in the form as a "Clear storage"
+   * toggle (`clearStorage = !warmCache`). See `AuditOptions.warmCache`.
+   */
+  warmCache: boolean;
+  /**
+   * Emulated page UA preset (default `"default"` = no override). A parity lever
+   * for bot-sensitive sites — see {@link UserAgentPreset}. Persisted as the stable
+   * key, resolved to a UA string only when assembling engine options.
+   */
+  userAgentPreset: UserAgentPreset;
 }
 
 /** Every category defaults to the "good" bar (90). */
@@ -87,6 +105,8 @@ export const DEFAULT_AUDIT_DEFAULTS: AuditDefaults = {
   // cpuSlowdownMultiplier intentionally omitted → Lighthouse's 4× default.
   resultsView: "table",
   thresholds: { ...DEFAULT_THRESHOLDS },
+  warmCache: true,
+  userAgentPreset: "default",
 };
 
 /**
@@ -96,6 +116,14 @@ export const DEFAULT_AUDIT_DEFAULTS: AuditDefaults = {
  * panel run on the same machine. `cpuSlowdownMultiplier` is reset to `undefined`
  * so Lighthouse's own 4× applies (exactly what the panel uses), clearing any
  * previously-calibrated multiplier when the preset is applied.
+ *
+ * `warmCache: false` here is deliberate and in tension with the global default
+ * (`true`): the global default chases the panel's *warm/repeat-visit* number that
+ * a developer sees re-running a page they've already loaded, but the panel itself
+ * defaults to **Clear storage** (a cold first visit). For a genuinely
+ * apples-to-apples "match a clean DevTools run" comparison, this preset clears
+ * storage; the global default stays warm so everyday audits keep their tuned
+ * Performance-parity behaviour.
  */
 export const MATCH_DEVTOOLS_PRESET: Partial<AuditDefaults> = {
   formFactor: "mobile",
@@ -104,6 +132,7 @@ export const MATCH_DEVTOOLS_PRESET: Partial<AuditDefaults> = {
   concurrency: 1,
   accuracyMode: true,
   cpuSlowdownMultiplier: undefined,
+  warmCache: false,
 };
 
 /**
@@ -112,8 +141,9 @@ export const MATCH_DEVTOOLS_PRESET: Partial<AuditDefaults> = {
  * v2 added throttling / accuracyMode / cpuSlowdownMultiplier (Phase 9).
  * v3 added resultsView (Phase 11).
  * v4 widened formFactor to DeviceSelection — it can now hold "both" (Phase 12).
+ * v5 added warmCache + userAgentPreset (Best Practices parity levers).
  */
-export const SETTINGS_STORAGE_KEY = "lighthouse:audit-defaults:v4";
+export const SETTINGS_STORAGE_KEY = "lighthouse:audit-defaults:v5";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -190,6 +220,9 @@ export function normalizeDefaults(raw: unknown): AuditDefaults {
     cpuSlowdownMultiplier: clampCpuMultiplier(source.cpuSlowdownMultiplier),
     resultsView: source.resultsView === "cards" ? "cards" : "table",
     thresholds: sanitizeThresholds(source.thresholds),
+    // Default true: only an explicit stored `false` turns warm cache off.
+    warmCache: source.warmCache !== false,
+    userAgentPreset: sanitizeUserAgentPreset(source.userAgentPreset),
   };
 }
 

@@ -69,6 +69,7 @@ function makeResult(url: string): AuditResult {
         interactive: null,
       },
       opportunities: [],
+      bestPractices: [],
       lhr: { fake: true },
     },
     perRunScores: [{ performance: 90 }],

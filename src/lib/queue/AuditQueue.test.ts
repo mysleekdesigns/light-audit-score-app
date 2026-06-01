@@ -80,6 +80,7 @@ function makeResult(url: string, perf: number): AuditResult {
         interactive: null,
       },
       opportunities: [],
+      bestPractices: [],
       lhr: { __lhrSentinel: true, url, fetchTime: `t-${perf}` },
     },
     perRunScores: [{ performance: perf }],

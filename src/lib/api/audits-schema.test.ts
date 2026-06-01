@@ -116,6 +116,19 @@ describe("parseCreateBatchBody — valid bodies", () => {
     expect("cpuSlowdownMultiplier" in result.value.options).toBe(false);
   });
 
+  it("passes through the Best Practices parity levers (warmCache + emulatedUserAgent)", () => {
+    const ua =
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+    const result = parseCreateBatchBody({
+      urls: ["https://example.com"],
+      options: { warmCache: false, emulatedUserAgent: ua },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.options.warmCache).toBe(false);
+    expect(result.value.options.emulatedUserAgent).toBe(ua);
+  });
+
   it("accepts exactly MAX_URLS entries", () => {
     const urls = Array.from(
       { length: MAX_URLS },

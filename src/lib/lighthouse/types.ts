@@ -81,6 +81,16 @@ export interface AuditOptions {
    * measurement (Lighthouse/PageSpeed-Insights default).
    */
   warmCache: boolean;
+  /**
+   * Optional override for the emulated page user agent — a parity lever for
+   * bot-sensitive sites (e.g. Cloudflare-fronted apps) that serve different
+   * content to an automated/headless engine, which shifts environment-sensitive
+   * Best Practices audits. When omitted (`undefined`), no flag is passed and
+   * Lighthouse uses its config-default device UA. A string is passed straight
+   * through to Lighthouse's `emulatedUserAgent` flag so the page sees exactly
+   * the UA you'd get from a real Chrome of that form factor.
+   */
+  emulatedUserAgent?: string;
 }
 
 /**
@@ -145,6 +155,39 @@ export interface Opportunity {
 }
 
 /**
+ * State of a single category audit, derived from its score + `scoreDisplayMode`.
+ * `informative`/`manual` audits carry no weight; `notApplicable` audits didn't
+ * apply to this page. Only `passed`/`failed` (weighted) move the category score.
+ */
+export type AuditState = "passed" | "failed" | "notApplicable" | "informative";
+
+/**
+ * One audit within a Lighthouse category, joined from the category's `auditRefs`
+ * (which carry the scoring `weight`/`group`) and the audit result itself (title,
+ * description, score, display mode). Surfaced so a category score — especially
+ * the environment-sensitive Best Practices one — can be explained audit-by-audit
+ * (which audits passed/failed and how much weight each carries). Pure projection
+ * of the LHR; see `parseCategoryAudits` in `runAudit.ts`.
+ */
+export interface CategoryAuditRef {
+  id: string;
+  title: string;
+  description: string;
+  /** Scoring weight from `category.auditRefs[].weight` (0 = informative/N-A). */
+  weight: number;
+  /** Optional audit group id from `auditRefs[].group`. */
+  group?: string;
+  /** 0–1 audit score, or null when unscored. */
+  score: number | null;
+  /** Lighthouse `scoreDisplayMode` ("binary" | "numeric" | "notApplicable" | "informative" | "manual" | "error"). */
+  scoreDisplayMode: string;
+  /** Human-readable value, e.g. "3 errors". */
+  displayValue: string;
+  /** Derived pass/fail/N-A/informative state. */
+  state: AuditState;
+}
+
+/**
  * Raw Lighthouse Result object. Lighthouse ships no resolvable types, so we keep
  * this loose; the ambient module declaration in `src/types/lighthouse.d.ts`
  * mirrors the same shape. `computeMedianRun` consumes arrays of these.
@@ -180,6 +223,11 @@ export interface SingleRunResult {
   scores: CategoryScores;
   metrics: CoreWebVitals;
   opportunities: Opportunity[];
+  /**
+   * Best Practices category audits (passed/failed/weight), surfaced so the BP
+   * score can be explained audit-by-audit. Empty when best-practices wasn't run.
+   */
+  bestPractices: CategoryAuditRef[];
   runWarnings: string[];
   /** Host / effective-throttling environment this run executed under. */
   environment: RunEnvironment;
@@ -199,6 +247,8 @@ export interface AuditResult {
     scores: CategoryScores;
     metrics: CoreWebVitals;
     opportunities: Opportunity[];
+    /** Best Practices category audits for the median run (see {@link CategoryAuditRef}). */
+    bestPractices: CategoryAuditRef[];
     lhr: LighthouseResult;
   };
   /** Per-run category scores (length === runs) for surfacing spread/variance. */

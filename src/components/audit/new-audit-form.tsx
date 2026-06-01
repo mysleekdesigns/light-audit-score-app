@@ -33,6 +33,13 @@ import {
   MIN_CONCURRENCY,
 } from "@/lib/queue/types";
 import { calibrationFor } from "@/lib/lighthouse/calibrate";
+import {
+  type UserAgentPreset,
+  USER_AGENT_PRESETS,
+  USER_AGENT_PRESET_LABELS,
+  resolveUserAgentPreset,
+  sanitizeUserAgentPreset,
+} from "@/lib/lighthouse/user-agents";
 import { CATEGORY_LABELS } from "@/lib/scores";
 import {
   clampCpuMultiplier,
@@ -127,6 +134,8 @@ export function NewAuditForm({
   const concurrencyId = useId();
   const cpuId = useId();
   const accuracyId = useId();
+  const clearStorageId = useId();
+  const userAgentId = useId();
 
   // Persisted run defaults (device / runs / concurrency / categories). The first
   // render must match SSR, so we keep the hardcoded initial state below and only
@@ -153,6 +162,12 @@ export function NewAuditForm({
     number | undefined
   >(undefined);
   const [accuracyMode, setAccuracyMode] = useState(false);
+  // Best Practices parity levers: warm cache (default true) surfaced as a "Clear
+  // storage" toggle (clearStorage = !warmCache), and an optional emulated-UA
+  // preset for bot-sensitive sites (default = no override).
+  const [warmCache, setWarmCache] = useState(true);
+  const [userAgentPreset, setUserAgentPreset] =
+    useState<UserAgentPreset>("default");
 
   // Seed device / runs / concurrency / categories from the persisted defaults
   // exactly once, the render after the hook has read localStorage (`loaded`
@@ -170,6 +185,8 @@ export function NewAuditForm({
     setCategories([...defaults.categories]);
     setCpuSlowdownMultiplier(defaults.cpuSlowdownMultiplier);
     setAccuracyMode(defaults.accuracyMode);
+    setWarmCache(defaults.warmCache);
+    setUserAgentPreset(defaults.userAgentPreset);
   }
 
   const { urls: pastedUrls, invalid } = useMemo(() => parseUrls(text), [text]);
@@ -236,6 +253,20 @@ export function NewAuditForm({
     update({ accuracyMode: next });
   }
 
+  // The toggle reads as "Clear storage" (cold first visit) — the inverse of warm
+  // cache. On = clear storage between runs (warmCache false), matching the
+  // DevTools panel default; Off = warm repeat-visit (warmCache true).
+  function handleClearStorageChange(next: boolean) {
+    setWarmCache(!next);
+    update({ warmCache: !next });
+  }
+
+  function handleUserAgentChange(value: string) {
+    const next = sanitizeUserAgentPreset(value);
+    setUserAgentPreset(next);
+    update({ userAgentPreset: next });
+  }
+
   /**
    * Calibrate: reuse the latest completed run's `benchmarkIndex` (no server
    * benchmark) and adopt the recommended multiplier as the new default. The
@@ -250,8 +281,9 @@ export function NewAuditForm({
 
   /**
    * Match DevTools: apply the canonical panel preset (mobile · simulated · 1 run ·
-   * concurrency 1 · accuracy on · Auto 4×) to both local state and the persisted
-   * defaults, so the next run is directly comparable to a DevTools-panel run.
+   * concurrency 1 · accuracy on · Auto 4× · clear storage) to both local state and
+   * the persisted defaults, so the next run is directly comparable to a clean
+   * DevTools-panel run (which clears storage by default).
    */
   function handleMatchDevTools() {
     const preset = MATCH_DEVTOOLS_PRESET;
@@ -262,6 +294,8 @@ export function NewAuditForm({
     if (typeof preset.accuracyMode === "boolean") setAccuracyMode(preset.accuracyMode);
     // The preset deliberately clears any pinned multiplier (back to Auto 4×).
     setCpuSlowdownMultiplier(preset.cpuSlowdownMultiplier);
+    // …and clears storage (cold first visit), matching the panel's own default.
+    if (typeof preset.warmCache === "boolean") setWarmCache(preset.warmCache);
     update(preset);
   }
 
@@ -306,6 +340,9 @@ export function NewAuditForm({
         runs,
         // Omitted (undefined) → Lighthouse's own 4×, exactly the panel default.
         cpuSlowdownMultiplier,
+        // Best Practices parity levers: warm/cold cache + optional UA override.
+        warmCache,
+        emulatedUserAgent: resolveUserAgentPreset(userAgentPreset),
       },
       concurrency,
       accuracyMode,
@@ -415,8 +452,9 @@ export function NewAuditForm({
                 </p>
               </header>
 
-              {/* 6 controls — even-divisible at 2, 3, 6 cols (avoid 4/5 to skip
-                  orphan-row layouts). Thresholds: @md=448px, @5xl=1024px. */}
+              {/* 8 controls — a full row of 6 at @5xl then a trailing pair of
+                  toggles (Accuracy, Clear storage); clean at 2 & 3 cols too
+                  (3+3+2). Thresholds: @md=448px, @5xl=1024px. */}
               <div className="grid grid-cols-2 gap-x-5 gap-y-4 @md:grid-cols-3 @5xl:grid-cols-6">
                 <Field>
                   <FieldLabel htmlFor={deviceId}>Device</FieldLabel>
@@ -534,6 +572,32 @@ export function NewAuditForm({
                   </Select>
                 </Field>
 
+                <Field>
+                  <FieldLabel htmlFor={userAgentId}>User agent</FieldLabel>
+                  <Select
+                    value={userAgentPreset}
+                    onValueChange={handleUserAgentChange}
+                    disabled={isRunning}
+                  >
+                    <SelectTrigger
+                      id={userAgentId}
+                      className="w-full"
+                      title="Override the emulated page user agent — helps bot-sensitive sites (e.g. Cloudflare) serve the same content they serve a real browser."
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {USER_AGENT_PRESETS.map((preset) => (
+                          <SelectItem key={preset} value={preset}>
+                            {USER_AGENT_PRESET_LABELS[preset]}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+
                 <Field orientation="horizontal" className="items-end">
                   <FieldContent>
                     <FieldLabel htmlFor={accuracyId}>Accuracy mode</FieldLabel>
@@ -549,6 +613,25 @@ export function NewAuditForm({
                     className="shrink-0 font-mono text-[0.65rem] uppercase tracking-[0.18em] data-[state=on]:bg-score-good/15 data-[state=on]:text-score-good data-[state=on]:border-score-good/40"
                   >
                     {accuracyMode ? "On" : "Off"}
+                  </Toggle>
+                </Field>
+
+                <Field orientation="horizontal" className="items-end">
+                  <FieldContent>
+                    <FieldLabel htmlFor={clearStorageId}>Clear storage</FieldLabel>
+                  </FieldContent>
+                  <Toggle
+                    id={clearStorageId}
+                    variant="outline"
+                    size="sm"
+                    pressed={!warmCache}
+                    onPressedChange={handleClearStorageChange}
+                    disabled={isRunning}
+                    aria-label="Clear storage between runs (cold first visit)"
+                    title="On clears the HTTP cache between runs (cold first visit), matching the DevTools panel default. Off keeps a warm repeat-visit cache."
+                    className="shrink-0 font-mono text-[0.65rem] uppercase tracking-[0.18em] data-[state=on]:bg-score-good/15 data-[state=on]:text-score-good data-[state=on]:border-score-good/40"
+                  >
+                    {!warmCache ? "On" : "Off"}
                   </Toggle>
                 </Field>
               </div>
@@ -680,8 +763,9 @@ export function NewAuditForm({
           categories,
           runs,
           cpuSlowdownMultiplier,
-          // Warm cache on by default (DevTools-panel parity); see AuditOptions.warmCache.
-          warmCache: true,
+          // Carry the chosen parity levers into the saved schedule's options.
+          warmCache,
+          emulatedUserAgent: resolveUserAgentPreset(userAgentPreset),
         }}
         concurrency={concurrency}
         device={device}

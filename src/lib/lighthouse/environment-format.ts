@@ -86,3 +86,21 @@ export function benchmarkDeviceLabel(
   const deviceClass: DeviceClass = classifyBenchmarkIndex(benchmarkIndex);
   return DEVICE_CLASS_LABELS[deviceClass];
 }
+
+/**
+ * Extract the Chrome/Chromium version from a host user-agent string — e.g.
+ * `"…Chrome/126.0.6478.127 Safari/537.36"` → `"126.0.6478.127"` — or `null` when
+ * absent/unparseable. Surfaced per run because the DevTools panel bundles its own
+ * Lighthouse tied to the *installed* Chrome, so a version skew between this tool's
+ * Chrome and yours is a common source of category-score differences. Matches
+ * `HeadlessChrome/…` too (the build chrome-launcher drives here).
+ */
+export function chromeVersionFromUserAgent(
+  userAgent: string | null | undefined,
+): string | null {
+  if (typeof userAgent !== "string") return null;
+  const match = /(?:HeadlessChrome|Chrome|Chromium)\/(\d+(?:\.\d+){0,3})/.exec(
+    userAgent,
+  );
+  return match ? match[1] : null;
+}

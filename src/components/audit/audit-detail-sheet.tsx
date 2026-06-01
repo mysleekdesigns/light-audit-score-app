@@ -1,7 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { ExternalLink, FileJson, TriangleAlert } from "lucide-react";
+import {
+  Check,
+  ExternalLink,
+  FileJson,
+  Info,
+  Minus,
+  TriangleAlert,
+  X,
+} from "lucide-react";
 
 import { DriftWarning } from "@/components/audit/drift-warning";
 import { EnvironmentBadge } from "@/components/audit/environment-badge";
@@ -34,9 +42,13 @@ import {
   assessDrift,
   benchmarkIndexSpread,
 } from "@/lib/lighthouse/drift";
-import { formatBenchmarkIndex } from "@/lib/lighthouse/environment-format";
+import {
+  chromeVersionFromUserAgent,
+  formatBenchmarkIndex,
+} from "@/lib/lighthouse/environment-format";
 import {
   LIGHTHOUSE_CATEGORIES,
+  type AuditState,
   type FormFactor,
   type Opportunity,
 } from "@/lib/lighthouse/types";
@@ -200,6 +212,138 @@ function OpportunitiesPanel({ result }: { result: AuditResultLite }) {
   );
 }
 
+/** State icon + screen-reader label for one Best Practices audit. */
+function AuditStateIcon({ state }: { state: AuditState }) {
+  const meta = {
+    passed: { Icon: Check, cls: "text-score-good", label: "Passed" },
+    failed: { Icon: X, cls: "text-score-poor", label: "Failed" },
+    notApplicable: {
+      Icon: Minus,
+      cls: "text-muted-foreground/60",
+      label: "Not applicable",
+    },
+    informative: { Icon: Info, cls: "text-muted-foreground", label: "Informative" },
+  }[state];
+  return (
+    <span className={cn("mt-0.5 shrink-0", meta.cls)}>
+      <meta.Icon className="size-3.5" aria-hidden />
+      <span className="sr-only">{meta.label}: </span>
+    </span>
+  );
+}
+
+/**
+ * Per-audit breakdown of the Best Practices category — the lens that explains why
+ * this tool's BP score can sit *above* the DevTools panel's. The arithmetic header
+ * shows passing weight vs total, and the explainer names the usual culprit (the
+ * panel runs your extensions, which fail the binary errors-in-console /
+ * deprecations / inspector-issues audits). Mirrors `OpportunitiesPanel`.
+ */
+function BestPracticesPanel({ result }: { result: AuditResultLite }) {
+  const audits = result.median.bestPractices ?? [];
+  const score = result.median.scores["best-practices"] ?? null;
+
+  if (audits.length === 0) {
+    return (
+      <Empty className="border border-border/60 py-10">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <TriangleAlert />
+          </EmptyMedia>
+          <EmptyTitle>No Best Practices audits</EmptyTitle>
+          <EmptyDescription>
+            This run didn&apos;t include the Best Practices category.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
+
+  // Only weighted audits move the score; informative/N-A carry weight 0.
+  const weighted = audits.filter((a) => a.weight > 0);
+  const totalWeight = weighted.reduce((sum, a) => sum + a.weight, 0);
+  const passedWeight = weighted
+    .filter((a) => a.state === "passed")
+    .reduce((sum, a) => sum + a.weight, 0);
+  const failing = weighted.filter((a) => a.state === "failed").length;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-3 rounded-md border border-border/60 bg-card px-3 py-2.5">
+        <div className="flex items-baseline gap-2">
+          <span
+            className={cn(
+              "font-mono text-2xl font-semibold tabular-nums tracking-tight",
+              scoreColorClass(score),
+            )}
+          >
+            {formatScore(score)}
+          </span>
+          <span className="font-mono text-[0.6rem] uppercase tracking-[0.14em] text-muted-foreground">
+            Best Practices
+          </span>
+        </div>
+        <div className="text-right font-mono text-[0.65rem] uppercase tracking-[0.1em] text-muted-foreground tabular-nums">
+          {passedWeight}/{totalWeight} weight passing
+          {failing > 0 ? (
+            <span className="text-score-poor">
+              {" "}
+              · {failing} failing
+            </span>
+          ) : null}
+        </div>
+      </div>
+
+      <Alert>
+        <Info />
+        <AlertTitle>Why this can differ from DevTools</AlertTitle>
+        <AlertDescription>
+          A normal Chrome window runs your extensions, which inject console
+          errors, deprecated API calls, and Chrome Issues — failing the
+          errors-in-console, deprecations, and inspector-issues audits and
+          lowering the panel&apos;s score. This tool runs clean headless Chrome
+          with no extensions. Run the DevTools Lighthouse panel in an Incognito
+          window for an apples-to-apples comparison.
+        </AlertDescription>
+      </Alert>
+
+      <ScrollArea className="h-72 overscroll-contain rounded-md border border-border/60">
+        <ul className="flex flex-col divide-y divide-border/50">
+          {audits.map((audit) => (
+            <li key={audit.id} className="flex flex-col gap-1 px-3 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex min-w-0 items-start gap-2">
+                  <AuditStateIcon state={audit.state} />
+                  <p className="min-w-0 text-sm font-medium leading-snug text-balance text-foreground">
+                    {audit.title}
+                  </p>
+                </div>
+                {audit.weight > 0 ? (
+                  <span
+                    className="shrink-0 font-mono text-[0.6rem] uppercase tracking-[0.14em] text-muted-foreground tabular-nums"
+                    title={`Scoring weight ${audit.weight}`}
+                  >
+                    w{audit.weight}
+                  </span>
+                ) : (
+                  <span className="shrink-0 font-mono text-[0.6rem] uppercase tracking-[0.14em] text-muted-foreground/60">
+                    {audit.state === "notApplicable" ? "N/A" : "Info"}
+                  </span>
+                )}
+              </div>
+              {audit.displayValue ? (
+                <p className="pl-[1.375rem] font-mono text-xs leading-relaxed text-muted-foreground">
+                  {audit.displayValue}
+                </p>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      </ScrollArea>
+    </div>
+  );
+}
+
 /** Categories Lighthouse scores out of 100, in display order, for the per-run table. */
 const RUN_CATEGORY_ORDER = LIGHTHOUSE_CATEGORIES;
 
@@ -211,6 +355,10 @@ function EnvironmentSection({ result }: { result: AuditResultLite }) {
     performanceInScope: result.options.categories.includes("performance"),
   });
 
+  const chromeVersion = chromeVersionFromUserAgent(
+    result.environment.hostUserAgent,
+  );
+
   return (
     <section className="flex flex-col gap-3">
       <SectionLabel>Environment</SectionLabel>
@@ -219,6 +367,15 @@ function EnvironmentSection({ result }: { result: AuditResultLite }) {
         environment={result.environment}
         drifted={assessment.severity !== "none"}
       />
+      {chromeVersion ? (
+        <p
+          className="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-muted-foreground"
+          title={result.environment.hostUserAgent || undefined}
+        >
+          Chrome{" "}
+          <span className="text-foreground tabular-nums">{chromeVersion}</span>
+        </p>
+      ) : null}
       <DriftWarning assessment={assessment} calibrateHref="/" />
     </section>
   );
@@ -361,6 +518,17 @@ function DoneBody({ job, result }: { job: AuditJob; result: AuditResultLite }) {
             </>
           ) : null}
 
+          {result.options.categories.includes("best-practices") &&
+          (result.median.bestPractices?.length ?? 0) > 0 ? (
+            <>
+              <Separator className="bg-border/60" />
+              <section className="flex flex-col gap-3">
+                <SectionLabel>Best Practices audits</SectionLabel>
+                <BestPracticesPanel result={result} />
+              </section>
+            </>
+          ) : null}
+
           <Separator className="bg-border/60" />
 
           <section className="flex flex-col gap-3">
@@ -422,11 +590,14 @@ function PendingBody({ job }: { job: AuditJob }) {
 /** The single-job description line: median-of-N · device · Lighthouse version. */
 function jobDescription(job: AuditJob): string | null {
   if (job.status === "done" && job.result) {
+    const chrome = chromeVersionFromUserAgent(
+      job.result.environment.hostUserAgent,
+    );
     return `Median of ${job.result.runs} ${
       job.result.runs === 1 ? "run" : "runs"
     } · ${job.result.options.formFactor} · Lighthouse v${
       job.result.lighthouseVersion
-    }`;
+    }${chrome ? ` · Chrome ${chrome}` : ""}`;
   }
   return null;
 }

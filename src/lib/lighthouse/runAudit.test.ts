@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildThrottlingFlags,
+  parseCategoryAudits,
   parseEnvironment,
   parseLhr,
 } from "@/lib/lighthouse/runAudit";
@@ -128,6 +129,124 @@ describe("parseLhr", () => {
       throttlingMethod: "",
       cpuSlowdownMultiplier: null,
     });
+  });
+
+  it("carries an empty bestPractices list when the category is absent", () => {
+    // sampleLhr() intentionally omits the best-practices category.
+    expect(parseLhr(sampleLhr(), "mobile").bestPractices).toEqual([]);
+  });
+});
+
+/** An LHR with a populated best-practices category + matching audits. */
+function bestPracticesLhr(): LighthouseResult {
+  return {
+    categories: {
+      "best-practices": {
+        id: "best-practices",
+        score: 0.6,
+        auditRefs: [
+          { id: "is-on-https", weight: 5, group: "best-practices-trust-safety" },
+          { id: "errors-in-console", weight: 1 },
+          { id: "viewport", weight: 3 },
+          { id: "charset", weight: 1 },
+          { id: "bp-informative", weight: 0 },
+          { id: "valid-source-maps", weight: 0 },
+          { id: "ghost", weight: 1 }, // ref with no matching audit → tolerated
+        ],
+      },
+    },
+    audits: {
+      "is-on-https": {
+        title: "Use secure connections (HTTPS)",
+        description: "All sites should be protected with HTTPS.",
+        score: 0,
+        scoreDisplayMode: "binary",
+      },
+      "errors-in-console": {
+        title: "No browser errors logged to the console",
+        description: "Errors logged to the console indicate unresolved problems.",
+        score: 0,
+        scoreDisplayMode: "binary",
+        displayValue: "3 errors",
+      },
+      viewport: {
+        title: "Has a `<meta name=viewport>` tag",
+        description: "A viewport tag optimises for mobile.",
+        score: 1,
+        scoreDisplayMode: "binary",
+      },
+      charset: {
+        title: "Charset declared early",
+        description: "Declare the charset early.",
+        score: 1,
+        scoreDisplayMode: "binary",
+      },
+      "bp-informative": {
+        title: "An informative diagnostic",
+        description: "Informational only.",
+        score: null,
+        scoreDisplayMode: "informative",
+      },
+      "valid-source-maps": {
+        title: "Page has valid source maps",
+        description: "Source maps help debugging.",
+        score: null,
+        scoreDisplayMode: "notApplicable",
+      },
+      // "ghost" intentionally absent from audits.
+    },
+  };
+}
+
+describe("parseCategoryAudits", () => {
+  it("joins auditRefs with audit results and derives state", () => {
+    const refs = parseCategoryAudits(bestPracticesLhr(), "best-practices");
+    expect(refs).toHaveLength(7);
+
+    const byId = Object.fromEntries(refs.map((r) => [r.id, r]));
+    expect(byId["is-on-https"]).toMatchObject({ weight: 5, state: "failed" });
+    expect(byId["is-on-https"].group).toBe("best-practices-trust-safety");
+    expect(byId["errors-in-console"]).toMatchObject({
+      state: "failed",
+      displayValue: "3 errors",
+    });
+    expect(byId.viewport.state).toBe("passed");
+    expect(byId.charset.state).toBe("passed");
+    expect(byId["bp-informative"].state).toBe("informative");
+    expect(byId["valid-source-maps"].state).toBe("notApplicable");
+    // Missing audit → title falls back to id, treated as failed.
+    expect(byId.ghost).toMatchObject({ title: "ghost", state: "failed" });
+  });
+
+  it("sorts failed-first (weight desc), then passed, then informative/N-A", () => {
+    const refs = parseCategoryAudits(bestPracticesLhr(), "best-practices");
+    expect(refs.map((r) => r.state)).toEqual([
+      "failed",
+      "failed",
+      "failed",
+      "passed",
+      "passed",
+      "informative",
+      "notApplicable",
+    ]);
+    // Highest-weight failed audit leads; passed group leads with its heaviest.
+    expect(refs[0].id).toBe("is-on-https");
+    expect(refs[3].id).toBe("viewport");
+  });
+
+  it("returns [] when the category or its auditRefs are missing", () => {
+    expect(parseCategoryAudits({}, "best-practices")).toEqual([]);
+    expect(
+      parseCategoryAudits(
+        { categories: { "best-practices": { score: 1 } } },
+        "best-practices",
+      ),
+    ).toEqual([]);
+  });
+
+  it("is parameterised by category id (works for any category)", () => {
+    const refs = parseCategoryAudits(bestPracticesLhr(), "performance");
+    expect(refs).toEqual([]);
   });
 });
 

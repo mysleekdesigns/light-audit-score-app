@@ -17,6 +17,8 @@ declare module "lighthouse" {
     screenEmulation?: Record<string, unknown>;
     throttlingMethod?: "simulate" | "devtools" | "provided";
     throttling?: Record<string, unknown>;
+    /** Override the emulated page UA (string), or `false` to disable UA emulation. */
+    emulatedUserAgent?: string | false;
     [key: string]: unknown;
   }
 

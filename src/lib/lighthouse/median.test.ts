@@ -52,8 +52,20 @@ function makeLhr(perf: number, fetchTime: string): LighthouseResult {
     fetchTime,
     lighthouseVersion: "13.0.0",
     runWarnings: [`warn-${perf}`],
-    categories: { performance: { id: "performance", score: perf / 10 } },
+    categories: {
+      performance: { id: "performance", score: perf / 10 },
+      "best-practices": {
+        id: "best-practices",
+        score: 1,
+        auditRefs: [{ id: "is-on-https", weight: 1 }],
+      },
+    },
     audits: {
+      "is-on-https": {
+        title: "Use secure connections (HTTPS)",
+        score: 1,
+        scoreDisplayMode: "binary",
+      },
       "first-contentful-paint": { numericValue: ms, displayValue: `${ms}`, score: perf / 10 },
       "interactive": { numericValue: ms, displayValue: `${ms}`, score: perf / 10 },
       "largest-contentful-paint": { numericValue: ms, displayValue: `${ms}`, score: perf / 10 },
@@ -85,6 +97,7 @@ function makeRun(perf: number, fetchTime: string): SingleRunResult {
       interactive: { numericValue: (10 - perf) * 1000, displayValue: "", score: perf / 10 },
     },
     opportunities: [],
+    bestPractices: [],
     runWarnings: [`warn-${perf}`],
     environment: {
       benchmarkIndex: 1500,
@@ -165,6 +178,20 @@ describe("runAudit (median of N)", () => {
     expect(result.requestedUrl).toBe("https://example.com/");
     expect(result.finalUrl).toBe("https://example.com/");
     expect(result.lighthouseVersion).toBe("13.0.0");
+  });
+
+  it("carries the median run's best-practices breakdown", async () => {
+    runSingleAudit
+      .mockResolvedValueOnce(makeRun(4, "t1"))
+      .mockResolvedValueOnce(makeRun(8, "t2"))
+      .mockResolvedValueOnce(makeRun(6, "t3"));
+
+    const result = await runAudit("https://example.com/", OPTIONS);
+    expect(result.median.bestPractices).toHaveLength(1);
+    expect(result.median.bestPractices[0]).toMatchObject({
+      id: "is-on-https",
+      state: "passed",
+    });
   });
 });
 

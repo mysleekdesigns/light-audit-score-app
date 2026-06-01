@@ -158,6 +158,33 @@ describe("resolveAuditOptions — cpuSlowdownMultiplier", () => {
   });
 });
 
+describe("resolveAuditOptions — warmCache & emulatedUserAgent", () => {
+  it("defaults warmCache to true and accepts an explicit false", () => {
+    expect(resolveAuditOptions({}).warmCache).toBe(true);
+    expect(resolveAuditOptions({ warmCache: false }).warmCache).toBe(false);
+  });
+
+  it("omits emulatedUserAgent when not provided (no default)", () => {
+    const result = resolveAuditOptions({});
+    expect("emulatedUserAgent" in result).toBe(false);
+    expect(result.emulatedUserAgent).toBeUndefined();
+  });
+
+  it("passes a provided UA string through unchanged", () => {
+    const ua =
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+    expect(resolveAuditOptions({ emulatedUserAgent: ua }).emulatedUserAgent).toBe(
+      ua,
+    );
+  });
+
+  it("throws on a non-string UA", () => {
+    expect(() => resolveAuditOptions({ emulatedUserAgent: 123 })).toThrow(
+      /audit options/i,
+    );
+  });
+});
+
 describe("parseAuditOptions", () => {
   it("behaves like resolveAuditOptions for valid input", () => {
     expect(parseAuditOptions({ formFactor: "desktop" })).toEqual(

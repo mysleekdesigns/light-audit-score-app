@@ -117,6 +117,7 @@ export const runAudit: RunAudit = async (url, options) => {
       scores: parsedMedian.scores,
       metrics: parsedMedian.metrics,
       opportunities: parsedMedian.opportunities,
+      bestPractices: parsedMedian.bestPractices,
       lhr: median.lhr,
     },
     perRunScores,

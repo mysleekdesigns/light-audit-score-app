@@ -176,6 +176,29 @@ describe("normalizeDefaults", () => {
     expect(resolved.accuracyMode).toBe(true);
     // Preset clears any prior calibrated multiplier → Lighthouse's 4× default.
     expect(resolved.cpuSlowdownMultiplier).toBeUndefined();
+    // …and clears storage (cold first visit), matching the panel's own default.
+    expect(resolved.warmCache).toBe(false);
+  });
+
+  it("normalizes the Best Practices parity fields (warmCache / userAgentPreset)", () => {
+    // Defaults when absent: warm cache on, no UA override.
+    const bare = normalizeDefaults({});
+    expect(bare.warmCache).toBe(true);
+    expect(bare.userAgentPreset).toBe("default");
+    expect(DEFAULT_AUDIT_DEFAULTS.warmCache).toBe(true);
+    expect(DEFAULT_AUDIT_DEFAULTS.userAgentPreset).toBe("default");
+
+    // Honoured when present; only an explicit false turns warm cache off.
+    expect(normalizeDefaults({ warmCache: false }).warmCache).toBe(false);
+    expect(
+      normalizeDefaults({ userAgentPreset: "desktop-chrome" }).userAgentPreset,
+    ).toBe("desktop-chrome");
+
+    // Garbage degrades safely.
+    expect(normalizeDefaults({ warmCache: "no" }).warmCache).toBe(true);
+    expect(normalizeDefaults({ userAgentPreset: "ie6" }).userAgentPreset).toBe(
+      "default",
+    );
   });
 
   it("round-trips through serialize → JSON.parse → normalize", () => {

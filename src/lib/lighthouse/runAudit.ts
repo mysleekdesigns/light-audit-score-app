@@ -28,6 +28,8 @@ import { classifyAuditError, runtimeErrorMessage } from "@/lib/lighthouse/diagno
 import {
   type AuditOptions,
   type AuditSession,
+  type AuditState,
+  type CategoryAuditRef,
   type CategoryScores,
   type CoreWebVitals,
   type FormFactor,
@@ -211,6 +213,77 @@ function parseOpportunities(lhr: LighthouseResult): Opportunity[] {
 }
 
 /**
+ * Classify a category audit by its score + `scoreDisplayMode`, mirroring how the
+ * Lighthouse report buckets audits. `informative`/`manual` audits carry no weight
+ * and aren't pass/fail; `notApplicable` didn't apply to this page; an errored or
+ * unscored weighted audit is treated as failed; otherwise a perfect score (binary
+ * audits are 0/1) passes and anything less fails.
+ */
+function auditState(score: number | null, scoreDisplayMode: string): AuditState {
+  if (scoreDisplayMode === "notApplicable") return "notApplicable";
+  if (scoreDisplayMode === "informative" || scoreDisplayMode === "manual") {
+    return "informative";
+  }
+  if (scoreDisplayMode === "error" || score === null) return "failed";
+  return score >= 1 ? "passed" : "failed";
+}
+
+/** Audit-state sort rank: failed first (what's dragging the score), N-A last. */
+const AUDIT_STATE_RANK: Record<AuditState, number> = {
+  failed: 0,
+  passed: 1,
+  informative: 2,
+  notApplicable: 3,
+};
+
+/**
+ * Project a Lighthouse category into its per-audit breakdown: join the category's
+ * `auditRefs` (which carry the scoring `weight`/`group`) with each audit result
+ * (title/description/score/scoreDisplayMode/displayValue). Surfaced so a category
+ * score — especially the environment-sensitive Best Practices one — can be
+ * explained audit-by-audit. Sorted failed-first (by weight desc), then passed,
+ * then weightless informative/N-A audits. Tolerant of absent fields (returns []
+ * when the category or its `auditRefs` are missing). Pure, like `parseOpportunities`.
+ */
+export function parseCategoryAudits(
+  lhr: LighthouseResult,
+  categoryId: string,
+): CategoryAuditRef[] {
+  const category = getCategories(lhr)[categoryId];
+  if (!isRecord(category) || !Array.isArray(category.auditRefs)) return [];
+  const audits = getAudits(lhr);
+
+  const refs: CategoryAuditRef[] = [];
+  for (const rawRef of category.auditRefs) {
+    if (!isRecord(rawRef)) continue;
+    const id = asString(rawRef.id);
+    if (id === undefined) continue;
+
+    const auditRecord = isRecord(audits[id]) ? (audits[id] as Record<string, unknown>) : {};
+    const score = asNumber(auditRecord.score);
+    const scoreDisplayMode = asString(auditRecord.scoreDisplayMode) ?? "";
+
+    refs.push({
+      id,
+      title: asString(auditRecord.title) ?? id,
+      description: asString(auditRecord.description) ?? "",
+      weight: asNumber(rawRef.weight) ?? 0,
+      group: asString(rawRef.group),
+      score,
+      scoreDisplayMode,
+      displayValue: asString(auditRecord.displayValue) ?? "",
+      state: auditState(score, scoreDisplayMode),
+    });
+  }
+
+  refs.sort((a, b) => {
+    const byState = AUDIT_STATE_RANK[a.state] - AUDIT_STATE_RANK[b.state];
+    return byState !== 0 ? byState : b.weight - a.weight;
+  });
+  return refs;
+}
+
+/**
  * Read the run's host / effective-throttling environment from the LHR (PRD §6
  * Phase 8). `benchmarkIndex` + `hostUserAgent` come from `lhr.environment`; the
  * *effective* throttling method + CPU multiplier Lighthouse actually applied come
@@ -260,6 +333,7 @@ export function parseLhr(
     scores: parseScores(lhr),
     metrics: parseMetrics(lhr),
     opportunities: parseOpportunities(lhr),
+    bestPractices: parseCategoryAudits(lhr, "best-practices"),
     runWarnings,
     environment: parseEnvironment(lhr),
   };
@@ -329,6 +403,11 @@ export const runSingleAudit: RunSingleAudit = async (url, options, session) => {
         // parity); a fresh-profile run leaves this at Lighthouse's default
         // (storage IS reset → cold first visit).
         ...(ownsProfile ? {} : { disableStorageReset: true }),
+        // Optional emulated-UA override (parity lever for bot-sensitive sites).
+        // Omitted → Lighthouse uses its config-default device UA.
+        ...(options.emulatedUserAgent
+          ? { emulatedUserAgent: options.emulatedUserAgent }
+          : {}),
         // Bound a single navigation so a hung page fails fast (and is then
         // classified) rather than stalling until the worker timeout.
         maxWaitForLoad: MAX_WAIT_FOR_LOAD_MS,

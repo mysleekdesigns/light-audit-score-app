@@ -79,6 +79,7 @@ function makeResult(url: string): AuditResult {
         interactive: null,
       },
       opportunities: [],
+      bestPractices: [],
       lhr: { requestedUrl: url, fetchTime: "2026-05-26T00:00:00.000Z" },
     },
     perRunScores: [{ performance: 91 }],

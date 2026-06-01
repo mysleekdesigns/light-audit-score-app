@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   benchmarkDeviceLabel,
+  chromeVersionFromUserAgent,
   cpuMultiplierLabel,
   formatBenchmarkIndex,
   LIGHTHOUSE_DEFAULT_MULTIPLIER,
@@ -69,5 +70,37 @@ describe("benchmarkDeviceLabel", () => {
     expect(benchmarkDeviceLabel(null)).toBeNull();
     expect(benchmarkDeviceLabel(0)).toBeNull();
     expect(benchmarkDeviceLabel(undefined)).toBeNull();
+  });
+});
+
+describe("chromeVersionFromUserAgent", () => {
+  it("extracts the Chrome version from a desktop UA string", () => {
+    expect(
+      chromeVersionFromUserAgent(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.127 Safari/537.36",
+      ),
+    ).toBe("126.0.6478.127");
+  });
+
+  it("matches HeadlessChrome and Chromium builds", () => {
+    expect(
+      chromeVersionFromUserAgent(
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/124.0.0.0 Safari/537.36",
+      ),
+    ).toBe("124.0.0.0");
+    expect(
+      chromeVersionFromUserAgent("Mozilla/5.0 Chromium/120.0 Safari/537.36"),
+    ).toBe("120.0");
+  });
+
+  it("returns null when absent or non-string", () => {
+    expect(
+      chromeVersionFromUserAgent(
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Version/17.0 Safari/604.1",
+      ),
+    ).toBeNull();
+    expect(chromeVersionFromUserAgent("")).toBeNull();
+    expect(chromeVersionFromUserAgent(null)).toBeNull();
+    expect(chromeVersionFromUserAgent(undefined)).toBeNull();
   });
 });
