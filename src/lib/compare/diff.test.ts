@@ -25,6 +25,8 @@ function makeRow(overrides: Partial<HistoryRow> = {}): HistoryRow {
     status: "done",
     errorMessage: null,
     formFactor: "mobile",
+    source: "local",
+    field: null,
     runs: 3,
     options: {
       formFactor: "mobile",

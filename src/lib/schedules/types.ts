@@ -13,6 +13,7 @@
 
 import type {
   AuditOptions,
+  AuditSource,
   DeviceSelection,
 } from "@/lib/lighthouse/types";
 
@@ -58,6 +59,8 @@ export interface Schedule {
   concurrency: number;
   device: DeviceSelection;
   accuracyMode: boolean;
+  /** Engine each fired batch runs on ("local" | "psi"); defaults to "local". */
+  source: AuditSource;
   /** ISO timestamp of the most recent fire, or null. */
   lastFiredAt: string | null;
   /** Batch id the most recent fire produced, or null. */
@@ -77,6 +80,8 @@ export interface CreateScheduleInput {
   concurrency: number;
   device: DeviceSelection;
   accuracyMode: boolean;
+  /** Engine each fired batch runs on ("local" | "psi"). */
+  source: AuditSource;
 }
 
 /** Shape accepted by `updateSchedule` / `PATCH /api/schedules/:id`. */

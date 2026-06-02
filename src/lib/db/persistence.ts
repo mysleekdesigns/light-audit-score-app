@@ -39,8 +39,10 @@ import { batches, runs, type BatchRow, type RunRow } from "@/lib/db/schema";
 import type {
   AuditOptions,
   AuditResult,
+  AuditSource,
   CategoryScores,
   CoreWebVitals,
+  FieldData,
   FormFactor,
   RunEnvironment,
 } from "@/lib/lighthouse/types";
@@ -56,6 +58,8 @@ export interface HistoryRow {
   status: "done" | "error";
   errorMessage: string | null;
   formFactor: FormFactor;
+  /** Engine that produced this run ("local" | "psi"); defaults to "local" for legacy rows. */
+  source: AuditSource;
   /** Number of runs the median was taken over (null for failures). */
   runs: number | null;
   /**
@@ -69,6 +73,8 @@ export interface HistoryRow {
   scores: CategoryScores;
   /** Median Core Web Vitals (parsed from the row's JSON; null for failures). */
   metrics: CoreWebVitals | null;
+  /** Real-world CrUX field data (PSI runs only; null for local runs/failures). */
+  field: FieldData | null;
   /**
    * Host / effective-throttling environment of the median run (PRD §6 Phase 10):
    * `benchmarkIndex` ("CPU/Memory Power"), the effective throttling method, and the
@@ -89,6 +95,8 @@ export interface HistoryRow {
 export interface BatchInfo {
   id: string;
   status: BatchStatus;
+  /** Engine that ran the batch ("local" | "psi"); defaults to "local" for legacy rows. */
+  source: AuditSource;
   /** Resolved options the batch ran with. */
   options: AuditOptions;
   /** Resolved (clamped) concurrency the batch ran at. */
@@ -148,6 +156,7 @@ export function recordBatch(batch: Batch): void {
       .values({
         id: batch.id,
         status: batch.status,
+        source: batch.source,
         options: JSON.stringify(batch.options),
         concurrency: batch.concurrency,
         total: batch.jobs.length,
@@ -224,6 +233,7 @@ export async function recordRun(
         url: result.requestedUrl || job.url,
         finalUrl: result.finalUrl ?? null,
         status: "done",
+        source: result.source ?? batch.source,
         errorMessage: null,
         formFactor: result.options.formFactor,
         throttling: result.options.throttling,
@@ -235,6 +245,7 @@ export async function recordRun(
         scoreSeo: toScoreInt(scores.seo),
         options: JSON.stringify(result.options),
         metrics: JSON.stringify(result.median.metrics),
+        field: result.field ? JSON.stringify(result.field) : null,
         benchmarkIndex: result.environment.benchmarkIndex,
         hostUserAgent: result.environment.hostUserAgent || null,
         throttlingMethod: result.environment.throttlingMethod || null,
@@ -263,6 +274,7 @@ export function recordFailedRun(batch: Batch, job: AuditJob): void {
         url: job.url,
         finalUrl: null,
         status: "error",
+        source: batch.source,
         errorMessage: job.error?.message ?? "Unknown error",
         // The per-job device (PRD §6 Phase 12): for a `"both"` batch each URL
         // fanned out into a mobile + a desktop job, so a failed job must record
@@ -278,6 +290,7 @@ export function recordFailedRun(batch: Batch, job: AuditJob): void {
         scoreSeo: null,
         options: JSON.stringify(batch.options),
         metrics: null,
+        field: null,
         benchmarkIndex: null,
         hostUserAgent: null,
         throttlingMethod: null,
@@ -472,12 +485,14 @@ function rowToHistory(row: RunRow): HistoryRow {
     status: row.status === "error" ? "error" : "done",
     errorMessage: row.errorMessage,
     formFactor: row.formFactor === "desktop" ? "desktop" : "mobile",
+    source: row.source === "psi" ? "psi" : "local",
     runs: row.runs,
     options:
       safeParse<AuditOptions>(row.options, "rowToHistory:options") ??
       FALLBACK_OPTIONS,
     scores,
     metrics: safeParse<CoreWebVitals>(row.metrics, "rowToHistory:metrics"),
+    field: safeParse<FieldData>(row.field, "rowToHistory:field"),
     environment: rowToEnvironment(row),
     hasJsonReport: row.reportJson !== null,
     hasHtmlReport: row.reportHtml !== null,
@@ -491,6 +506,7 @@ function rowToBatchInfo(row: BatchRow): BatchInfo {
   return {
     id: row.id,
     status: row.status as BatchStatus,
+    source: row.source === "psi" ? "psi" : "local",
     options:
       safeParse<AuditOptions>(row.options, "rowToBatchInfo:options") ??
       FALLBACK_OPTIONS,

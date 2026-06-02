@@ -25,6 +25,7 @@ function makeSchedule(patch: Partial<Schedule> = {}): Schedule {
     concurrency: 1,
     device: "mobile",
     accuracyMode: false,
+    source: "local",
     lastFiredAt: null,
     lastBatchId: null,
     createdAt: "2026-05-28T00:00:00.000Z",

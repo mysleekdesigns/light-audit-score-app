@@ -13,6 +13,7 @@ import {
 
 import { DriftWarning } from "@/components/audit/drift-warning";
 import { EnvironmentBadge } from "@/components/audit/environment-badge";
+import { FieldDataPanel } from "@/components/pagespeed/field-data-panel";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -499,6 +500,16 @@ function DoneBody({ job, result }: { job: AuditJob; result: AuditResultLite }) {
             <SectionLabel>Category scores</SectionLabel>
             <CategoryScoreGrid result={result} />
           </section>
+
+          {result.field ? (
+            <>
+              <Separator className="bg-border/60" />
+              <section className="flex flex-col gap-3">
+                <SectionLabel>Field data · CrUX</SectionLabel>
+                <FieldDataPanel field={result.field} />
+              </section>
+            </>
+          ) : null}
 
           <Separator className="bg-border/60" />
 

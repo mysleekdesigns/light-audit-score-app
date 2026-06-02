@@ -22,6 +22,8 @@ describe("parseCreateBatchBody — valid bodies", () => {
       // Omitted device defaults to the options' concrete formFactor (mobile).
       device: "mobile",
       options: DEFAULT_OPTIONS,
+      // Omitted source defaults to the local forked-Chrome engine.
+      source: "local",
       concurrency: DEFAULT_CONCURRENCY,
       accuracyMode: false,
     });
@@ -40,6 +42,19 @@ describe("parseCreateBatchBody — valid bodies", () => {
     expect(on.ok).toBe(true);
     if (!on.ok) return;
     expect(on.value.accuracyMode).toBe(true);
+  });
+
+  it("defaults source to local and accepts an explicit psi", () => {
+    const def = parseCreateBatchBody({ urls: ["https://example.com"] });
+    expect(def.ok).toBe(true);
+    if (def.ok) expect(def.value.source).toBe("local");
+
+    const psi = parseCreateBatchBody({
+      urls: ["https://example.com"],
+      source: "psi",
+    });
+    expect(psi.ok).toBe(true);
+    if (psi.ok) expect(psi.value.source).toBe("psi");
   });
 
   it("accepts http and https URLs", () => {

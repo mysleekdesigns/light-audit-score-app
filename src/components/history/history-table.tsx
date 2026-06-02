@@ -181,6 +181,22 @@ function SortHeader({
   );
 }
 
+/**
+ * A compact engine badge — cyan "PSI" for PageSpeed Insights runs; nothing for
+ * the local engine (the common case stays uncluttered).
+ */
+function SourceBadge({ source }: { source: HistoryRow["source"] }) {
+  if (source !== "psi") return null;
+  return (
+    <Badge
+      variant="outline"
+      className="border-primary/40 bg-primary/10 font-mono text-[0.6rem] uppercase tracking-[0.12em] text-primary"
+    >
+      PSI
+    </Badge>
+  );
+}
+
 /** A single score cell: mono, tabular, colour-banded. */
 function ScoreCell({ score }: { score: number | null | undefined }) {
   const value = score ?? null;
@@ -418,6 +434,7 @@ function RowActions({ row }: { row: HistoryRow }) {
         urls={[row.url]}
         device={row.formFactor}
         options={row.options}
+        source={row.source}
         concurrency={1}
         priorBatchId={row.batchId}
       />
@@ -474,6 +491,7 @@ function HistoryRunCard({ row }: { row: HistoryRow }) {
           >
             {row.formFactor}
           </Badge>
+          <SourceBadge source={row.source} />
           <span
             title={row.createdAt}
             className="font-mono text-[0.65rem] tabular-nums text-muted-foreground"
@@ -809,12 +827,15 @@ export function HistoryTable({ rows }: HistoryTableProps) {
                         </Tooltip>
                       </TableCell>
                       <TableCell className={COMPACT_CELL}>
-                        <Badge
-                          variant="outline"
-                          className="font-mono text-[0.65rem] uppercase tracking-[0.12em] text-muted-foreground"
-                        >
-                          {row.formFactor}
-                        </Badge>
+                        <div className="flex items-center gap-1.5">
+                          <Badge
+                            variant="outline"
+                            className="font-mono text-[0.65rem] uppercase tracking-[0.12em] text-muted-foreground"
+                          >
+                            {row.formFactor}
+                          </Badge>
+                          <SourceBadge source={row.source} />
+                        </div>
                       </TableCell>
                       {row.status === "error" ? (
                         <FailedCell message={row.errorMessage} />

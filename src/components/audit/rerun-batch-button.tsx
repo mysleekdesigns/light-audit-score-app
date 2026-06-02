@@ -33,7 +33,11 @@ import {
   ApiError,
   createBatch,
 } from "@/lib/client/auditClient";
-import type { AuditOptions, DeviceSelection } from "@/lib/lighthouse/types";
+import type {
+  AuditOptions,
+  AuditSource,
+  DeviceSelection,
+} from "@/lib/lighthouse/types";
 import { cn } from "@/lib/utils";
 
 type ButtonProps = React.ComponentProps<typeof Button>;
@@ -49,6 +53,8 @@ export interface RerunBatchButtonProps {
   concurrency: number;
   /** Match-DevTools accuracy mode, if the source batch used it. */
   accuracyMode?: boolean;
+  /** Engine to reproduce ("local" | "psi"); PSI re-runs deep-link to /pagespeed. */
+  source?: AuditSource;
   /** The source batch's id — recorded as lineage on the new batch. */
   priorBatchId: string;
   /** Compact icon-only button (History rows) vs labeled (Batch card). */
@@ -71,6 +77,7 @@ export function RerunBatchButton({
   options,
   concurrency,
   accuracyMode,
+  source,
   priorBatchId,
   iconOnly = false,
   size,
@@ -92,12 +99,15 @@ export function RerunBatchButton({
         urls,
         device,
         options,
+        source,
         concurrency,
         accuracyMode,
         priorBatchId,
       });
       toast.success(`Re-running ${pages(created.jobs.length)}…`);
-      router.push(`/?watch=${encodeURIComponent(created.id)}`);
+      // PSI re-runs stream in the PageSpeed console (field data); local in New Audit.
+      const watchPath = source === "psi" ? "/pagespeed" : "/";
+      router.push(`${watchPath}?watch=${encodeURIComponent(created.id)}`);
     } catch (err) {
       const message =
         err instanceof ApiError

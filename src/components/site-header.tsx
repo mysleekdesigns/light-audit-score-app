@@ -8,6 +8,11 @@ import { cn } from "@/lib/utils";
 const NAV = [
   { href: "/", label: "New Audit", match: (p: string) => p === "/" },
   {
+    href: "/pagespeed",
+    label: "PageSpeed",
+    match: (p: string) => p.startsWith("/pagespeed"),
+  },
+  {
     href: "/history",
     label: "History",
     match: (p: string) => p.startsWith("/history"),

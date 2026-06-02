@@ -15,6 +15,7 @@
 import type {
   AuditOptions,
   AuditResult,
+  AuditSource,
   CategoryScores,
   DeviceSelection,
   FormFactor,
@@ -135,6 +136,12 @@ export interface Batch {
   device: DeviceSelection;
   /** Resolved audit options applied to every job in the batch (per-job `formFactor` overridden by `AuditJob.device`). */
   options: AuditOptions;
+  /**
+   * Engine the batch runs on (PSI feature). `"local"` (default) forks Chrome via
+   * `runAuditInWorker`; `"psi"` calls Google PageSpeed Insights in-process via
+   * `runPsiAudit`. The queue dispatches on this in `runJob`.
+   */
+  source: AuditSource;
   /** Resolved (clamped) concurrency this batch was created with. */
   concurrency: number;
   /**
@@ -198,6 +205,12 @@ export interface CreateBatchInput {
    */
   device: DeviceSelection;
   options: AuditOptions;
+  /**
+   * Engine to run on (PSI feature). Optional; treated as `"local"` when omitted,
+   * so existing callers (and the scheduler) are unchanged. `"psi"` routes every
+   * job through Google PageSpeed Insights instead of the forked-Chrome engine.
+   */
+  source?: AuditSource;
   concurrency: number;
   /**
    * When true, the queue forces effective concurrency to 1 if Performance is in

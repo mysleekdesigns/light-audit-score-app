@@ -40,6 +40,7 @@ import {
 } from "@/lib/db/persistence";
 import { resolveFormFactors } from "@/lib/lighthouse/options";
 import type { AuditResult } from "@/lib/lighthouse/types";
+import { runPsiAudit } from "@/lib/pagespeed/runPsiAudit";
 import { runAuditInWorker, WorkerAbortError } from "@/lib/queue/runAuditWorker";
 import {
   type AuditJob,
@@ -165,10 +166,13 @@ export class AuditQueue implements AuditQueueApi {
     // Accuracy mode (PRD §6 Phase 9) forces concurrency to 1 when Performance is
     // in scope so parallel Chromes can't contend during the simulated-throttling
     // trace and deflate scores. `batch.concurrency` records what actually ran.
+    // PSI runs on Google's servers, so local CPU contention is irrelevant —
+    // accuracy mode never pins PSI concurrency (it would only slow the batch).
+    const source = input.source ?? "local";
     const concurrency = resolveEffectiveConcurrency(
       input.options,
       input.concurrency,
-      input.accuracyMode,
+      source === "psi" ? false : input.accuracyMode,
     );
     // The PQueue is shared across batches; the most recent batch's concurrency
     // wins. Single-user tool, so batches don't realistically overlap.
@@ -204,6 +208,8 @@ export class AuditQueue implements AuditQueueApi {
       id: batchId,
       status: "queued",
       device: input.device,
+      // Engine this batch runs on (PSI feature); dispatched on in `runJob`.
+      source,
       // Pin a concrete representative form factor onto the batch-level options
       // (the first resolved form factor) so single-device reads of
       // `batch.options.formFactor` keep working and it's never `"both"`. Each
@@ -360,14 +366,14 @@ export class AuditQueue implements AuditQueueApi {
       // Phase 12). For a single-device batch this equals `batch.options`; for a
       // `"both"` batch it pins the per-job device so the persisted run records
       // the right one (`result.options.formFactor` flows straight through).
-      const result = await runAuditInWorker(
-        job.url,
-        {
-          ...batch.options,
-          formFactor: job.device,
-        },
-        signal,
-      );
+      const jobOptions = { ...batch.options, formFactor: job.device };
+      // Dispatch on the batch engine (PSI feature): PSI is an in-process HTTPS
+      // call to Google (cancellable via the same AbortSignal); the local engine
+      // forks an isolated Chrome worker. Both resolve to an AuditResult.
+      const result =
+        batch.source === "psi"
+          ? await runPsiAudit(job.url, jobOptions, signal)
+          : await runAuditInWorker(job.url, jobOptions, signal);
       // A cancel that landed after the worker finished but before we recorded:
       // drop the result and mark the job cancelled (cancelBatch set it already,
       // but a late-completing worker would otherwise overwrite that here).

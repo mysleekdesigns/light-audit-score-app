@@ -21,6 +21,7 @@ function makeRow(overrides: Partial<HistoryRow> & { id: string }): HistoryRow {
     status: overrides.status ?? "done",
     errorMessage: overrides.errorMessage ?? null,
     formFactor: overrides.formFactor ?? "mobile",
+    source: overrides.source ?? "local",
     runs: overrides.runs ?? 3,
     options: overrides.options ?? {
       formFactor: "mobile",
@@ -31,6 +32,7 @@ function makeRow(overrides: Partial<HistoryRow> & { id: string }): HistoryRow {
     },
     scores: overrides.scores ?? {},
     metrics: overrides.metrics ?? null,
+    field: overrides.field ?? null,
     environment: overrides.environment ?? null,
     hasJsonReport: overrides.hasJsonReport ?? true,
     hasHtmlReport: overrides.hasHtmlReport ?? true,

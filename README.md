@@ -52,6 +52,29 @@ npm run db:generate   # generate SQL migrations after a schema change
 The local data directory `./data/` (the SQLite database plus generated reports under
 `./data/reports/`) is **gitignored**; the `drizzle/` migrations are committed.
 
+### Environment
+
+Copy `.env.example` to `.env` and fill in what you need — everything is optional:
+
+```bash
+cp .env.example .env
+```
+
+**PageSpeed Insights** (the `/pagespeed` page) calls Google's hosted API and needs an API key —
+keyless PSI is now capped at a **0 daily quota** (instant HTTP 429). With a key you get the free tier's
+25,000 requests/day (~240/min):
+
+```bash
+# .env
+PAGESPEED_API_KEY=your-key-here
+```
+
+Two steps in the [Google Cloud Console](https://console.cloud.google.com/apis/library/pagespeedonline.googleapis.com):
+**(1) enable the "PageSpeed Insights API"** on your project, and **(2)** create (or reuse) an API key on
+that same project. If `PAGESPEED_API_KEY` is unset the engine falls back to `GOOGLE_API_KEY`, so one key
+can serve both Custom Search and PSI — provided PSI is enabled on that key's project. The key is read
+server-side only and never sent to the browser.
+
 ## Run
 
 Development server:
@@ -93,6 +116,11 @@ npm run typecheck   # tsc --noEmit
   Watch per-URL cards stream queued → running → done, with live category **score rings** and Core
   Web Vitals (LCP, CLS, TBT, FCP, SI, TTI), and open the stored full HTML report from the detail
   view.
+- **PageSpeed** — the same paste/crawl input, but audited by **Google PageSpeed Insights** (hosted
+  Lighthouse, no local Chrome). Adds **real-world Core Web Vitals** from the Chrome UX Report (CrUX),
+  shown per-URL and per-origin with distribution bars, alongside Google's lab scores. Reuses the same
+  live results grid, History, and daily-schedule machinery as the local engine (PSI runs carry a
+  cyan **PSI** badge in History).
 - **History** — a sortable / filterable archive of every persisted run (by URL, date, score).
 - **Compare** — groups history by URL: a per-URL score-trend chart + sparklines, and a two-run
   diff of category scores (higher is better) and Core Web Vitals (lower is better) with up/down

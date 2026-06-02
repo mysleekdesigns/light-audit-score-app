@@ -46,6 +46,7 @@ function makeBatch(id: string, jobs: AuditJob[]): Batch {
     id,
     status: "queued",
     device: OPTIONS.formFactor,
+    source: "local",
     options: OPTIONS,
     concurrency: 3,
     jobs,

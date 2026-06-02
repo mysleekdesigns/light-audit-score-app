@@ -40,6 +40,8 @@ describe("parseCreateScheduleBody — valid bodies", () => {
       // device defaults to options.formFactor (mobile by default).
       device: "mobile",
       accuracyMode: false,
+      // source defaults to the local forked-Chrome engine.
+      source: "local",
     });
   });
 

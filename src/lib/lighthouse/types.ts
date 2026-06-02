@@ -91,7 +91,23 @@ export interface AuditOptions {
    * the UA you'd get from a real Chrome of that form factor.
    */
   emulatedUserAgent?: string;
+  /**
+   * Locale for the report, e.g. `"en_US"` — a PageSpeed Insights-only lever
+   * (PSI's `locale` query param) that localises audit titles/descriptions. The
+   * local Chrome engine ignores it (its UI strings come from the bundled
+   * Lighthouse). Omitted → PSI's default locale. See `src/lib/pagespeed`.
+   */
+  locale?: string;
 }
+
+/**
+ * Which engine produced a result (PSI feature). `"local"` = the forked-Chrome
+ * Lighthouse engine; `"psi"` = Google's hosted PageSpeed Insights API. The queue,
+ * persistence, and UI all carry this so a result can be attributed and field data
+ * (CrUX) surfaced only for PSI. Optional/`"local"`-defaulted everywhere so every
+ * pre-existing local path is unchanged.
+ */
+export type AuditSource = "local" | "psi";
 
 /**
  * A caller-owned Chrome profile reused across the runs of a single audit to
@@ -212,6 +228,59 @@ export interface RunEnvironment {
   cpuSlowdownMultiplier: number | null;
 }
 
+// --- Field data (CrUX / PageSpeed Insights) --------------------------------
+
+/**
+ * CrUX assessment bucket for a field metric (PSI `category`): real-world 75th
+ * percentile in the good / needs-improvement / poor band. Maps to the same
+ * green / amber / red score tokens via `src/lib/pagespeed/field-metrics.ts`.
+ */
+export type FieldCategory = "FAST" | "AVERAGE" | "SLOW";
+
+/** CrUX field metric ids as returned by PSI's `loadingExperience.metrics`. */
+export type FieldMetricId =
+  | "LARGEST_CONTENTFUL_PAINT_MS"
+  | "INTERACTION_TO_NEXT_PAINT"
+  | "CUMULATIVE_LAYOUT_SHIFT_SCORE"
+  | "FIRST_CONTENTFUL_PAINT_MS"
+  | "EXPERIMENTAL_TIME_TO_FIRST_BYTE";
+
+/** One real-world field metric: the p75 value, its band, and the 3-bucket histogram. */
+export interface FieldMetric {
+  /**
+   * 75th-percentile value as PSI reports it: milliseconds for timing metrics;
+   * for `CUMULATIVE_LAYOUT_SHIFT_SCORE` PSI returns CLS×100 (e.g. `20` = 0.20),
+   * normalised back to the raw CLS by the field-metrics display layer.
+   */
+  percentile: number;
+  /** Assessment band (FAST/AVERAGE/SLOW). */
+  category: FieldCategory;
+  /** Good / needs-improvement / poor distribution (proportions sum ≈ 1). */
+  distributions: { min: number; max: number | null; proportion: number }[];
+}
+
+/**
+ * A CrUX "loading experience" — either URL-level (`loadingExperience`) or
+ * origin-level (`originLoadingExperience`). Metrics are partial: a low-traffic
+ * page surfaces only the metrics that met CrUX's data threshold (possibly none).
+ */
+export interface FieldExperience {
+  /** Overall Core Web Vitals assessment for this experience; null if absent. */
+  overallCategory: FieldCategory | null;
+  /** Available field metrics, keyed by CrUX id (any subset, possibly empty). */
+  metrics: Partial<Record<FieldMetricId, FieldMetric>>;
+}
+
+/**
+ * Real-world CrUX field data attached to a PSI {@link AuditResult}. `url` is the
+ * specific page's experience; `origin` is the whole origin's. Either may be
+ * absent when CrUX has insufficient data — the UI degrades gracefully.
+ */
+export interface FieldData {
+  url?: FieldExperience;
+  origin?: FieldExperience;
+}
+
 /** Result of one Lighthouse run against one URL. */
 export interface SingleRunResult {
   requestedUrl: string;
@@ -267,6 +336,16 @@ export interface AuditResult {
   runWarnings: string[];
   /** Host / effective-throttling environment the median run executed under. */
   environment: RunEnvironment;
+  /**
+   * Engine that produced this result. Omitted/`"local"` for the forked-Chrome
+   * engine; `"psi"` for Google PageSpeed Insights. See {@link AuditSource}.
+   */
+  source?: AuditSource;
+  /**
+   * Real-world CrUX field data — present only for `source: "psi"` results when
+   * CrUX has data for the URL/origin. Never set by the local engine.
+   */
+  field?: FieldData;
 }
 
 /**

@@ -82,6 +82,7 @@ function rowToSchedule(row: ScheduleRow): Schedule | null {
     concurrency: row.concurrency,
     device,
     accuracyMode: row.accuracyMode,
+    source: row.source === "psi" ? "psi" : "local",
     lastFiredAt: row.lastFiredAt,
     lastBatchId: row.lastBatchId,
     createdAt: row.createdAt,
@@ -120,6 +121,7 @@ export function createSchedule(input: CreateScheduleInput): Schedule | null {
         concurrency: input.concurrency,
         device: input.device,
         accuracyMode: input.accuracyMode,
+        source: input.source,
         lastFiredAt: null,
         lastBatchId: null,
         createdAt: now,
@@ -169,6 +171,7 @@ export function updateSchedule(
         concurrency: next.concurrency,
         device: next.device,
         accuracyMode: next.accuracyMode,
+        source: next.source,
         updatedAt: next.updatedAt,
       })
       .where(eq(schedules.id, id))

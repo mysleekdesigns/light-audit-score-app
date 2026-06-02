@@ -104,6 +104,8 @@ export const createScheduleBodySchema = z.object({
     .transform((n) => (n === undefined ? DEFAULT_CONCURRENCY : clampConcurrency(n))),
   device: z.enum(["mobile", "desktop", "both"]).optional(),
   accuracyMode: z.boolean().optional().default(false),
+  // Engine each fired batch runs on (PSI feature). Defaults to the local engine.
+  source: z.enum(["local", "psi"]).optional().default("local"),
 });
 
 /** Partial-update schema — every field optional. */
@@ -141,6 +143,7 @@ export function parseCreateScheduleBody(raw: unknown): ParseCreateScheduleResult
       concurrency: data.concurrency,
       device,
       accuracyMode: data.accuracyMode,
+      source: data.source,
     },
   };
 }
@@ -160,5 +163,6 @@ export function parseUpdateScheduleBody(raw: unknown): ParseUpdateScheduleResult
   if (data.device !== undefined) value.device = data.device;
   else if (data.options !== undefined) value.device = data.options.formFactor;
   if (data.accuracyMode !== undefined) value.accuracyMode = data.accuracyMode;
+  if (data.source !== undefined) value.source = data.source;
   return { ok: true, value };
 }

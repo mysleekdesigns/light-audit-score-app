@@ -104,6 +104,7 @@ function makeInput(overrides: Partial<CreateScheduleInput> = {}): CreateSchedule
     concurrency: 1,
     device: "mobile",
     accuracyMode: false,
+    source: "local",
     ...overrides,
   };
 }

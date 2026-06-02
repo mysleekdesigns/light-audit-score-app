@@ -9,7 +9,11 @@
  * report URL helpers.
  */
 
-import type { AuditOptions, DeviceSelection } from "@/lib/lighthouse/types";
+import type {
+  AuditOptions,
+  AuditSource,
+  DeviceSelection,
+} from "@/lib/lighthouse/types";
 import type { ApiErrorBody, ApiErrorIssue, Batch } from "@/lib/queue/types";
 
 /** Body accepted by {@link createBatch}; mirrors `POST /api/audits` (options/concurrency optional). */
@@ -22,6 +26,11 @@ export interface CreateBatchRequest {
    */
   device?: DeviceSelection;
   options?: Partial<AuditOptions>;
+  /**
+   * Engine to run on (PSI feature). `"psi"` routes the batch through Google
+   * PageSpeed Insights; omitted/`"local"` uses the forked-Chrome engine.
+   */
+  source?: AuditSource;
   concurrency?: number;
   /**
    * When true, the server forces effective concurrency to 1 if Performance is in

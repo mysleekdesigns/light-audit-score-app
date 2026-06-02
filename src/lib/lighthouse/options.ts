@@ -65,6 +65,10 @@ export const auditOptionsSchema = z.object({
   // No default: when omitted the engine passes no flag and Lighthouse uses its
   // config-default device UA. See AuditOptions.emulatedUserAgent.
   emulatedUserAgent: z.string().optional(),
+  // Optional report locale (e.g. "en_US") — PageSpeed Insights only; the local
+  // Chrome engine ignores it. No default → PSI uses its own default locale.
+  // See AuditOptions.locale.
+  locale: z.string().optional(),
 });
 
 /**

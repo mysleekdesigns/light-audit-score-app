@@ -26,6 +26,8 @@ export const batches = sqliteTable("batches", {
   id: text("id").primaryKey(),
   /** queued | running | completed | completed_with_errors. */
   status: text("status").notNull(),
+  /** Engine that ran the batch: "local" (forked Chrome) | "psi" (PageSpeed Insights). */
+  source: text("source").notNull().default("local"),
   /** Resolved `AuditOptions` as JSON. */
   options: text("options").notNull(),
   /** Resolved (clamped) concurrency the batch ran at. */
@@ -65,6 +67,8 @@ export const runs = sqliteTable("runs", {
   finalUrl: text("final_url"),
   /** done | error. */
   status: text("status").notNull(),
+  /** Engine that produced this run: "local" (forked Chrome) | "psi" (PageSpeed Insights). */
+  source: text("source").notNull().default("local"),
   /** Failure reason when `status = 'error'`. */
   errorMessage: text("error_message"),
   /** Emulated device (mobile | desktop) — drives the History "Device" column. */
@@ -83,6 +87,11 @@ export const runs = sqliteTable("runs", {
   options: text("options").notNull(),
   /** Full `CoreWebVitals` (median run) as JSON; null for failed runs. */
   metrics: text("metrics"),
+  /**
+   * Real-world CrUX field data ({@link FieldData}) as JSON — present only for PSI
+   * runs when CrUX has data for the URL/origin; null for local runs and failures.
+   */
+  field: text("field"),
   /**
    * Host / effective-throttling environment of the median run (PRD §6 Phase 10):
    * `benchmark_index` is Lighthouse's "CPU/Memory Power" (real — can be fractional),
@@ -134,6 +143,8 @@ export const schedules = sqliteTable("schedules", {
   concurrency: integer("concurrency").notNull(),
   /** `device` (PRD §6 Phase 12): "mobile" | "desktop" | "both". */
   device: text("device").notNull(),
+  /** Engine each fired batch runs on: "local" (forked Chrome) | "psi" (PageSpeed Insights). */
+  source: text("source").notNull().default("local"),
   /** Accuracy-mode flag (PRD §6 Phase 9) applied to each fire. */
   accuracyMode: integer("accuracy_mode", { mode: "boolean" }).notNull().default(false),
   /** ISO timestamp this schedule last fired, or null. */

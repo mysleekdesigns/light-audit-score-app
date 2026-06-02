@@ -74,6 +74,7 @@ export async function fireSchedule(schedule: Schedule): Promise<string | null> {
       urls,
       device: schedule.device,
       options: schedule.options,
+      source: schedule.source,
       concurrency: schedule.concurrency,
       accuracyMode: schedule.accuracyMode,
       scheduleId: schedule.id,

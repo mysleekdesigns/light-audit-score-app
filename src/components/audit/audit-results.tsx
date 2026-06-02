@@ -12,6 +12,7 @@ import { Ban, Radio } from "lucide-react";
 
 import { CoreWebVitalsStrip } from "@/components/audit/core-web-vitals";
 import { EnvironmentBadge } from "@/components/audit/environment-badge";
+import { FieldAssessmentChip } from "@/components/pagespeed/field-metric-bar";
 import { ResultsTable } from "@/components/audit/results-table";
 import { ResultsViewToggle } from "@/components/audit/results-view-toggle";
 import { ScoreRings } from "@/components/audit/score-rings";
@@ -31,7 +32,7 @@ import { assessDrift } from "@/lib/lighthouse/drift";
 import { hasBothDevices, pairByDevice } from "@/lib/pairing/devicePairs";
 import { cn } from "@/lib/utils";
 import type { StreamConnection } from "@/hooks/useBatchStream";
-import type { AuditJob, Batch } from "@/lib/queue/types";
+import type { AuditJob, AuditResultLite, Batch } from "@/lib/queue/types";
 
 interface AuditResultsProps {
   batch: Batch;
@@ -263,6 +264,34 @@ function CardsGrid({ jobs, onSelect }: CardsGridProps) {
 const DEVICE_LABEL =
   "font-mono text-[0.625rem] uppercase tracking-[0.18em] text-muted-foreground";
 
+/**
+ * Compact real-world (CrUX) assessment for a result card — the at-a-glance field
+ * verdict alongside the lab rings. Renders nothing for local runs (no `field`);
+ * for PSI runs it shows the overall URL (else origin) assessment, or a "no CrUX
+ * data" note when the page has insufficient real-user traffic.
+ */
+function CardFieldRow({ result }: { result: AuditResultLite }) {
+  if (!result.field) return null;
+  const category =
+    result.field.url?.overallCategory ??
+    result.field.origin?.overallCategory ??
+    null;
+  return (
+    <div className="flex items-center gap-2">
+      <span className="font-mono text-[0.6rem] uppercase tracking-[0.14em] text-muted-foreground">
+        Field
+      </span>
+      {category ? (
+        <FieldAssessmentChip category={category} />
+      ) : (
+        <span className="font-mono text-[0.6rem] uppercase tracking-[0.14em] text-muted-foreground/60">
+          No CrUX data
+        </span>
+      )}
+    </div>
+  );
+}
+
 interface DeviceSectionProps {
   device: "Mobile" | "Desktop";
   job: AuditJob | null;
@@ -298,6 +327,7 @@ function DeviceSection({ device, job, url, onSelect }: DeviceSectionProps) {
       <div className="flex flex-col gap-3">
         <ScoreRings scores={job.result.median.scores} size={48} />
         <CoreWebVitalsStrip metrics={job.result.median.metrics} />
+        <CardFieldRow result={job.result} />
       </div>
     );
   } else if (job.status === "error") {
@@ -434,6 +464,7 @@ const AuditJobCard = memo(function AuditJobCard({
           />
           <ScoreRings scores={job.result.median.scores} size={48} />
           <CoreWebVitalsStrip metrics={job.result.median.metrics} />
+          <CardFieldRow result={job.result} />
         </div>
       ) : job.status === "error" ? (
         <p className="text-sm text-score-poor">

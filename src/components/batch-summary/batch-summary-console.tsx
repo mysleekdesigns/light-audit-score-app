@@ -352,6 +352,7 @@ function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
               rerunUrls={rerunUrls}
               device={deviceLabel}
               options={batch.options}
+              source={batch.source}
               concurrency={batch.concurrency}
               priorBatchId={batch.id}
             />
@@ -473,6 +474,8 @@ interface BatchActionsProps {
   device: DeviceSelection;
   /** Resolved options the batch ran with, to reproduce on re-run. */
   options: BatchInfo["options"];
+  /** Engine the batch ran on ("local" | "psi"), to reproduce on re-run. */
+  source: BatchInfo["source"];
   /** Resolved concurrency the batch ran at, to reproduce on re-run. */
   concurrency: number;
   /** This batch's id — recorded as lineage on the re-run. */
@@ -492,6 +495,7 @@ function BatchActions({
   rerunUrls,
   device,
   options,
+  source,
   concurrency,
   priorBatchId,
 }: BatchActionsProps) {
@@ -537,6 +541,7 @@ function BatchActions({
         urls={rerunUrls}
         device={device}
         options={options}
+        source={source}
         concurrency={concurrency}
         priorBatchId={priorBatchId}
       />

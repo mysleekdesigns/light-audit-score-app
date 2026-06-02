@@ -73,6 +73,9 @@ export const createBatchBodySchema = z.object({
     .number("concurrency must be a number.")
     .optional()
     .transform((n) => (n === undefined ? DEFAULT_CONCURRENCY : clampConcurrency(n))),
+  // Engine to run on (PSI feature). Defaults to the local forked-Chrome engine;
+  // `"psi"` routes every job through Google PageSpeed Insights instead.
+  source: z.enum(["local", "psi"]).optional().default("local"),
   // Accuracy mode (PRD §6 Phase 9): when true the queue forces effective
   // concurrency to 1 if Performance is in scope, for DevTools-panel parity.
   accuracyMode: z.boolean().optional().default(false),
@@ -108,13 +111,14 @@ export function parseCreateBatchBody(raw: unknown): ParseCreateBatchResult {
   }
   // `result.data` already satisfies CreateBatchInput (urls/options/concurrency
   // resolved); the explicit shape keeps the contract obvious to readers.
-  const { urls, options, concurrency, accuracyMode, priorBatchId } = result.data;
+  const { urls, options, source, concurrency, accuracyMode, priorBatchId } =
+    result.data;
   // Resolve the effective device (PRD §6 Phase 12): an explicit `device` wins;
   // otherwise an omitted device defaults to the options' concrete `formFactor`,
   // so older bodies (no `device`) behave as a single-device run unchanged.
   const device = result.data.device ?? result.data.options.formFactor;
   return {
     ok: true,
-    value: { urls, device, options, concurrency, accuracyMode, priorBatchId },
+    value: { urls, device, options, source, concurrency, accuracyMode, priorBatchId },
   };
 }

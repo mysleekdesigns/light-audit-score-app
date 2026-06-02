@@ -30,7 +30,11 @@ import {
 } from "@/components/ui/dialog";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import type { AuditOptions, DeviceSelection } from "@/lib/lighthouse/types";
+import type {
+  AuditOptions,
+  AuditSource,
+  DeviceSelection,
+} from "@/lib/lighthouse/types";
 import { isValidTime, type ScheduleTarget } from "@/lib/schedules/types";
 import { cn } from "@/lib/utils";
 
@@ -53,6 +57,8 @@ export interface SaveScheduleDialogProps {
   device: DeviceSelection;
   /** Accuracy-mode flag the schedule should fire with. */
   accuracyMode: boolean;
+  /** Engine each fired batch runs on (PSI feature). Defaults to the local engine. */
+  source?: AuditSource;
   /** Optional callback fired with the created schedule's id on success. */
   onCreated?: (scheduleId: string) => void;
 }
@@ -67,6 +73,7 @@ export function SaveScheduleDialog({
   concurrency,
   device,
   accuracyMode,
+  source = "local",
   onCreated,
 }: SaveScheduleDialogProps) {
   const nameId = useId();
@@ -102,6 +109,7 @@ export function SaveScheduleDialog({
           concurrency,
           device,
           accuracyMode,
+          source,
         }),
       });
       const body = (await response.json().catch(() => null)) as
@@ -196,6 +204,11 @@ export function SaveScheduleDialog({
             <span className={SECTION_LABEL}>Target</span>
             <TargetPreview target={target} />
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[0.65rem] uppercase tracking-[0.12em] text-muted-foreground tabular-nums">
+              {source === "psi" ? (
+                <span>
+                  Engine <span className="text-primary">PageSpeed</span>
+                </span>
+              ) : null}
               <span>
                 Device <span className="text-foreground">{device}</span>
               </span>
