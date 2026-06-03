@@ -27,6 +27,7 @@ import { promises as fs } from "node:fs";
 
 import { desc, eq } from "drizzle-orm";
 
+import { deleteAllAnalyses, deleteAnalysesForRun } from "@/lib/db/analyses";
 import { getDb } from "@/lib/db/client";
 import {
   getReportsDir,
@@ -333,6 +334,8 @@ export async function deleteRun(runId: string): Promise<boolean> {
     const row = db.select().from(runs).where(eq(runs.id, runId)).get();
     if (!row) return false;
 
+    // Remove child AI analyses first — `analyses.run_id → runs.id` FK is enforced.
+    deleteAnalysesForRun(runId);
     db.delete(runs).where(eq(runs.id, runId)).run();
     await removeReportFiles(runId);
 
@@ -365,6 +368,8 @@ export async function clearHistory(): Promise<{ runs: number; batches: number }>
     const runCount = db.select({ id: runs.id }).from(runs).all().length;
     const batchCount = db.select({ id: batches.id }).from(batches).all().length;
 
+    // Children before parents to respect FKs: analyses → runs → batches.
+    deleteAllAnalyses();
     db.delete(runs).run();
     db.delete(batches).run();
 
@@ -411,6 +416,34 @@ export function listBatches(): BatchInfo[] {
   } catch (err) {
     warn("listBatches", err);
     return [];
+  }
+}
+
+/** The inputs the AI analyzer needs for a persisted run, beyond its LHR. */
+export interface RunInputs {
+  formFactor: FormFactor;
+  /** Real-world CrUX field data (PSI runs only), or null. */
+  field: FieldData | null;
+  source: AuditSource;
+}
+
+/**
+ * Read the analyzer inputs for a run (its device + CrUX field data) from the
+ * `runs` row — the LHR on disk doesn't carry the PSI field data. Returns
+ * `undefined` if the run is unknown. Never throws.
+ */
+export function getRunInputs(runId: string): RunInputs | undefined {
+  try {
+    const row = getDb().select().from(runs).where(eq(runs.id, runId)).get();
+    if (!row) return undefined;
+    return {
+      formFactor: row.formFactor === "desktop" ? "desktop" : "mobile",
+      field: safeParse<FieldData>(row.field, "getRunInputs:field"),
+      source: row.source === "psi" ? "psi" : "local",
+    };
+  } catch (err) {
+    warn("getRunInputs", err);
+    return undefined;
   }
 }
 

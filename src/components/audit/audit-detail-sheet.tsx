@@ -7,10 +7,12 @@ import {
   FileJson,
   Info,
   Minus,
+  Sparkles,
   TriangleAlert,
   X,
 } from "lucide-react";
 
+import { AnalysisPanel } from "@/components/audit/analysis-panel";
 import { DriftWarning } from "@/components/audit/drift-warning";
 import { EnvironmentBadge } from "@/components/audit/environment-badge";
 import { FieldDataPanel } from "@/components/pagespeed/field-data-panel";
@@ -35,9 +37,16 @@ import {
 } from "@/components/ui/sheet";
 import { Spinner } from "@/components/ui/spinner";
 import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import {
   ToggleGroup,
   ToggleGroupItem,
 } from "@/components/ui/toggle-group";
+import type { AnalysisCategory } from "@/lib/analysis/types";
 import { reportHtmlUrl, reportJsonUrl } from "@/lib/client/auditClient";
 import {
   assessDrift,
@@ -97,16 +106,36 @@ function sortOpportunities(opportunities: Opportunity[]): Opportunity[] {
   });
 }
 
-function CategoryScoreGrid({ result }: { result: AuditResultLite }) {
+/**
+ * The 2×2 / 4-col grid of category scores. Each cell is a button that opens the
+ * AI analysis for that category (the sheet's only analysis trigger — the card
+ * rings stay non-interactive to avoid nesting buttons inside the card's own
+ * select button). The SVG ring visuals are untouched; the affordance lives on the
+ * cell (cursor, hover tint, focus ring, a hover/focus Sparkles, and an aria-label).
+ */
+function CategoryScoreGrid({
+  result,
+  onAnalyze,
+}: {
+  result: AuditResultLite;
+  onAnalyze: (category: AnalysisCategory) => void;
+}) {
   return (
     <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border/60 bg-border/60 sm:grid-cols-4">
       {LIGHTHOUSE_CATEGORIES.map((category) => {
         const score = result.median.scores[category] ?? null;
         return (
-          <div
+          <button
+            type="button"
             key={category}
-            className="flex flex-col items-center gap-1.5 bg-card px-2 py-4"
+            onClick={() => onAnalyze(category)}
+            aria-label={`Analyze why ${CATEGORY_LABELS[category]} scored ${formatScore(score)}`}
+            className="group relative flex flex-col items-center gap-1.5 bg-card px-2 py-4 outline-none transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           >
+            <Sparkles
+              className="absolute right-1.5 top-1.5 size-3 text-transparent transition-colors group-hover:text-muted-foreground/70 group-focus-visible:text-muted-foreground/70"
+              aria-hidden
+            />
             <span
               className={cn(
                 "font-mono text-3xl font-semibold tabular-nums tracking-tight",
@@ -118,7 +147,7 @@ function CategoryScoreGrid({ result }: { result: AuditResultLite }) {
             <span className="text-center font-mono text-[0.6rem] uppercase tracking-[0.14em] text-muted-foreground">
               {CATEGORY_LABELS[category]}
             </span>
-          </div>
+          </button>
         );
       })}
     </div>
@@ -473,7 +502,15 @@ function PerRunSpread({ result }: { result: AuditResultLite }) {
   );
 }
 
-function DoneBody({ job, result }: { job: AuditJob; result: AuditResultLite }) {
+function DoneBody({
+  job,
+  result,
+  onAnalyze,
+}: {
+  job: AuditJob;
+  result: AuditResultLite;
+  onAnalyze: (category: AnalysisCategory) => void;
+}) {
   return (
     <>
       <ScrollArea className="min-h-0 flex-1 overscroll-contain">
@@ -497,8 +534,13 @@ function DoneBody({ job, result }: { job: AuditJob; result: AuditResultLite }) {
           ) : null}
 
           <section className="flex flex-col gap-3">
-            <SectionLabel>Category scores</SectionLabel>
-            <CategoryScoreGrid result={result} />
+            <div className="flex items-center justify-between gap-2">
+              <SectionLabel>Category scores</SectionLabel>
+              <span className="inline-flex items-center gap-1 font-mono text-[0.6rem] uppercase tracking-[0.12em] text-muted-foreground/70">
+                <Sparkles className="size-3" aria-hidden /> click to analyze
+              </span>
+            </div>
+            <CategoryScoreGrid result={result} onAnalyze={onAnalyze} />
           </section>
 
           {result.field ? (
@@ -613,10 +655,111 @@ function jobDescription(job: AuditJob): string | null {
   return null;
 }
 
+/** Default category to analyze: the lowest-scoring one present, else Performance. */
+function defaultAnalysisCategory(result: AuditResultLite): AnalysisCategory {
+  let worst: { category: AnalysisCategory; score: number } | null = null;
+  for (const category of LIGHTHOUSE_CATEGORIES) {
+    const score = result.median.scores[category];
+    if (typeof score === "number" && (!worst || score < worst.score)) {
+      worst = { category, score };
+    }
+  }
+  return worst?.category ?? "performance";
+}
+
+/**
+ * A completed job's body: a Report / Analysis tab split. "Report" is the full
+ * audit readout; "Analysis" is the AI "explain & fix this score" flow. Clicking a
+ * category score in the Report tab jumps to Analysis pre-targeted to it; a
+ * category toggle switches which score is analyzed without leaving the tab. Both
+ * panes are `forceMount`ed so an in-flight analysis survives tab switches; the
+ * `AnalysisPanel` is keyed by `${runId}:${category}` so it resets cleanly when
+ * either changes. Keyed by job id upstream so a device flip remounts it.
+ */
+function JobDetail({ job, result }: { job: AuditJob; result: AuditResultLite }) {
+  const [tab, setTab] = useState<"report" | "analysis">("report");
+  const [category, setCategory] = useState<AnalysisCategory>(() =>
+    defaultAnalysisCategory(result),
+  );
+
+  function handleAnalyze(next: AnalysisCategory) {
+    setCategory(next);
+    setTab("analysis");
+  }
+
+  return (
+    <Tabs
+      value={tab}
+      onValueChange={(value) => setTab(value === "analysis" ? "analysis" : "report")}
+      className="flex min-h-0 flex-1 flex-col gap-0"
+    >
+      <div className="border-b border-border/60 px-4 py-2">
+        <TabsList variant="line" className="h-8 w-full justify-start">
+          <TabsTrigger value="report" className="flex-none px-3">
+            Report
+          </TabsTrigger>
+          <TabsTrigger value="analysis" className="flex-none px-3">
+            <Sparkles data-icon="inline-start" />
+            Analysis
+          </TabsTrigger>
+        </TabsList>
+      </div>
+
+      <TabsContent
+        value="report"
+        forceMount
+        className="min-h-0 flex-1 outline-none data-[state=inactive]:hidden"
+      >
+        <div className="flex h-full min-h-0 flex-col">
+          <DoneBody job={job} result={result} onAnalyze={handleAnalyze} />
+        </div>
+      </TabsContent>
+
+      <TabsContent
+        value="analysis"
+        forceMount
+        className="min-h-0 flex-1 outline-none data-[state=inactive]:hidden"
+      >
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="border-b border-border/60 px-4 py-2">
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              size="sm"
+              value={category}
+              onValueChange={(value) => {
+                if (value) setCategory(value as AnalysisCategory);
+              }}
+              aria-label="Category to analyze"
+              className="w-full"
+            >
+              {LIGHTHOUSE_CATEGORIES.map((c) => (
+                <ToggleGroupItem
+                  key={c}
+                  value={c}
+                  className="flex-1 font-mono text-[0.65rem] uppercase tracking-[0.1em]"
+                >
+                  {CATEGORY_SHORT_LABELS[c]}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+          </div>
+          <AnalysisPanel
+            key={`${job.id}:${category}`}
+            runId={job.id}
+            category={category}
+            score={result.median.scores[category] ?? null}
+          />
+        </div>
+      </TabsContent>
+    </Tabs>
+  );
+}
+
 /** One job's body, switched on status (done → full detail, error, or pending). */
 function JobBody({ job }: { job: AuditJob }) {
   if (job.status === "done" && job.result) {
-    return <DoneBody job={job} result={job.result} />;
+    return <JobDetail key={job.id} job={job} result={job.result} />;
   }
   if (job.status === "error") return <ErrorBody job={job} />;
   return <PendingBody job={job} />;

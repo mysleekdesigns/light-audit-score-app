@@ -10,6 +10,11 @@
  */
 
 import type {
+  AnalysisCategory,
+  AnalysisResult,
+  AnalysisStreamEvent,
+} from "@/lib/analysis/types";
+import type {
   AuditOptions,
   AuditSource,
   DeviceSelection,
@@ -146,4 +151,53 @@ export function reportJsonUrl(runId: string): string {
 /** URL of the rendered standalone Lighthouse HTML report for a completed run. */
 export function reportHtmlUrl(runId: string): string {
   return `/api/reports/${encodeURIComponent(runId)}?format=html`;
+}
+
+// --- AI score analysis (the "explain & fix my score" feature) --------------
+
+/**
+ * Fetch the persisted analysis for a `(runId, category)`, or `null` when there
+ * isn't one yet (the 404 the route returns — "not analyzed yet" is not an error).
+ * Other non-2xx responses still throw {@link ApiError}.
+ */
+export async function getAnalysis(
+  runId: string,
+  category: AnalysisCategory,
+): Promise<AnalysisResult | null> {
+  const response = await fetch(
+    `/api/reports/${encodeURIComponent(runId)}/analyze?category=${encodeURIComponent(category)}`,
+    { method: "GET", cache: "no-store" },
+  );
+  if (response.status === 404) return null;
+  if (!response.ok) throw await toApiError(response);
+  return (await response.json()) as AnalysisResult;
+}
+
+/**
+ * The POST target that streams a fresh analysis as SSE. The streaming transport
+ * lives in `useAnalysisStream` (fetch + ReadableStream reader) rather than here,
+ * the same way `useBatchStream` owns its `EventSource`.
+ */
+export function analyzeStreamUrl(runId: string): string {
+  return `/api/reports/${encodeURIComponent(runId)}/analyze`;
+}
+
+/**
+ * Parse one SSE frame (the text between `\n\n` delimiters) into an
+ * {@link AnalysisStreamEvent}. The framed `data:` payload is itself a discriminated
+ * union carrying its own `type`, so the `event:` line is redundant and ignored.
+ * Returns `null` for malformed/empty frames (callers skip them). Pure + testable.
+ */
+export function parseAnalysisSseFrame(frame: string): AnalysisStreamEvent | null {
+  const data = frame
+    .split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart())
+    .join("\n");
+  if (!data) return null;
+  try {
+    return JSON.parse(data) as AnalysisStreamEvent;
+  } catch {
+    return null;
+  }
 }

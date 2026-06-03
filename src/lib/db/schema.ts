@@ -18,7 +18,13 @@
  * client, the persistence layer, and drizzle-kit at generate time.
  */
 
-import { integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import {
+  integer,
+  real,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
 
 /** One audit batch (a set of per-URL jobs sharing one options set). */
 export const batches = sqliteTable("batches", {
@@ -157,9 +163,54 @@ export const schedules = sqliteTable("schedules", {
   updatedAt: text("updated_at").notNull(),
 });
 
+/**
+ * AI score analyses (the "explain & fix my score" feature).
+ *
+ * One row per analyzed `(run, category)` pair: a markdown diagnosis plus a JSON
+ * array of prioritized, web-researched fixes (with cited source URLs), produced
+ * by the Claude Agent SDK. Persisting it means reopening a run shows the analysis
+ * instantly without re-spending tokens; re-running overwrites the row (the unique
+ * index on `run_id + category` makes the upsert deterministic). Child of `runs`
+ * via `run_id` — `deleteRun` / `clearHistory` remove these first (FK is ON).
+ */
+export const analyses = sqliteTable(
+  "analyses",
+  {
+    /** Analysis id (nanoid). */
+    id: text("id").primaryKey(),
+    /** The analyzed run (== report runId == job id). */
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id),
+    /** Lighthouse category analyzed ("performance" | "accessibility" | "best-practices" | "seo"). */
+    category: text("category").notNull(),
+    /** The 0–100 category score at analysis time (null if that category was unscored). */
+    categoryScore: integer("category_score"),
+    /** Model id that produced the analysis. */
+    model: text("model").notNull(),
+    /** Markdown diagnosis prose. */
+    diagnosis: text("diagnosis").notNull(),
+    /** Prioritized fixes as JSON (`Fix[]`). */
+    fixes: text("fixes").notNull(),
+    /** Deduped union of cited sources as JSON (`AnalysisCitation[]`). */
+    sources: text("sources").notNull(),
+    /** Total API cost in USD, when reported. */
+    costUsd: real("cost_usd"),
+    /** Number of agentic turns taken. */
+    turns: integer("turns"),
+    /** Soft warnings as JSON (`string[]`), or null. */
+    warnings: text("warnings"),
+    /** ISO timestamp this analysis was produced. */
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("analyses_run_category_uq").on(t.runId, t.category)],
+);
+
 export type BatchRow = typeof batches.$inferSelect;
 export type NewBatchRow = typeof batches.$inferInsert;
 export type RunRow = typeof runs.$inferSelect;
 export type NewRunRow = typeof runs.$inferInsert;
 export type ScheduleRow = typeof schedules.$inferSelect;
 export type NewScheduleRow = typeof schedules.$inferInsert;
+export type AnalysisRow = typeof analyses.$inferSelect;
+export type NewAnalysisRow = typeof analyses.$inferInsert;
