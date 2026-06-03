@@ -157,8 +157,9 @@ export function reportHtmlUrl(runId: string): string {
 
 /**
  * Fetch the persisted analysis for a `(runId, category)`, or `null` when there
- * isn't one yet (the 404 the route returns — "not analyzed yet" is not an error).
- * Other non-2xx responses still throw {@link ApiError}.
+ * isn't one yet. The route reports a cache miss as a `200` with
+ * `{ analysis: null }` ("not analyzed yet" is a normal state, not an error), so
+ * only genuine non-2xx responses throw {@link ApiError}.
  */
 export async function getAnalysis(
   runId: string,
@@ -168,9 +169,11 @@ export async function getAnalysis(
     `/api/reports/${encodeURIComponent(runId)}/analyze?category=${encodeURIComponent(category)}`,
     { method: "GET", cache: "no-store" },
   );
-  if (response.status === 404) return null;
   if (!response.ok) throw await toApiError(response);
-  return (await response.json()) as AnalysisResult;
+  const { analysis } = (await response.json()) as {
+    analysis: AnalysisResult | null;
+  };
+  return analysis;
 }
 
 /**

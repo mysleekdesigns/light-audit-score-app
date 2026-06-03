@@ -1,9 +1,10 @@
 /**
  * `GET/POST /api/reports/:runId/analyze` — the AI score-analysis endpoint.
  *
- *  - `GET ?category=<cat>` returns the persisted {@link AnalysisResult} as JSON
- *    (or 404), spending no tokens — the client uses this to show a saved analysis
- *    instantly on reopen.
+ *  - `GET ?category=<cat>` returns `{ analysis: AnalysisResult | null }` as JSON,
+ *    spending no tokens — the client uses this to show a saved analysis instantly
+ *    on reopen. A cache miss is `{ analysis: null }` with a `200` (not a `404`):
+ *    "not analyzed yet" is a normal state, and a `200` keeps the dev console clean.
  *  - `POST { category, force? }` runs the Claude Agent SDK (`runAnalysis`) and
  *    streams progress as SSE: `status` → `tool-use`/`tool-result` → `text-delta`
  *    → `fix` → `done` (or a terminal `error`). On a clean `done` the result is
@@ -97,13 +98,7 @@ export async function GET(
   }
 
   const saved = getAnalysis(runId, category);
-  if (!saved) {
-    return notFound(
-      "analysis_not_found",
-      `No saved ${category} analysis for run "${runId}".`,
-    );
-  }
-  return Response.json(saved, { status: 200 });
+  return Response.json({ analysis: saved ?? null }, { status: 200 });
 }
 
 // --- POST: run (or replay) the analysis, streamed as SSE -------------------
