@@ -1,5 +1,17 @@
 # PRD — Local Lighthouse Auditing Tool
 
+> **Planned (Phases 15–16 — result-persistence UX, NOT yet built):** completed Lighthouse **and**
+> PageSpeed runs should **stay on the console across navigation** (and a hard refresh / server restart)
+> until the user explicitly dismisses them. **Phase 15** keeps the existing `localStorage` batch-pointer
+> alive *through* completion (today both consoles delete it on finish) and rehydrates the batch snapshot
+> from SQLite (`reconstructBatch`) so results survive a restart; **Phase 16** adds the explicit dismissal
+> controls — **Archive** (remove from the console, keep in History) and **Clear** (remove from the console
+> *and* delete the batch from History) — with "start a new run" already replacing the shown result. No new
+> state library: the fix reuses the existing **DB-as-source-of-truth + small pointer** seam (the same
+> pattern the codebase already uses). Detailed checklists in §6 (Phases 15–16). *(The PageSpeed Insights
+> engine and the in-app AI score analysis shipped after Phase 14 without dedicated PRD phases; the console
+> now hosts both the local Lighthouse `/` and the PageSpeed `/pagespeed` flows, and both get this change.)*
+
 > **Planned (post-v1 — Phases 11–14):** a **density & multi-device** pass that keeps the existing
 > dark "precision-instrument" visual design **untouched** (the cooled `oklch(0.165 …)` palette, cyan
 > primary, green/amber/red score bands, Archivo + JetBrains-Mono with tabular figures, hairline 9%
@@ -918,6 +930,81 @@ no Redis / cron" rationale).
 
 ---
 
+> **Design constraint for Phases 15–16 (binding for all agents):** these are a *persistence-UX* pass, **not
+> a redesign and not new architecture**. Reuse the existing seam — the `localStorage` active-batch pointer,
+> the typed `auditClient` + `useBatchStream` reconnect path, and the `src/lib/db/persistence.ts` layer
+> (`runs`/`batches` tables + report files). **Do not** introduce a client state library (Zustand / Redux /
+> React Query) or a localStorage *result blob* — the database is the source of truth; the URL/`localStorage`
+> only carries the batch *id*. The dark "precision-instrument" identity is preserved verbatim (no new
+> colours / fonts / surfaces). Per CLAUDE.md, the UI work in Phase 16 MUST invoke **frontend-design** +
+> **vercel-react-best-practices** + **shadcn**, then review with **web-design-guidelines**.
+
+### Phase 15 — Persist completed results across navigation
+**Why:** a completed run's results live only in `useBatchStream` React state inside `AuditConsole`
+(`src/components/audit/audit-console.tsx`) and `PageSpeedConsole`
+(`src/components/pagespeed/pagespeed-console.tsx`); on a route change the console unmounts and the result is
+destroyed. The *only* thing kept across navigation is the active batch **id** in `localStorage`
+(`lh:activeBatchId` / `lh:activePsiBatchId`) — and on completion both consoles deliberately delete it
+(`audit-console.tsx:86`, `pagespeed-console.tsx:72`) so a finished run won't reconnect, which is exactly why
+returning to the page shows an empty form. While a run is *in flight*, navigating away and back already
+restores correctly (the pointer survives, the queue still holds the batch, and the SSE stream replays a
+snapshot). Since every run is already persisted to SQLite (`runs`/`batches`) + report files, the fix is to
+**keep the pointer and rehydrate from the DB** — not to add a client store.
+
+- [ ] **Keep the pointer through completion**: remove the `localStorage.removeItem(ACTIVE_BATCH_KEY)` call
+      from the terminal/completion `useEffect` in **both** `audit-console.tsx` and `pagespeed-console.tsx`,
+      so the active-batch id survives until an explicit dismissal (Clear / Archive / new run). The existing
+      reconnect `useEffect` (validate via `getBatch`, re-attach via `useBatchStream`) then restores the
+      result on return. "Start a new run" already overwrites the pointer + resets `toastedFor` — no change.
+- [ ] **Suppress the duplicate completion toast on restore**: in the reconnect `useEffect`, inspect the
+      `getBatch(stored)` result's `status`; when it is already terminal, seed `toastedFor.current = stored`
+      before `setBatchId` so returning to a finished run does **not** re-fire the "Audit complete" toast. A
+      run still running at reconnect must still toast on its eventual completion.
+- [ ] **Rehydrate from SQLite so results survive a server restart**: add
+      `reconstructBatch(batchId): Batch | undefined` to `src/lib/db/persistence.ts` that assembles a *lite*
+      `Batch` from the `batches` row + its `runs` rows (inverse of `recordRun`; reuse `safeParse` /
+      `rowToEnvironment`, map each row → an `AuditJob` with a reconstructed `AuditResultLite` or `error`,
+      recompute `counts` via the queue's shape, derive `device`). Note: `perRunScores` / `perRunEnvironments`
+      are not persisted as columns, so a restart-restored run degrades gracefully without the variance /
+      spread sub-detail (same-process restores via the in-memory queue are unaffected).
+- [ ] **Wire the DB fallback into the audit routes**: resolve snapshots as
+      `getAuditQueue().getBatch(id) ?? reconstructBatch(id)` in **both** `src/app/api/audits/[id]/route.ts`
+      (GET) and `src/app/api/audits/[id]/stream/route.ts` (the initial + the re-read snapshot). Because the
+      stream route already sends a snapshot and closes for terminal batches, the existing client reconnect
+      path restores DB-only runs **unchanged**.
+- [ ] **Verify**: run an audit on `/`, let it complete, navigate to History and back → results still shown;
+      hard-refresh `/` → still shown; restart the dev server and refresh → results rehydrated from SQLite;
+      repeat the whole flow on `/pagespeed`. Lint / typecheck / build / unit suite green — add a
+      `reconstructBatch` round-trip test and a "route GET falls back to the DB after a queue miss" test.
+
+### Phase 16 — Archive & Clear dismissal controls
+**Why:** with results now persisting across navigation (Phase 15), the user needs explicit ways to dismiss
+them. Per the agreed model: **Archive** = remove from the console view but **keep** the run in History
+(non-destructive); **Clear** = remove from the console **and delete** the batch from History (destructive);
+**starting a new run** already replaces the shown result.
+
+- [ ] **Terminal-state controls** in `src/components/audit/audit-results.tsx`: add `onArchive` / `onClear`
+      props and render both buttons when the batch is **terminal** (alongside / replacing the existing
+      `onCancel`, which shows only while a batch is queued/running), using only existing score-band tokens +
+      Archivo / JetBrains-Mono (no new colours / fonts).
+- [ ] **Archive (non-destructive)**: both consoles add `handleArchive()` → `setBatchId(null)`, remove the
+      `localStorage` pointer, reset `selectedId` / `sheetOpen`. No backend call; the run stays in History.
+- [ ] **Clear (destructive, confirmed)**: a console shows a whole **batch**, so delete batch-wide, not
+      per-run. Add `deleteBatch(batchId): Promise<boolean>` to `src/lib/db/persistence.ts` (delete the
+      batch's `analyses` → its `runs` rows → their report files → the `batches` row, mirroring `deleteRun`'s
+      FK order and reusing `removeReportFiles`); add a batch-`DELETE` route under `src/app/api/history/…`
+      and a `deleteBatch(id)` helper in `src/lib/client/auditClient.ts` next to `deleteRun`. `handleClear()`
+      confirms via the existing destructive-confirm (AlertDialog) pattern from `history-table.tsx`, calls
+      `deleteBatch`, then resets the console exactly like Archive.
+- [ ] **Both engines**: apply the controls + handlers to `audit-console.tsx` and `pagespeed-console.tsx`
+      (each keeps its own pointer key, so the two flows remember their own last result independently).
+- [ ] **Verify**: after a completed run, **Archive** clears the console but the run remains on `/history`
+      (and a refresh keeps the console empty); **Clear** (after confirm) removes it from the console **and**
+      from History; a **new run** replaces a shown result. Repeat on `/pagespeed`. Lint / typecheck / build /
+      tests green — add a `deleteBatch` test (removes the batch's runs + reports + analyses + batch row).
+
+---
+
 ## 7. End-to-end verification strategy
 1. **Engine correctness (Phase 1)**: CLI audit vs `npx lighthouse <url>` — scores within
    normal ±5 variance.
@@ -937,6 +1024,10 @@ no Redis / cron" rationale).
    screen with the table↔cards toggle persisting across reload; a `both` batch shows paired
    Desktop / Mobile pills; re-run reproduces a batch; a scheduled target fires and lands in the
    Archive — all with the existing visual design (palette / fonts / tokens) unchanged.
+10. **Result persistence (Phases 15–16)**: after a completed Lighthouse/PageSpeed run, navigating away and
+    back (and a hard refresh, and a server restart) keeps the results on the console; **Archive** dismisses
+    the view while the run stays in History; **Clear** dismisses it and deletes the batch from History; a new
+    run replaces the shown result.
 
 ## 8. Risks & mitigations
 - **Score variability** → median-of-N default + document expected variance; surface
