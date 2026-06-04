@@ -15,9 +15,16 @@
  *
  * Each event is framed as `event: <type>\n` + `data: <json>\n\n` (UTF-8). Every
  * `controller.enqueue` is guarded so a write after close can never throw.
+ *
+ * If the in-memory queue misses the initial snapshot (e.g. after a server
+ * restart, when the queue is empty), we fall back to {@link reconstructBatch}
+ * (PRD §6 Phase 15). A reconstructed batch is always terminal, so the
+ * `TERMINAL_BATCH_STATUSES` path below sends that one snapshot then closes —
+ * restoring DB-only runs through the existing reconnect path unchanged.
  */
 
 import { notFound } from "@/lib/api/errors";
+import { reconstructBatch } from "@/lib/db/persistence";
 import { getAuditQueue } from "@/lib/queue/AuditQueue";
 import type { Batch, ProgressEvent } from "@/lib/queue/types";
 
@@ -38,7 +45,7 @@ export async function GET(
   const { id } = await params;
 
   const queue = getAuditQueue();
-  const initial = queue.getBatch(id);
+  const initial = queue.getBatch(id) ?? reconstructBatch(id);
   if (!initial) {
     return notFound("batch_not_found", `No batch found with id "${id}".`);
   }

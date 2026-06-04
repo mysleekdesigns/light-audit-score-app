@@ -9,7 +9,7 @@
  * and the active-batch key differ from the local console.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { AuditDetailSheet } from "@/components/audit/audit-detail-sheet";
@@ -23,13 +23,26 @@ import {
   getBatch,
   type CreateBatchRequest,
 } from "@/lib/client/auditClient";
-import type { AuditJob } from "@/lib/queue/types";
+import type { AuditJob, BatchStatus } from "@/lib/queue/types";
 
 /**
  * localStorage key holding the PSI batch currently being watched. Kept separate
- * from the local console's key so the two flows reconnect to their own runs.
+ * from the local console's key so the two flows reconnect to their own runs. The
+ * pointer now survives completion (the reconnect effect restores a finished run
+ * too); it is dropped only on an explicit dismissal (Phase 16's Archive/Clear) or
+ * when a new run overwrites it.
  */
 const ACTIVE_BATCH_KEY = "lh:activePsiBatchId";
+
+/** Terminal batch states — a batch in one of these has finished server-side. */
+const TERMINAL_BATCH_STATUSES = new Set<BatchStatus>([
+  "completed",
+  "completed_with_errors",
+  "cancelled",
+]);
+function isTerminalBatchStatus(status: BatchStatus): boolean {
+  return TERMINAL_BATCH_STATUSES.has(status);
+}
 
 export function PageSpeedConsole({
   initialBatchId,
@@ -44,6 +57,25 @@ export function PageSpeedConsole({
 
   const { batch, connection, isComplete } = useBatchStream(batchId);
 
+  // Tracks the batch id we've already toasted completion for, so the toast fires
+  // exactly once per batch. The persisted active-batch id is intentionally KEPT
+  // through completion so the reconnect effect can restore a finished run on return;
+  // it is dropped only on an explicit dismissal (Phase 16's Archive/Clear) or when a
+  // new run overwrites it.
+  const toastedFor = useRef<string | null>(null);
+
+  // Restoring a finished run must not re-fire the completion toast. This effect-event
+  // attaches the watched batch and, when it's already terminal, pre-seeds the toast
+  // guard first (a still-running batch is left unseeded so it still toasts on its
+  // eventual completion). Kept as a useEffectEvent so the guard mutation stays out of
+  // reactive effect scope and shares the single `toastedFor` ref with the toast effect.
+  const onReconnect = useEffectEvent((restored: { status: BatchStatus }, stored: string) => {
+    if (isTerminalBatchStatus(restored.status)) {
+      toastedFor.current = stored;
+    }
+    setBatchId(stored);
+  });
+
   // Reconnect on mount to a still-running PSI batch (the queue keeps running
   // server-side regardless of the client), validating it still exists first.
   useEffect(() => {
@@ -52,8 +84,8 @@ export function PageSpeedConsole({
     if (!stored) return;
     let active = true;
     getBatch(stored)
-      .then(() => {
-        if (active) setBatchId(stored);
+      .then((restored) => {
+        if (active) onReconnect(restored, stored);
       })
       .catch(() => {
         localStorage.removeItem(ACTIVE_BATCH_KEY);
@@ -64,12 +96,9 @@ export function PageSpeedConsole({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Completion toast (once per batch) + drop the persisted active-batch id.
-  const toastedFor = useRef<string | null>(null);
   useEffect(() => {
     if (!isComplete || !batch || toastedFor.current === batch.id) return;
     toastedFor.current = batch.id;
-    localStorage.removeItem(ACTIVE_BATCH_KEY);
     const { done, error, total } = batch.counts;
     if (batch.status === "cancelled") {
       toast.info(`PageSpeed cancelled — ${done} of ${total} scored before stopping.`);

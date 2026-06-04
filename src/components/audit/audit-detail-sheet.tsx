@@ -564,7 +564,7 @@ function DoneBody({
             <MetricsList result={result} />
           </section>
 
-          {result.runs > 1 ? (
+          {result.runs > 1 && result.perRunScores.length > 0 ? (
             <>
               <Separator className="bg-border/60" />
               <PerRunSpread result={result} />

@@ -43,11 +43,18 @@ import type {
   AuditSource,
   CategoryScores,
   CoreWebVitals,
+  DeviceSelection,
   FieldData,
   FormFactor,
   RunEnvironment,
 } from "@/lib/lighthouse/types";
-import type { AuditJob, Batch, BatchStatus } from "@/lib/queue/types";
+import type {
+  AuditJob,
+  AuditResultLite,
+  Batch,
+  BatchCounts,
+  BatchStatus,
+} from "@/lib/queue/types";
 
 /** A persisted run flattened for the History table (newest-first listing). */
 export interface HistoryRow {
@@ -464,6 +471,63 @@ export function getRunReport(runId: string): RunReport | undefined {
   }
 }
 
+/**
+ * Reassemble a *lite* {@link Batch} from its persisted `batches` row + `runs`
+ * rows — the inverse of `recordRun`/`recordFailedRun` — so a completed run's
+ * results survive a server restart (PRD §6 Phase 15). The in-memory
+ * {@link AuditQueue} is the live source while a batch is in flight; once the
+ * process restarts the queue is empty, and the audit routes fall back to this.
+ *
+ * **Lossy by design.** `perRunScores` / `perRunEnvironments`, the opportunities
+ * list, and the Best-Practices audit breakdown are not persisted as columns, so a
+ * restored job degrades gracefully *without* the variance / spread / opportunities
+ * sub-detail — the median scores, Core Web Vitals, environment, and report links
+ * all survive. Only settled runs (`done`/`error`) are ever persisted, so a
+ * reconstructed batch never carries `queued`/`running` jobs (and a completed batch
+ * is terminal, so the stream route sends one snapshot and closes). Returns
+ * `undefined` for an unknown id. Never throws.
+ */
+export function reconstructBatch(batchId: string): Batch | undefined {
+  try {
+    const db = getDb();
+    const batchRow = db
+      .select()
+      .from(batches)
+      .where(eq(batches.id, batchId))
+      .get();
+    if (!batchRow) return undefined;
+
+    const runRows = db
+      .select()
+      .from(runs)
+      .where(eq(runs.batchId, batchId))
+      .orderBy(runs.idx)
+      .all();
+
+    const jobs = runRows.map(rowToJob);
+    return {
+      id: batchRow.id,
+      status: batchRow.status as BatchStatus,
+      device: deriveDevice(runRows, batchRow),
+      source: batchRow.source === "psi" ? "psi" : "local",
+      options:
+        safeParse<AuditOptions>(batchRow.options, "reconstructBatch:options") ??
+        FALLBACK_OPTIONS,
+      concurrency: batchRow.concurrency,
+      priorBatchId: batchRow.priorBatchId ?? undefined,
+      scheduleId: batchRow.scheduleId ?? undefined,
+      jobs,
+      counts: countsFromJobs(jobs),
+      createdAt: batchRow.createdAt,
+      startedAt: batchRow.startedAt ?? undefined,
+      finishedAt: batchRow.finishedAt ?? undefined,
+    };
+  } catch (err) {
+    warn("reconstructBatch", err);
+    return undefined;
+  }
+}
+
 // --- Internals -------------------------------------------------------------
 
 /** Safely JSON-parse a nullable text column, returning `null` on absence/error. */
@@ -551,6 +615,119 @@ function rowToBatchInfo(row: BatchRow): BatchInfo {
     startedAt: row.startedAt,
     finishedAt: row.finishedAt,
   };
+}
+
+/** All Core Web Vitals null — the median-metrics fallback for an unparseable row. */
+const EMPTY_METRICS: CoreWebVitals = {
+  "largest-contentful-paint": null,
+  "cumulative-layout-shift": null,
+  "total-blocking-time": null,
+  "first-contentful-paint": null,
+  "speed-index": null,
+  interactive: null,
+};
+
+/** Neutral environment for a row with no persisted environment columns. */
+const EMPTY_ENVIRONMENT: RunEnvironment = {
+  benchmarkIndex: null,
+  hostUserAgent: "",
+  throttlingMethod: "",
+  cpuSlowdownMultiplier: null,
+};
+
+/** Aggregate {@link BatchCounts} from a job list (mirrors the queue's `computeCounts`). */
+function countsFromJobs(jobs: AuditJob[]): BatchCounts {
+  const counts: BatchCounts = {
+    total: jobs.length,
+    queued: 0,
+    running: 0,
+    done: 0,
+    error: 0,
+    cancelled: 0,
+  };
+  for (const job of jobs) counts[job.status] += 1;
+  return counts;
+}
+
+/**
+ * Derive a batch's {@link DeviceSelection} from its persisted runs: `"both"` when
+ * a URL was audited on mobile *and* desktop, else the single device present. Falls
+ * back to the batch options' representative form factor when no runs persisted.
+ */
+function deriveDevice(runRows: RunRow[], batchRow: BatchRow): DeviceSelection {
+  const hasMobile = runRows.some((r) => r.formFactor === "mobile");
+  const hasDesktop = runRows.some((r) => r.formFactor === "desktop");
+  if (hasMobile && hasDesktop) return "both";
+  if (hasDesktop) return "desktop";
+  if (hasMobile) return "mobile";
+  const opts = safeParse<AuditOptions>(
+    batchRow.options,
+    "reconstructBatch:deviceOptions",
+  );
+  return opts?.formFactor ?? "mobile";
+}
+
+/**
+ * Reconstruct the lhr-stripped {@link AuditResultLite} for a successful run from
+ * its row. The heavy/uncolumned fields (opportunities, best-practices breakdown,
+ * per-run spread) are intentionally empty — see {@link reconstructBatch}.
+ */
+function rowToResultLite(row: RunRow, device: FormFactor): AuditResultLite {
+  const scores: CategoryScores = {
+    performance: row.scorePerformance,
+    accessibility: row.scoreAccessibility,
+    "best-practices": row.scoreBestPractices,
+    seo: row.scoreSeo,
+  };
+  return {
+    requestedUrl: row.url,
+    finalUrl: row.finalUrl ?? row.url,
+    options:
+      safeParse<AuditOptions>(row.options, "reconstructBatch:runOptions") ?? {
+        ...FALLBACK_OPTIONS,
+        formFactor: device,
+      },
+    runs: row.runs ?? 1,
+    median: {
+      scores,
+      metrics:
+        safeParse<CoreWebVitals>(row.metrics, "reconstructBatch:metrics") ??
+        EMPTY_METRICS,
+      opportunities: [],
+      bestPractices: [],
+    },
+    // Not persisted as columns — a restored run degrades without the spread detail.
+    perRunScores: [],
+    perRunEnvironments: [],
+    fetchTime: row.fetchTime ?? row.createdAt,
+    lighthouseVersion: row.lighthouseVersion ?? "",
+    runWarnings: [],
+    environment: rowToEnvironment(row) ?? EMPTY_ENVIRONMENT,
+    source: row.source === "psi" ? "psi" : "local",
+    field: safeParse<FieldData>(row.field, "reconstructBatch:field") ?? undefined,
+  };
+}
+
+/**
+ * Flatten a settled `runs` row into an {@link AuditJob} (only `done`/`error` rows
+ * are ever persisted). `queuedAt`/`finishedAt` aren't stored, so they fall back to
+ * the row's `createdAt`/`fetchTime` for a stable, non-empty lifecycle marker.
+ */
+function rowToJob(row: RunRow): AuditJob {
+  const device: FormFactor = row.formFactor === "desktop" ? "desktop" : "mobile";
+  const base: AuditJob = {
+    id: row.id,
+    index: row.idx,
+    url: row.url,
+    device,
+    status: row.status === "error" ? "error" : "done",
+    queuedAt: row.createdAt,
+    finishedAt: row.fetchTime ?? row.createdAt,
+  };
+  if (row.status === "error") {
+    return { ...base, error: { message: row.errorMessage ?? "Unknown error" } };
+  }
+  return { ...base, result: rowToResultLite(row, device) };
 }
 
 /**

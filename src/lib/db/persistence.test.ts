@@ -23,6 +23,7 @@ import {
   getRunReport,
   listBatches,
   listHistory,
+  reconstructBatch,
   recordBatch,
   recordFailedRun,
   recordRun,
@@ -339,5 +340,103 @@ describe("persistence", () => {
     expect(row.options.categories).toEqual(OPTIONS.categories);
     expect(row.options.throttling).toBe("simulated");
     expect(row.options.runs).toBe(3);
+  });
+});
+
+describe("reconstructBatch (PRD §6 Phase 15)", () => {
+  it("round-trips a completed batch from the DB after a queue miss", async () => {
+    // Mirror what the queue persists for a finished 2-URL batch: the batch row,
+    // a done run per URL, then the terminal status.
+    const j1 = makeJob("rb-1", 0, "https://a.test/");
+    const j2 = makeJob("rb-2", 1, "https://b.test/");
+    const batch = makeBatch("rb-batch", [j1, j2]);
+    recordBatch(batch);
+    await recordRun(batch, j1, makeResult("https://a.test/"));
+    await recordRun(batch, j2, makeResult("https://b.test/"));
+    updateBatchStatus("rb-batch", {
+      status: "completed",
+      finishedAt: new Date().toISOString(),
+    });
+
+    const restored = reconstructBatch("rb-batch");
+    expect(restored).toBeDefined();
+    expect(restored!.id).toBe("rb-batch");
+    expect(restored!.status).toBe("completed");
+    expect(restored!.device).toBe("mobile");
+    expect(restored!.source).toBe("local");
+    expect(restored!.options.categories).toEqual(OPTIONS.categories);
+    expect(restored!.concurrency).toBe(3);
+
+    // Jobs come back in idx order, mapped to done with reconstructed lite results.
+    expect(restored!.jobs.map((j) => j.id)).toEqual(["rb-1", "rb-2"]);
+    const [a] = restored!.jobs;
+    expect(a.status).toBe("done");
+    expect(a.url).toBe("https://a.test/");
+    expect(a.result).toBeDefined();
+    expect(a.result!.median.scores.performance).toBe(91); // 91.4 persisted as 91
+    expect(a.result!.median.scores.seo).toBe(80);
+    expect(a.result!.median.metrics["largest-contentful-paint"]).toEqual({
+      numericValue: 800,
+      displayValue: "0.8 s",
+      score: 1,
+    });
+    // Lossy-by-design: the per-run spread isn't persisted as columns.
+    expect(a.result!.perRunScores).toEqual([]);
+    expect(a.result!.perRunEnvironments).toEqual([]);
+    // The median environment survives via the Phase-10 columns.
+    expect(a.result!.environment.benchmarkIndex).toBe(1500);
+
+    // Counts are recomputed from the reconstructed (settled) jobs.
+    expect(restored!.counts).toMatchObject({ total: 2, done: 2, error: 0 });
+  });
+
+  it("returns undefined for an unknown batch id", () => {
+    expect(reconstructBatch("does-not-exist")).toBeUndefined();
+  });
+
+  it("reconstructs a failed run as an error job carrying its message", () => {
+    const bad: AuditJob = {
+      ...makeJob("rb-bad", 0, "https://bad.test/"),
+      status: "error",
+      error: { message: "Chrome launch failed" },
+    };
+    const batch = makeBatch("rb-batch-bad", [bad]);
+    recordBatch(batch);
+    recordFailedRun(batch, bad);
+    updateBatchStatus("rb-batch-bad", {
+      status: "completed_with_errors",
+      finishedAt: new Date().toISOString(),
+    });
+
+    const restored = reconstructBatch("rb-batch-bad")!;
+    expect(restored.status).toBe("completed_with_errors");
+    const [job] = restored.jobs;
+    expect(job.status).toBe("error");
+    expect(job.result).toBeUndefined();
+    expect(job.error).toEqual({ message: "Chrome launch failed" });
+    expect(restored.counts).toMatchObject({ total: 1, done: 0, error: 1 });
+  });
+
+  it("derives device 'both' when a URL was audited on mobile and desktop", async () => {
+    const mob = makeJob("rb-mob", 0, "https://both.test/", "mobile");
+    const desk = makeJob("rb-desk", 1, "https://both.test/", "desktop");
+    const batch = makeBatch("rb-both", [mob, desk]);
+    recordBatch(batch);
+    await recordRun(batch, mob, makeResult("https://both.test/"));
+    // The worker echoes per-job options, so the desktop run persists
+    // formFactor=desktop (recordRun reads result.options.formFactor).
+    const deskResult = {
+      ...makeResult("https://both.test/"),
+      options: { ...OPTIONS, formFactor: "desktop" as const },
+    };
+    await recordRun(batch, desk, deskResult);
+    updateBatchStatus("rb-both", {
+      status: "completed",
+      finishedAt: new Date().toISOString(),
+    });
+
+    const restored = reconstructBatch("rb-both")!;
+    expect(restored.device).toBe("both");
+    expect(restored.jobs.map((j) => j.device)).toEqual(["mobile", "desktop"]);
   });
 });

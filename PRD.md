@@ -1,16 +1,25 @@
 # PRD — Local Lighthouse Auditing Tool
 
-> **Planned (Phases 15–16 — result-persistence UX, NOT yet built):** completed Lighthouse **and**
-> PageSpeed runs should **stay on the console across navigation** (and a hard refresh / server restart)
-> until the user explicitly dismisses them. **Phase 15** keeps the existing `localStorage` batch-pointer
-> alive *through* completion (today both consoles delete it on finish) and rehydrates the batch snapshot
-> from SQLite (`reconstructBatch`) so results survive a restart; **Phase 16** adds the explicit dismissal
-> controls — **Archive** (remove from the console, keep in History) and **Clear** (remove from the console
-> *and* delete the batch from History) — with "start a new run" already replacing the shown result. No new
-> state library: the fix reuses the existing **DB-as-source-of-truth + small pointer** seam (the same
-> pattern the codebase already uses). Detailed checklists in §6 (Phases 15–16). *(The PageSpeed Insights
-> engine and the in-app AI score analysis shipped after Phase 14 without dedicated PRD phases; the console
-> now hosts both the local Lighthouse `/` and the PageSpeed `/pagespeed` flows, and both get this change.)*
+> **Status (Phase 15):** Phase 15 complete — completed Lighthouse **and** PageSpeed runs now **stay on the
+> console across navigation, a hard refresh, and a server restart** until the user starts a new run (explicit
+> Archive/Clear dismissal is Phase 16). The fix reused the existing **DB-as-source-of-truth + small pointer**
+> seam with no new state library: both consoles now keep the `localStorage` batch-pointer *through* completion
+> (and pre-seed the toast guard so a restored finished run never re-toasts), a new pure
+> `reconstructBatch(batchId)` in `persistence.ts` reassembles a *lite* `Batch` from the `batches` row + its
+> `runs` rows (lossy-by-design: `perRunScores`/opportunities/BP-breakdown come back empty), and the GET +
+> stream audit routes fall back to it on a queue miss (`getBatch(id) ?? reconstructBatch(id)`), so the
+> unchanged client reconnect path restores DB-only runs. **Verified for real:** a live example.com run survived
+> a genuine kill-and-restart (`GET` → HTTP 200 reconstructed from SQLite, `perf 100 / seo 80`); a headless-Chrome
+> pass on **both** `/` and `/pagespeed` confirmed pointer-kept-through-completion, full results restored on hard
+> refresh + SPA nav, the completion toast firing once on the run and **zero** on the restore, and zero console
+> errors. Lint, typecheck, build, and **459 unit tests** all green (Phase 15 added 6 tests). **Next up:** Phase
+> 16 (Archive & Clear dismissal controls). *(The PageSpeed Insights engine and the in-app AI score analysis
+> shipped after Phase 14 without dedicated PRD phases; the console hosts both flows, and both got this change.)*
+>
+> **Planned (Phase 16 — result-persistence UX, NOT yet built):** **Phase 16** adds the explicit dismissal
+> controls on a terminal run — **Archive** (remove from the console, keep in History) and **Clear** (remove
+> from the console *and* delete the batch from History) — with "start a new run" already replacing the shown
+> result. Detailed checklist in §6 (Phase 16).
 
 > **Planned (post-v1 — Phases 11–14):** a **density & multi-device** pass that keeps the existing
 > dark "precision-instrument" visual design **untouched** (the cooled `oklch(0.165 …)` palette, cyan
@@ -951,31 +960,58 @@ restores correctly (the pointer survives, the queue still holds the batch, and t
 snapshot). Since every run is already persisted to SQLite (`runs`/`batches`) + report files, the fix is to
 **keep the pointer and rehydrate from the DB** — not to add a client store.
 
-- [ ] **Keep the pointer through completion**: remove the `localStorage.removeItem(ACTIVE_BATCH_KEY)` call
+- [x] **Keep the pointer through completion**: remove the `localStorage.removeItem(ACTIVE_BATCH_KEY)` call
       from the terminal/completion `useEffect` in **both** `audit-console.tsx` and `pagespeed-console.tsx`,
       so the active-batch id survives until an explicit dismissal (Clear / Archive / new run). The existing
       reconnect `useEffect` (validate via `getBatch`, re-attach via `useBatchStream`) then restores the
       result on return. "Start a new run" already overwrites the pointer + resets `toastedFor` — no change.
-- [ ] **Suppress the duplicate completion toast on restore**: in the reconnect `useEffect`, inspect the
+      *Done: the `removeItem` is gone from each console's completion effect (the effect now only fires the
+      one-shot completion toast); the pointer survives until an explicit dismissal (Phase 16) or a new run.*
+- [x] **Suppress the duplicate completion toast on restore**: in the reconnect `useEffect`, inspect the
       `getBatch(stored)` result's `status`; when it is already terminal, seed `toastedFor.current = stored`
       before `setBatchId` so returning to a finished run does **not** re-fire the "Audit complete" toast. A
       run still running at reconnect must still toast on its eventual completion.
-- [ ] **Rehydrate from SQLite so results survive a server restart**: add
+      *Done. **Deviation:** the PRD's literal inline `toastedFor.current = stored` inside the reconnect
+      `.then` trips this repo's `eslint-plugin-react-hooks@7.1.1` React-Compiler `immutability` rule (it then
+      flags every other ref mutation, incl. the untouched `handleSubmit`). The seed-then-attach logic was
+      moved into a `useEffectEvent` (`onReconnect`, stable in React 19.2) — identical runtime behaviour, lint
+      clean: a terminal restore is pre-seeded so it never re-toasts; a still-running batch is left unseeded.*
+- [x] **Rehydrate from SQLite so results survive a server restart**: add
       `reconstructBatch(batchId): Batch | undefined` to `src/lib/db/persistence.ts` that assembles a *lite*
       `Batch` from the `batches` row + its `runs` rows (inverse of `recordRun`; reuse `safeParse` /
       `rowToEnvironment`, map each row → an `AuditJob` with a reconstructed `AuditResultLite` or `error`,
       recompute `counts` via the queue's shape, derive `device`). Note: `perRunScores` / `perRunEnvironments`
       are not persisted as columns, so a restart-restored run degrades gracefully without the variance /
       spread sub-detail (same-process restores via the in-memory queue are unaffected).
-- [ ] **Wire the DB fallback into the audit routes**: resolve snapshots as
+      *Done: `reconstructBatch` reads the `batches` row + its `runs` rows (ordered by `idx`), maps each
+      settled row → an `AuditJob` (done → reconstructed `AuditResultLite`; error → `{message}`), derives
+      `device` (`both` when mobile+desktop present), recomputes `counts`, and threads `priorBatchId` /
+      `scheduleId` / `source`. Lossy-by-design fields (`perRunScores`/`perRunEnvironments`, opportunities,
+      BP breakdown) come back empty; the detail sheet's per-run-spread now also guards on
+      `perRunScores.length > 0` so a restored run renders cleanly. Never throws.*
+- [x] **Wire the DB fallback into the audit routes**: resolve snapshots as
       `getAuditQueue().getBatch(id) ?? reconstructBatch(id)` in **both** `src/app/api/audits/[id]/route.ts`
       (GET) and `src/app/api/audits/[id]/stream/route.ts` (the initial + the re-read snapshot). Because the
       stream route already sends a snapshot and closes for terminal batches, the existing client reconnect
       path restores DB-only runs **unchanged**.
-- [ ] **Verify**: run an audit on `/`, let it complete, navigate to History and back → results still shown;
+      *Done: GET resolves `getBatch(id) ?? reconstructBatch(id)`; the stream route falls the `initial`
+      snapshot back to `reconstructBatch(id)` (the re-read `current = getBatch(id) ?? initial` then carries
+      the reconstructed batch, which is terminal → one snapshot + close). 404 semantics unchanged.*
+- [x] **Verify**: run an audit on `/`, let it complete, navigate to History and back → results still shown;
       hard-refresh `/` → still shown; restart the dev server and refresh → results rehydrated from SQLite;
       repeat the whole flow on `/pagespeed`. Lint / typecheck / build / unit suite green — add a
       `reconstructBatch` round-trip test and a "route GET falls back to the DB after a queue miss" test.
+      *Verified for real against a production `next start` build. **Restart survival (the core):** a live
+      example.com audit (mobile · 1 run · perf+seo → `perf 100 / seo 80`, benchmarkIndex 3997) was then
+      **killed-and-restarted**; `GET /api/audits/<id>` on the fresh empty queue returned **HTTP 200**
+      reconstructed from SQLite (identical scores, `perRunScores: []` showing the documented degradation),
+      and the stream route replayed a terminal `batch-snapshot`. **Browser (headless Chrome):** on `/` a real
+      run kept its `lh:activeBatchId` after completion; a **hard refresh** re-rendered the full results table
+      (100/96/92/80 + env badge) with **zero console errors**; **SPA nav to History and back** re-rendered it
+      identically; the "Audit complete" toast fired **once on the run and zero on the restore**. The **whole
+      flow repeated on `/pagespeed`** (own `lh:activePsiBatchId` key) — PSI scored `100/96/96/80`, the table
+      restored on refresh, no duplicate toast, zero console errors. Lint, typecheck, build, and **459 unit
+      tests** all green (Phase 15 added 4 `reconstructBatch` round-trip tests + 2 route-fallback tests).*
 
 ### Phase 16 — Archive & Clear dismissal controls
 **Why:** with results now persisting across navigation (Phase 15), the user needs explicit ways to dismiss
