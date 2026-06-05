@@ -168,6 +168,7 @@ export function PageSpeedConsole({
       <PsiAuditForm
         onSubmit={handleSubmit}
         isRunning={running}
+        hasBatch={batch != null}
         results={
           batch ? (
             <AuditResults

@@ -13,7 +13,13 @@ import {
 
 import { parseUrls } from "@/lib/parseUrls";
 import type { CreateBatchRequest } from "@/lib/client/auditClient";
+import { selectedUrls, type DiscoverResult } from "@/lib/crawl/types";
 import { CrawlPanel } from "@/components/audit/crawl-panel";
+import {
+  WorkspacePanel,
+  type WorkspaceView,
+} from "@/components/audit/workspace-panel";
+import type { DiscoverySelection } from "@/components/audit/discovered-urls-panel";
 import { RunConfigCard } from "@/components/audit/run-config-card";
 import { SaveScheduleDialog } from "@/components/archive/save-schedule-dialog";
 import type { ScheduleTarget } from "@/lib/schedules/types";
@@ -115,11 +121,16 @@ export interface NewAuditFormProps {
    */
   latestBenchmarkIndex?: number | null;
   /**
-   * Live results panel rendered in the left column beneath the Target URLs
-   * card, filling the space alongside the (taller) Run config column. Null
-   * until a batch exists.
+   * Live results node (the `<AuditResults/>` element) rendered full-width in the
+   * workspace below the input card. Null until a batch exists.
    */
   results?: ReactNode;
+  /**
+   * Whether a batch currently exists (running, completed, or restored). Drives
+   * the workspace's results-vs-discovered switch — when true, the workspace
+   * shows {@link NewAuditFormProps.results} unless the user has just discovered.
+   */
+  hasBatch?: boolean;
 }
 
 export function NewAuditForm({
@@ -127,6 +138,7 @@ export function NewAuditForm({
   isRunning = false,
   latestBenchmarkIndex = null,
   results = null,
+  hasBatch = false,
 }: NewAuditFormProps) {
   const deviceId = useId();
   const throttlingId = useId();
@@ -144,10 +156,16 @@ export function NewAuditForm({
 
   const [tab, setTab] = useState<"paste" | "crawl">("paste");
   const [text, setText] = useState("");
-  // URLs the crawl panel currently has selected. The panel owns discovery; this
-  // form only needs the resolved selected set so it can submit the active tab's
-  // URLs through the same CreateBatchRequest the paste tab uses.
-  const [crawlUrls, setCrawlUrls] = useState<string[]>([]);
+  // Crawl discovery state, lifted out of CrawlPanel so the curation list can
+  // render full-width in the workspace below the card. The panel only triggers
+  // discovery (reporting each result up); this form owns the result + selection.
+  const [crawlResult, setCrawlResult] = useState<DiscoverResult | null>(null);
+  const [crawlSelected, setCrawlSelected] = useState<Set<string>>(new Set());
+  // Which readout the workspace shows. Set by the user's last intent (Discover /
+  // Run); null until they act. Resolved against `hasBatch` + `tab` below.
+  const [workspaceView, setWorkspaceView] = useState<
+    "discovered" | "results" | null
+  >(null);
   // Device selection (Phase 12): "mobile" | "desktop" | "both". "both" fans each
   // URL out into a mobile + a desktop job server-side.
   const [device, setDevice] = useState<DeviceSelection>("mobile");
@@ -191,6 +209,13 @@ export function NewAuditForm({
 
   const { urls: pastedUrls, invalid } = useMemo(() => parseUrls(text), [text]);
 
+  // The crawl tab's URLs are the selected subset of the discovered set, in
+  // discovery order — derived during render (no effect-sync round-trip).
+  const crawlUrls = useMemo(
+    () => (crawlResult ? selectedUrls(crawlResult.urls, crawlSelected) : []),
+    [crawlResult, crawlSelected],
+  );
+
   // The active tab is the single source of truth for what gets submitted.
   const urls = tab === "paste" ? pastedUrls : crawlUrls;
 
@@ -203,10 +228,77 @@ export function NewAuditForm({
     [latestBenchmarkIndex],
   );
 
-  // Stable callback so the crawl panel's reporting effect doesn't re-fire.
-  const handleCrawlUrlsChange = useCallback((next: string[]) => {
-    setCrawlUrls(next);
+  // A fresh discovery: store the result, select everything by default (the user
+  // curates down), and point the workspace at the discovered table.
+  const handleDiscover = useCallback((result: DiscoverResult) => {
+    setCrawlResult(result);
+    setCrawlSelected(new Set(result.urls.map((u) => u.url)));
+    setWorkspaceView("discovered");
   }, []);
+
+  const toggleCrawlUrl = useCallback((url: string) => {
+    setCrawlSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(url)) next.delete(url);
+      else next.add(url);
+      return next;
+    });
+  }, []);
+
+  const removeCrawlUrl = useCallback((url: string) => {
+    // Drop it from both the visible set and the selection so it can't return.
+    setCrawlResult((prev) =>
+      prev ? { ...prev, urls: prev.urls.filter((u) => u.url !== url) } : prev,
+    );
+    setCrawlSelected((prev) => {
+      const next = new Set(prev);
+      next.delete(url);
+      return next;
+    });
+  }, []);
+
+  const toggleAllCrawlUrls = useCallback(() => {
+    setCrawlSelected((prev) => {
+      if (!crawlResult || crawlResult.urls.length === 0) return prev;
+      const all = crawlResult.urls.length;
+      return prev.size >= all
+        ? new Set()
+        : new Set(crawlResult.urls.map((u) => u.url));
+    });
+  }, [crawlResult]);
+
+  // The single cohesive object the workspace's discovered view consumes.
+  const crawlSelection = useMemo<DiscoverySelection | null>(
+    () =>
+      crawlResult
+        ? {
+            result: crawlResult,
+            selected: crawlSelected,
+            toggleOne: toggleCrawlUrl,
+            toggleAll: toggleAllCrawlUrls,
+            removeOne: removeCrawlUrl,
+          }
+        : null,
+    [
+      crawlResult,
+      crawlSelected,
+      toggleCrawlUrl,
+      toggleAllCrawlUrls,
+      removeCrawlUrl,
+    ],
+  );
+
+  // Resolve the workspace view from the user's last intent, falling back to a
+  // restored batch on mount (workspaceView still null) and gating the discovered
+  // table to the crawl tab so the paste tab never shows it.
+  const resolvedView: WorkspaceView =
+    workspaceView === "results" && hasBatch
+      ? "results"
+      : workspaceView === "discovered" && crawlResult && tab === "crawl"
+        ? "discovered"
+        : hasBatch
+          ? "results"
+          : "idle";
 
   function handleTabChange(value: string) {
     if (value === "paste" || value === "crawl") setTab(value);
@@ -347,6 +439,8 @@ export function NewAuditForm({
       concurrency,
       accuracyMode,
     });
+    // Hand the workspace over to the live results readout.
+    setWorkspaceView("results");
   }
 
   return (
@@ -425,7 +519,8 @@ export function NewAuditForm({
 
                 <TabsContent value="crawl">
                   <CrawlPanel
-                    onUrlsChange={handleCrawlUrlsChange}
+                    onDiscover={handleDiscover}
+                    result={crawlResult}
                     disabled={isRunning}
                   />
                 </TabsContent>
@@ -751,7 +846,12 @@ export function NewAuditForm({
         </CardFooter>
       </Card>
 
-      {results}
+      <WorkspacePanel
+        view={resolvedView}
+        selection={crawlSelection}
+        results={results}
+        disabled={isRunning}
+      />
 
       <SaveScheduleDialog
         open={scheduleOpen}

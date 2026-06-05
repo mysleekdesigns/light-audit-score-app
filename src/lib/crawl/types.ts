@@ -227,3 +227,15 @@ export interface DiscoverResult {
   /** Non-fatal notes (no sitemap, fetch failures, robots-skipped paths, cap hit). */
   warnings: string[];
 }
+
+/**
+ * Resolve the selected URL list from a selection set, preserving discovery order.
+ * Pure; shared by the form (which submits the selected set) and the workspace's
+ * discovered-pages table (which renders + curates it).
+ */
+export function selectedUrls(
+  urls: readonly DiscoveredUrl[],
+  selected: ReadonlySet<string>,
+): string[] {
+  return urls.filter((u) => selected.has(u.url)).map((u) => u.url);
+}

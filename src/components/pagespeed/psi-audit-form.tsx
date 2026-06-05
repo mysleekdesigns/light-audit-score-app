@@ -22,6 +22,11 @@ import { useCallback, useId, useMemo, useState, type ReactNode } from "react";
 import { CalendarPlus, Info, ListPlus, Play, Radar } from "lucide-react";
 
 import { CrawlPanel } from "@/components/audit/crawl-panel";
+import {
+  WorkspacePanel,
+  type WorkspaceView,
+} from "@/components/audit/workspace-panel";
+import type { DiscoverySelection } from "@/components/audit/discovered-urls-panel";
 import { SaveScheduleDialog } from "@/components/archive/save-schedule-dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -59,6 +64,7 @@ import {
   MIN_CONCURRENCY,
 } from "@/lib/queue/types";
 import type { ScheduleTarget } from "@/lib/schedules/types";
+import { selectedUrls, type DiscoverResult } from "@/lib/crawl/types";
 import { CATEGORY_LABELS } from "@/lib/scores";
 
 /** Sentinel `<Select>` value for "no locale override" (PSI default). */
@@ -94,14 +100,17 @@ export interface PsiAuditFormProps {
   onSubmit: (request: CreateBatchRequest) => void;
   /** When true, the form locks and the run button shows a running state. */
   isRunning?: boolean;
-  /** Live results panel rendered beneath the input card. Null until a batch exists. */
+  /** Live results node rendered full-width in the workspace. Null until a batch exists. */
   results?: ReactNode;
+  /** Whether a batch exists — drives the workspace's results-vs-discovered switch. */
+  hasBatch?: boolean;
 }
 
 export function PsiAuditForm({
   onSubmit,
   isRunning = false,
   results = null,
+  hasBatch = false,
 }: PsiAuditFormProps) {
   const deviceId = useId();
   const localeId = useId();
@@ -110,7 +119,13 @@ export function PsiAuditForm({
 
   const [tab, setTab] = useState<"paste" | "crawl">("paste");
   const [text, setText] = useState("");
-  const [crawlUrls, setCrawlUrls] = useState<string[]>([]);
+  // Crawl discovery state, lifted so the curation list renders full-width in the
+  // workspace below (mirrors NewAuditForm). The panel only triggers discovery.
+  const [crawlResult, setCrawlResult] = useState<DiscoverResult | null>(null);
+  const [crawlSelected, setCrawlSelected] = useState<Set<string>>(new Set());
+  const [workspaceView, setWorkspaceView] = useState<
+    "discovered" | "results" | null
+  >(null);
   const [device, setDevice] = useState<DeviceSelection>("mobile");
   const [categories, setCategories] = useState<LighthouseCategory[]>([
     ...LIGHTHOUSE_CATEGORIES,
@@ -121,6 +136,11 @@ export function PsiAuditForm({
   const [scheduleOpen, setScheduleOpen] = useState(false);
 
   const { urls: pastedUrls, invalid } = useMemo(() => parseUrls(text), [text]);
+  // Crawl tab URLs = the selected subset of the discovered set, discovery order.
+  const crawlUrls = useMemo(
+    () => (crawlResult ? selectedUrls(crawlResult.urls, crawlSelected) : []),
+    [crawlResult, crawlSelected],
+  );
   const urls = tab === "paste" ? pastedUrls : crawlUrls;
   const canSubmit = urls.length > 0 && !isRunning;
   const canSaveSchedule = urls.length > 0 && !isRunning;
@@ -145,9 +165,69 @@ export function PsiAuditForm({
     [urls],
   );
 
-  const handleCrawlUrlsChange = useCallback((next: string[]) => {
-    setCrawlUrls(next);
+  const handleDiscover = useCallback((result: DiscoverResult) => {
+    setCrawlResult(result);
+    setCrawlSelected(new Set(result.urls.map((u) => u.url)));
+    setWorkspaceView("discovered");
   }, []);
+
+  const toggleCrawlUrl = useCallback((url: string) => {
+    setCrawlSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(url)) next.delete(url);
+      else next.add(url);
+      return next;
+    });
+  }, []);
+
+  const removeCrawlUrl = useCallback((url: string) => {
+    setCrawlResult((prev) =>
+      prev ? { ...prev, urls: prev.urls.filter((u) => u.url !== url) } : prev,
+    );
+    setCrawlSelected((prev) => {
+      const next = new Set(prev);
+      next.delete(url);
+      return next;
+    });
+  }, []);
+
+  const toggleAllCrawlUrls = useCallback(() => {
+    setCrawlSelected((prev) => {
+      if (!crawlResult || crawlResult.urls.length === 0) return prev;
+      return prev.size >= crawlResult.urls.length
+        ? new Set()
+        : new Set(crawlResult.urls.map((u) => u.url));
+    });
+  }, [crawlResult]);
+
+  const crawlSelection = useMemo<DiscoverySelection | null>(
+    () =>
+      crawlResult
+        ? {
+            result: crawlResult,
+            selected: crawlSelected,
+            toggleOne: toggleCrawlUrl,
+            toggleAll: toggleAllCrawlUrls,
+            removeOne: removeCrawlUrl,
+          }
+        : null,
+    [
+      crawlResult,
+      crawlSelected,
+      toggleCrawlUrl,
+      toggleAllCrawlUrls,
+      removeCrawlUrl,
+    ],
+  );
+
+  const resolvedView: WorkspaceView =
+    workspaceView === "results" && hasBatch
+      ? "results"
+      : workspaceView === "discovered" && crawlResult && tab === "crawl"
+        ? "discovered"
+        : hasBatch
+          ? "results"
+          : "idle";
 
   function handleTabChange(value: string) {
     if (value === "paste" || value === "crawl") setTab(value);
@@ -177,6 +257,7 @@ export function PsiAuditForm({
   function handleSubmit() {
     if (!canSubmit) return;
     onSubmit({ urls, device, source: "psi", options: psiOptions, concurrency });
+    setWorkspaceView("results");
   }
 
   return (
@@ -249,7 +330,8 @@ export function PsiAuditForm({
 
                 <TabsContent value="crawl">
                   <CrawlPanel
-                    onUrlsChange={handleCrawlUrlsChange}
+                    onDiscover={handleDiscover}
+                    result={crawlResult}
                     disabled={isRunning}
                   />
                 </TabsContent>
@@ -461,7 +543,12 @@ export function PsiAuditForm({
         </CardFooter>
       </Card>
 
-      {results}
+      <WorkspacePanel
+        view={resolvedView}
+        selection={crawlSelection}
+        results={results}
+        disabled={isRunning}
+      />
 
       <SaveScheduleDialog
         open={scheduleOpen}

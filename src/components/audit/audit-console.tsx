@@ -207,6 +207,7 @@ export function AuditConsole({
         onSubmit={handleSubmit}
         isRunning={running}
         latestBenchmarkIndex={latestBenchmarkIndex}
+        hasBatch={batch != null}
         results={
           batch ? (
             <AuditResults
