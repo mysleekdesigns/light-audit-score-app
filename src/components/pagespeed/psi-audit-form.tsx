@@ -3,10 +3,15 @@
 /**
  * PageSpeed Insights input form (PSI feature) — the lean sibling of
  * {@link NewAuditForm}. Same "precision instrument" panel and the same paste /
- * crawl URL sources ({@link CrawlPanel} reused verbatim), but only the levers PSI
- * honours: device (→ strategy), categories, and report locale. PSI's lab
- * conditions are fixed Google-side, so the warm-cache / CPU / throttling / runs
- * dials don't apply and are intentionally absent.
+ * crawl URL sources ({@link CrawlPanel} reused verbatim). It exposes the levers
+ * that mean something for PSI: device (→ strategy), categories, report locale,
+ * runs-per-URL, and concurrency.
+ *
+ * Runs-per-URL is a CLIENT-SIDE median-of-N: the engine makes N PSI API calls and
+ * takes the median (PSI lab scores vary call-to-call). Concurrency is how many
+ * URLs are analysed in parallel (parallel API requests). CPU slowdown / throttling
+ * / warm-cache are intentionally absent — PSI's lab conditions are fixed
+ * Google-side and its API accepts no such parameter, so a control would be a no-op.
  *
  * Submits the exact same {@link CreateBatchRequest} the local form does, tagged
  * with `source: "psi"`, so it flows through the one queue / SSE / results
@@ -41,11 +46,18 @@ import {
 import type { CreateBatchRequest } from "@/lib/client/auditClient";
 import {
   LIGHTHOUSE_CATEGORIES,
+  MAX_RUNS,
+  MIN_RUNS,
   type AuditOptions,
   type DeviceSelection,
   type LighthouseCategory,
 } from "@/lib/lighthouse/types";
 import { parseUrls } from "@/lib/parseUrls";
+import {
+  DEFAULT_CONCURRENCY,
+  MAX_CONCURRENCY,
+  MIN_CONCURRENCY,
+} from "@/lib/queue/types";
 import type { ScheduleTarget } from "@/lib/schedules/types";
 import { CATEGORY_LABELS } from "@/lib/scores";
 
@@ -65,6 +77,18 @@ const LOCALES: { value: string; label: string }[] = [
   { value: "zh", label: "Chinese" },
 ];
 
+/** Runs-per-URL choices (median-of-N). Each run is one PSI API call. */
+const RUN_OPTIONS = Array.from(
+  { length: MAX_RUNS - MIN_RUNS + 1 },
+  (_, i) => MIN_RUNS + i,
+);
+
+/** Parallel-URL choices. Bounded by Google's PSI rate limits (~240/min). */
+const CONCURRENCY_OPTIONS = Array.from(
+  { length: MAX_CONCURRENCY - MIN_CONCURRENCY + 1 },
+  (_, i) => MIN_CONCURRENCY + i,
+);
+
 export interface PsiAuditFormProps {
   /** Called with a ready-to-send PSI batch request when the user runs it. */
   onSubmit: (request: CreateBatchRequest) => void;
@@ -81,6 +105,8 @@ export function PsiAuditForm({
 }: PsiAuditFormProps) {
   const deviceId = useId();
   const localeId = useId();
+  const runsId = useId();
+  const concurrencyId = useId();
 
   const [tab, setTab] = useState<"paste" | "crawl">("paste");
   const [text, setText] = useState("");
@@ -90,6 +116,8 @@ export function PsiAuditForm({
     ...LIGHTHOUSE_CATEGORIES,
   ]);
   const [locale, setLocale] = useState<string>(LOCALE_DEFAULT);
+  const [runs, setRuns] = useState<number>(3);
+  const [concurrency, setConcurrency] = useState<number>(DEFAULT_CONCURRENCY);
   const [scheduleOpen, setScheduleOpen] = useState(false);
 
   const { urls: pastedUrls, invalid } = useMemo(() => parseUrls(text), [text]);
@@ -97,18 +125,19 @@ export function PsiAuditForm({
   const canSubmit = urls.length > 0 && !isRunning;
   const canSaveSchedule = urls.length > 0 && !isRunning;
 
-  // Resolved options for both submit and "Save as daily" (PSI ignores the
-  // local-only levers — runs/throttling/warmCache are nominal defaults).
+  // Resolved options for both submit and "Save as daily". `runs` drives the
+  // client-side median-of-N (N PSI API calls); throttling / warmCache are nominal
+  // (PSI ignores them — its lab conditions are fixed Google-side).
   const psiOptions = useMemo<AuditOptions>(
     () => ({
       formFactor: device === "both" ? "mobile" : device,
       throttling: "simulated",
       categories,
-      runs: 1,
+      runs,
       warmCache: true,
       locale: locale === LOCALE_DEFAULT ? undefined : locale,
     }),
-    [device, categories, locale],
+    [device, categories, locale, runs],
   );
 
   const scheduleTarget = useMemo<ScheduleTarget>(
@@ -135,9 +164,19 @@ export function PsiAuditForm({
     setCategories(LIGHTHOUSE_CATEGORIES.filter((c) => value.includes(c)));
   }
 
+  function handleRunsChange(value: string) {
+    const n = Number(value);
+    if (Number.isFinite(n)) setRuns(n);
+  }
+
+  function handleConcurrencyChange(value: string) {
+    const n = Number(value);
+    if (Number.isFinite(n)) setConcurrency(n);
+  }
+
   function handleSubmit() {
     if (!canSubmit) return;
-    onSubmit({ urls, device, source: "psi", options: psiOptions });
+    onSubmit({ urls, device, source: "psi", options: psiOptions, concurrency });
   }
 
   return (
@@ -283,6 +322,58 @@ export function PsiAuditForm({
                     </SelectContent>
                   </Select>
                 </Field>
+
+                <Field>
+                  <FieldLabel htmlFor={runsId}>Runs per URL</FieldLabel>
+                  <Select
+                    value={String(runs)}
+                    onValueChange={handleRunsChange}
+                    disabled={isRunning}
+                  >
+                    <SelectTrigger
+                      id={runsId}
+                      className="w-full"
+                      title="Median of N PageSpeed runs — each run is one API call (quota = runs × URLs)."
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {RUN_OPTIONS.map((n) => (
+                          <SelectItem key={n} value={String(n)}>
+                            {n} {n === 1 ? "run" : "runs"} (median)
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+
+                <Field>
+                  <FieldLabel htmlFor={concurrencyId}>Concurrency</FieldLabel>
+                  <Select
+                    value={String(concurrency)}
+                    onValueChange={handleConcurrencyChange}
+                    disabled={isRunning}
+                  >
+                    <SelectTrigger
+                      id={concurrencyId}
+                      className="w-full"
+                      title="How many URLs are analysed in parallel — capped by Google's PSI rate limits (~240 requests/min)."
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {CONCURRENCY_OPTIONS.map((n) => (
+                          <SelectItem key={n} value={String(n)}>
+                            {n} parallel
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
               </div>
 
               <Separator />
@@ -328,9 +419,14 @@ export function PsiAuditForm({
                 <Info />
                 <AlertDescription>
                   PageSpeed Insights runs Lighthouse on Google&apos;s servers with
-                  fixed lab settings (mobile emulates a mid-tier phone on slow 4G).
-                  Real-world Core Web Vitals from the Chrome UX Report are included
-                  when a URL has enough traffic.
+                  fixed lab settings (mobile emulates a mid-tier phone on slow 4G),
+                  so CPU slowdown and throttling aren&apos;t configurable here — use
+                  a local Lighthouse audit to tune those. Runs-per-URL takes the
+                  median of N API calls, so a batch makes runs × URLs requests
+                  against Google&apos;s quota (~240/min, 25k/day; set{" "}
+                  <code className="font-mono text-[0.8em]">PAGESPEED_API_KEY</code>{" "}
+                  for headroom). Real-world Core Web Vitals from the Chrome UX
+                  Report are included when a URL has enough traffic.
                 </AlertDescription>
               </Alert>
             </section>
@@ -372,7 +468,7 @@ export function PsiAuditForm({
         onOpenChange={setScheduleOpen}
         target={scheduleTarget}
         options={psiOptions}
-        concurrency={3}
+        concurrency={concurrency}
         device={device}
         accuracyMode={false}
         source="psi"

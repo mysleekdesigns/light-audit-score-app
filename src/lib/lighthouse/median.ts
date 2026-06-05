@@ -6,59 +6,19 @@
  * `computeMedianRun`. Per-run category scores are surfaced for variance display.
  */
 
-import { computeMedianRun } from "lighthouse/core/lib/median-run.js";
-
 import {
   createAuditSession,
   parseLhr,
   runSingleAudit,
 } from "@/lib/lighthouse/runAudit";
+import { selectMedianRun } from "@/lib/lighthouse/select-median-run";
 import {
   type AuditResult,
   type CategoryScores,
-  type LighthouseResult,
   type RunAudit,
   type RunEnvironment,
   type SingleRunResult,
 } from "@/lib/lighthouse/types";
-
-/**
- * Pick the median run from a non-empty list of completed runs.
- *
- * Prefers Lighthouse's `computeMedianRun` (which selects the run whose key
- * metrics are median). Falls back to the middle run by index if there is only
- * one run, or if `computeMedianRun` throws or returns an unrecognised LHR.
- */
-function selectMedianRun(runs: SingleRunResult[]): SingleRunResult {
-  const middle = runs[Math.floor((runs.length - 1) / 2)];
-  if (runs.length === 1) return runs[0];
-
-  let medianLhr: LighthouseResult | undefined;
-  try {
-    medianLhr = computeMedianRun(
-      runs.map((run) => run.lhr),
-    ) as LighthouseResult;
-  } catch {
-    return middle;
-  }
-  if (!medianLhr) return middle;
-
-  // Match the returned LHR back to one of our runs by reference, then by
-  // fetchTime, so we keep the already-parsed result alongside its raw LHR.
-  const byReference = runs.find((run) => run.lhr === medianLhr);
-  if (byReference) return byReference;
-
-  const medianFetchTime =
-    typeof medianLhr.fetchTime === "string" ? medianLhr.fetchTime : undefined;
-  if (medianFetchTime) {
-    const byFetchTime = runs.find(
-      (run) => run.lhr.fetchTime === medianFetchTime,
-    );
-    if (byFetchTime) return byFetchTime;
-  }
-
-  return middle;
-}
 
 /**
  * Run Lighthouse `options.runs` times against `url` and return the median run

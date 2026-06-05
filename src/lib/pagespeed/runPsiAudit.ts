@@ -9,13 +9,21 @@
  * `lighthouseResult` (same LHR shape; PSI runs Lighthouse 13) and adds the CrUX
  * field data the local engine can't produce.
  *
- * Returns the same {@link AuditResult} the local engine does (`runs: 1`, the PSI
- * response as `median.lhr`), with `source: "psi"` and optional `field`, so the
- * queue, persistence, reports, and results UI treat it identically.
+ * Returns the same {@link AuditResult} the local engine does — median-of-N over
+ * `options.runs` PSI calls (PSI lab scores vary call-to-call, so this stabilises
+ * them exactly as the local engine does), the median run's PSI response as
+ * `median.lhr`, with `source: "psi"` and optional `field` — so the queue,
+ * persistence, reports, and results UI treat it identically.
+ *
+ * PSI's lab conditions are FIXED Google-side (no throttling / CPU-slowdown
+ * parameter exists in the API), so `options` levers other than runs / formFactor /
+ * categories / locale are nominal; cross-URL parallelism is the queue's
+ * concurrency knob, not anything PSI itself accepts.
  */
 
 import { runtimeErrorMessage } from "@/lib/lighthouse/diagnose";
 import { asString, isRecord, parseLhr } from "@/lib/lighthouse/parseLhr";
+import { selectMedianRun } from "@/lib/lighthouse/select-median-run";
 import type {
   AuditOptions,
   AuditResult,
@@ -139,16 +147,25 @@ async function fetchPsi(
   throw lastError ?? new Error(`PageSpeed Insights failed for ${url}.`);
 }
 
+/** One completed PSI analysis: the raw LHR, its parsed projection, CrUX field
+ * data, and a resolved fetch time. `selectMedianRun` keys on `lhr`. */
+interface PsiRun {
+  lhr: LighthouseResult;
+  parsed: ReturnType<typeof parseLhr>;
+  field: ReturnType<typeof parseFieldData>;
+  fetchTime: string;
+}
+
 /**
- * Run a single PageSpeed Insights analysis for `url` with validated `options`.
- * Resolves with an {@link AuditResult} (`source: "psi"`), or rejects with a
- * descriptive `Error`. Honours an {@link AbortSignal} for user cancellation.
+ * Run a SINGLE PageSpeed Insights analysis for `url` (one API call). Resolves
+ * with the parsed run, or rejects with a descriptive `Error`. Honours an
+ * {@link AbortSignal} for user cancellation.
  */
-export async function runPsiAudit(
+async function runPsiOnce(
   url: string,
   options: AuditOptions,
   signal?: AbortSignal,
-): Promise<AuditResult> {
+): Promise<PsiRun> {
   const apiKey = getPsiApiKey();
   const requestUrl = buildPsiUrl(url, options, apiKey);
   const json = await fetchPsi(requestUrl, url, apiKey === undefined, signal);
@@ -165,31 +182,64 @@ export async function runPsiAudit(
   }
 
   const parsed = parseLhr(lhr, options.formFactor);
-  const field = parseFieldData(json.loadingExperience, json.originLoadingExperience);
+  const field = parseFieldData(
+    json.loadingExperience,
+    json.originLoadingExperience,
+  );
   const fetchTime =
     parsed.fetchTime ||
     asString(json.analysisUTCTimestamp) ||
     new Date().toISOString();
 
+  return { lhr, parsed, field, fetchTime };
+}
+
+/**
+ * Run a PageSpeed Insights audit for `url` with validated `options`: median-of-N
+ * over `options.runs` PSI calls. Resolves with an {@link AuditResult}
+ * (`source: "psi"`), or rejects with a descriptive `Error`. Honours an
+ * {@link AbortSignal} for user cancellation.
+ */
+export async function runPsiAudit(
+  url: string,
+  options: AuditOptions,
+  signal?: AbortSignal,
+): Promise<AuditResult> {
+  // Sequential by design — one PSI API call per run (quota = runs × URLs).
+  // Running a URL's calls one-at-a-time avoids PSI's short per-URL result cache
+  // and rate-limit bursts; cross-URL parallelism is the queue's concurrency knob.
+  // No partial-success: if any run throws we let it propagate and fail the whole
+  // job (parity with the local engine). Transient 429/5xx are already absorbed by
+  // `fetchPsi`'s retry/backoff, so a hard failure is a persistent problem.
+  const runs: PsiRun[] = [];
+  for (let i = 0; i < options.runs; i += 1) {
+    runs.push(await runPsiOnce(url, options, signal));
+  }
+
+  // Each run is already parsed, so the median run carries its own projection and
+  // CrUX field data (which is a real-user aggregate — identical across calls).
+  const median = selectMedianRun(runs);
+  const { parsed } = median;
+
   return {
     requestedUrl: parsed.requestedUrl || url,
     finalUrl: parsed.finalUrl || url,
     options,
-    runs: 1,
+    runs: runs.length,
     median: {
       scores: parsed.scores,
       metrics: parsed.metrics,
       opportunities: parsed.opportunities,
       bestPractices: parsed.bestPractices,
-      lhr,
+      lhr: median.lhr,
     },
-    perRunScores: [parsed.scores],
-    perRunEnvironments: [parsed.environment],
-    fetchTime,
+    perRunScores: runs.map((run) => run.parsed.scores),
+    perRunEnvironments: runs.map((run) => run.parsed.environment),
+    fetchTime: median.fetchTime,
     lighthouseVersion: parsed.lighthouseVersion,
-    runWarnings: parsed.runWarnings,
+    runWarnings: Array.from(new Set(runs.flatMap((run) => run.parsed.runWarnings))),
     environment: parsed.environment,
     source: "psi",
-    field,
+    field: median.field,
   };
 }

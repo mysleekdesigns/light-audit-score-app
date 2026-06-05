@@ -3,11 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuditOptions } from "@/lib/lighthouse/types";
 import { runPsiAudit } from "@/lib/pagespeed/runPsiAudit";
 
+// Single-run baseline (one PSI API call). Multi-run median is covered separately.
 const OPTIONS: AuditOptions = {
   formFactor: "mobile",
   throttling: "simulated",
   categories: ["performance", "seo"],
-  runs: 3,
+  runs: 1,
   warmCache: true,
 };
 
@@ -63,6 +64,34 @@ function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
 }
 
+/** A PSI response whose lab performance score is `score` (0–1), for median tests. */
+function psiResponseWithPerf(score: number) {
+  return samplePsiResponse({
+    lighthouseResult: {
+      requestedUrl: "https://example.com/",
+      finalDisplayedUrl: "https://example.com/",
+      fetchTime: "2026-06-02T00:00:00.000Z",
+      lighthouseVersion: "13.0.0",
+      categories: { performance: { score }, seo: { score: 1 } },
+      audits: {
+        "largest-contentful-paint": {
+          numericValue: 1200,
+          displayValue: "1.2 s",
+          score: 0.95,
+        },
+      },
+      environment: {
+        benchmarkIndex: 1500,
+        hostUserAgent: "Mozilla/5.0 Chrome/130.0.0.0",
+      },
+      configSettings: {
+        throttlingMethod: "simulate",
+        throttling: { cpuSlowdownMultiplier: 4 },
+      },
+    },
+  });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -86,6 +115,31 @@ describe("runPsiAudit", () => {
     expect(result.field?.url?.overallCategory).toBe("AVERAGE");
     expect(result.field?.url?.metrics.LARGEST_CONTENTFUL_PAINT_MS?.percentile).toBe(2100);
     expect(result.field?.origin?.overallCategory).toBe("FAST");
+  });
+
+  it("runs N times and returns the median run (runs: N)", async () => {
+    // PSI lab scores vary call-to-call; the engine takes the median of N calls.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(psiResponseWithPerf(0.8)))
+      .mockResolvedValueOnce(jsonResponse(psiResponseWithPerf(0.92)))
+      .mockResolvedValueOnce(jsonResponse(psiResponseWithPerf(0.95)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await runPsiAudit("https://example.com", {
+      ...OPTIONS,
+      runs: 3,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(result.runs).toBe(3);
+    expect(result.perRunScores).toHaveLength(3);
+    expect(result.perRunScores.map((s) => s.performance)).toEqual([80, 92, 95]);
+    // These v13-style LHRs have no FCP/TTI audit, so computeMedianRun throws and
+    // selectMedianRun falls back to the middle run by index → the 0.92 run.
+    expect(result.median.scores.performance).toBe(92);
+    // CrUX field data still comes through (from the median run).
+    expect(result.field?.url?.overallCategory).toBe("AVERAGE");
   });
 
   it("returns no field data when CrUX has none", async () => {
