@@ -63,6 +63,8 @@ import {
   openUrlsInNewTabs,
   timestampSlug,
 } from "@/lib/export/download";
+import type { DevicePair } from "@/lib/pairing/devicePairs";
+import { hasBothDevices, pairByDevice } from "@/lib/pairing/devicePairs";
 import { rowsToCsv, rowsToJson } from "@/lib/export/exporters";
 import type { LighthouseCategory } from "@/lib/lighthouse/types";
 import { CATEGORY_SHORT_LABELS, formatScore, scoreColorClass } from "@/lib/scores";
@@ -198,10 +200,16 @@ function SourceBadge({ source }: { source: HistoryRow["source"] }) {
 }
 
 /** A single score cell: mono, tabular, colour-banded. */
-function ScoreCell({ score }: { score: number | null | undefined }) {
+function ScoreCell({
+  score,
+  className,
+}: {
+  score: number | null | undefined;
+  className?: string;
+}) {
   const value = score ?? null;
   return (
-    <TableCell className={cn(COMPACT_CELL, "text-right")}>
+    <TableCell className={cn(COMPACT_CELL, "text-right", className)}>
       <span
         className={cn(
           "font-mono text-sm tabular-nums",
@@ -215,10 +223,19 @@ function ScoreCell({ score }: { score: number | null | undefined }) {
 }
 
 /** Failed-run cell spanning the four score columns: a destructive badge + message. */
-function FailedCell({ message }: { message: string | null }) {
+function FailedCell({
+  message,
+  className,
+}: {
+  message: string | null;
+  className?: string;
+}) {
   const text = message ?? "Unknown error";
   return (
-    <TableCell colSpan={SCORE_COLUMNS.length} className={cn(COMPACT_CELL, "text-left")}>
+    <TableCell
+      colSpan={SCORE_COLUMNS.length}
+      className={cn(COMPACT_CELL, "text-left", className)}
+    >
       <div className="flex items-center gap-2">
         <Badge
           variant="destructive"
@@ -558,6 +575,331 @@ function HistoryCardsView({
   );
 }
 
+// --- Paired (Mobile + Desktop per URL) views -------------------------------
+// Mirror the PageSpeed page: when the visible runs span both devices, fold each
+// URL's mobile + desktop run into a single entry. Pairing is scoped per batch so
+// the same URL audited in two different batches never collides (see devicePairs).
+
+/** Mono uppercase device caption ("Mobile" / "Desktop"), matching the house label style. */
+const DEVICE_LABEL =
+  "font-mono text-[0.625rem] uppercase tracking-[0.18em] text-muted-foreground";
+
+/**
+ * Pair the rows into per-URL `{ mobile, desktop }` couples, grouped by `batchId`
+ * first so the same URL run in two batches stays separate. Input order (newest
+ * first from `listHistory`) is preserved across both the batch grouping and the
+ * pairing, so the paired list stays newest-first.
+ */
+function pairHistoryRows(rows: HistoryRow[]): DevicePair<HistoryRow>[] {
+  const byBatch = new Map<string, HistoryRow[]>();
+  for (const row of rows) {
+    const group = byBatch.get(row.batchId);
+    if (group) group.push(row);
+    else byBatch.set(row.batchId, [row]);
+  }
+  const pairs: DevicePair<HistoryRow>[] = [];
+  for (const group of byBatch.values()) {
+    pairs.push(
+      ...pairByDevice(
+        group,
+        (row) => row.url,
+        (row) => row.formFactor,
+      ),
+    );
+  }
+  return pairs;
+}
+
+/**
+ * One device's section within a {@link PairedHistoryCard}: a device caption, then
+ * the rings + CWV + environment (done), the failure line (error), or an em-dash
+ * note when this URL wasn't audited on this device. Each present device keeps its
+ * own re-run / report / delete actions.
+ */
+function HistoryDeviceSection({
+  device,
+  row,
+}: {
+  device: "Mobile" | "Desktop";
+  row: HistoryRow | null;
+}) {
+  const isError = row?.status === "error";
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className={DEVICE_LABEL}>{device}</span>
+        {isError ? (
+          <Badge
+            variant="destructive"
+            className="font-mono text-[0.65rem] uppercase tracking-[0.12em]"
+          >
+            Failed
+          </Badge>
+        ) : null}
+      </div>
+      {!row ? (
+        <p className="font-mono text-xs text-muted-foreground/50">
+          Not audited on {device.toLowerCase()}
+        </p>
+      ) : isError ? (
+        <p className="text-xs text-muted-foreground">
+          {row.errorMessage ?? "Unknown error"}
+        </p>
+      ) : (
+        <>
+          <ScoreRings scores={row.scores} size={48} />
+          {row.metrics ? <CoreWebVitalsStrip metrics={row.metrics} /> : null}
+          {row.environment ? (
+            <EnvironmentBadge variant="compact" environment={row.environment} />
+          ) : null}
+        </>
+      )}
+      {row ? (
+        <div className="flex items-center justify-end">
+          <RowActions row={row} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** A paired ring-card: one card per URL carrying both device ring-sets, stacked. */
+function PairedHistoryCard({ pair }: { pair: DevicePair<HistoryRow> }) {
+  const { primary } = pair;
+  const href = primary.finalUrl ?? primary.url;
+  return (
+    <Card size="sm" className="ring-foreground/10">
+      <CardHeader className="gap-2">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block truncate font-mono text-xs text-foreground underline-offset-4 outline-none hover:text-primary hover:underline focus-visible:ring-3 focus-visible:ring-ring/50"
+            >
+              {pair.url}
+            </a>
+          </TooltipTrigger>
+          <TooltipContent className="font-mono">{href}</TooltipContent>
+        </Tooltip>
+        <div className="flex flex-wrap items-center gap-2">
+          <SourceBadge source={primary.source} />
+          <span
+            title={primary.createdAt}
+            className="font-mono text-[0.65rem] tabular-nums text-muted-foreground"
+          >
+            {formatRunAt(primary.createdAt)}
+          </span>
+        </div>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <HistoryDeviceSection device="Mobile" row={pair.mobile} />
+        <div className="border-t border-border/50" />
+        <HistoryDeviceSection device="Desktop" row={pair.desktop} />
+      </CardContent>
+    </Card>
+  );
+}
+
+/** The paired ring-card grid over the same filtered rows as the paired table. */
+function PairedHistoryCardsView({
+  pairs,
+  isFiltering,
+}: {
+  pairs: DevicePair<HistoryRow>[];
+  isFiltering: boolean;
+}) {
+  if (pairs.length === 0) {
+    return (
+      <Card className="overflow-hidden">
+        <HistoryEmptyState isFiltering={isFiltering} />
+      </Card>
+    );
+  }
+  return (
+    <ul className="grid list-none gap-4 p-0 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      {pairs.map((pair) => (
+        <li key={pair.primary.id}>
+          <PairedHistoryCard pair={pair} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * One device's half of a paired table row: the four score cells then a
+ * report/actions cell. A null device (this URL wasn't audited on it) renders em
+ * dashes; an errored run collapses the four score cells into a single Failed cell
+ * but keeps its actions. `borderless` drops the left hairline on the mobile half.
+ */
+function HistoryDeviceHalf({
+  row,
+  borderless = false,
+}: {
+  row: HistoryRow | null;
+  borderless?: boolean;
+}) {
+  const edge = borderless ? undefined : "border-l border-border/50";
+  if (!row) {
+    return (
+      <>
+        {SCORE_COLUMNS.map(({ category }, i) => (
+          <TableCell
+            key={category}
+            className={cn(COMPACT_CELL, "text-right text-muted-foreground/50", i === 0 && edge)}
+          >
+            —
+          </TableCell>
+        ))}
+        <TableCell className={cn(COMPACT_CELL, "text-right text-muted-foreground/50")}>
+          —
+        </TableCell>
+      </>
+    );
+  }
+  if (row.status === "error") {
+    return (
+      <>
+        <FailedCell message={row.errorMessage} className={edge} />
+        <TableCell className={cn(COMPACT_CELL, "text-right")}>
+          <RowActions row={row} />
+        </TableCell>
+      </>
+    );
+  }
+  return (
+    <>
+      {SCORE_COLUMNS.map(({ category }, i) => (
+        <ScoreCell
+          key={category}
+          score={row.scores[category]}
+          className={i === 0 ? edge : undefined}
+        />
+      ))}
+      <TableCell className={cn(COMPACT_CELL, "text-right")}>
+        <RowActions row={row} />
+      </TableCell>
+    </>
+  );
+}
+
+/**
+ * The paired archive table: one row per URL with the four category scores shown
+ * twice under a two-level "Mobile | Desktop" header (matching the PageSpeed page).
+ * Each device half carries its own re-run / report / delete actions; a missing
+ * device shows em dashes. Score columns aren't sortable in this mode — a single
+ * sort can't disambiguate the two devices — but the URL filter still applies and
+ * rows stay newest-first.
+ */
+function PairedHistoryTableView({
+  pairs,
+  isFiltering,
+}: {
+  pairs: DevicePair<HistoryRow>[];
+  isFiltering: boolean;
+}) {
+  // URL + (4 scores + actions) × 2 devices + Run at.
+  const totalCols = 2 * (SCORE_COLUMNS.length + 1) + 2;
+  return (
+    <Card className="overflow-hidden py-0">
+      <Table>
+        <TableHeader className="sticky top-0 z-10 bg-card [&_th]:bg-card">
+          {/* Top header: device-spanning groups over the per-device sub-columns. */}
+          <TableRow className="hover:bg-transparent">
+            <TableHead rowSpan={2} className={cn(HEAD_LABEL, "w-full align-bottom")}>
+              URL
+            </TableHead>
+            <TableHead
+              colSpan={SCORE_COLUMNS.length + 1}
+              className={cn(HEAD_LABEL, "text-center text-primary")}
+            >
+              Mobile
+            </TableHead>
+            <TableHead
+              colSpan={SCORE_COLUMNS.length + 1}
+              className={cn(HEAD_LABEL, "border-l border-border/50 text-center text-primary")}
+            >
+              Desktop
+            </TableHead>
+            <TableHead rowSpan={2} className={cn(HEAD_LABEL, "align-bottom")}>
+              Run at
+            </TableHead>
+          </TableRow>
+          {/* Sub-header: the four category short-labels + a report slot, per device. */}
+          <TableRow className="hover:bg-transparent">
+            {SCORE_COLUMNS.map(({ category }) => (
+              <TableHead key={`m-${category}`} className={cn(HEAD_LABEL, "text-right")}>
+                {CATEGORY_SHORT_LABELS[category]}
+              </TableHead>
+            ))}
+            <TableHead className={cn(HEAD_LABEL, "text-right")}>
+              <span className="sr-only">Mobile report</span>
+            </TableHead>
+            {SCORE_COLUMNS.map(({ category }, i) => (
+              <TableHead
+                key={`d-${category}`}
+                className={cn(HEAD_LABEL, "text-right", i === 0 && "border-l border-border/50")}
+              >
+                {CATEGORY_SHORT_LABELS[category]}
+              </TableHead>
+            ))}
+            <TableHead className={cn(HEAD_LABEL, "text-right")}>
+              <span className="sr-only">Desktop report</span>
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {pairs.length === 0 ? (
+            <TableRow className="hover:bg-transparent">
+              <TableCell colSpan={totalCols} className="h-64 p-0">
+                <HistoryEmptyState isFiltering={isFiltering} />
+              </TableCell>
+            </TableRow>
+          ) : (
+            pairs.map((pair) => {
+              const href = pair.primary.finalUrl ?? pair.primary.url;
+              return (
+                <TableRow key={pair.primary.id} className="hover:bg-muted/40">
+                  <TableCell className={cn(COMPACT_CELL, "max-w-0")}>
+                    <div className="flex items-center gap-1.5">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <a
+                            href={href}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="block min-w-0 flex-1 truncate font-mono text-xs text-foreground underline-offset-4 hover:text-primary hover:underline"
+                          >
+                            {pair.url}
+                          </a>
+                        </TooltipTrigger>
+                        <TooltipContent className="font-mono">{href}</TooltipContent>
+                      </Tooltip>
+                      <SourceBadge source={pair.primary.source} />
+                    </div>
+                  </TableCell>
+                  <HistoryDeviceHalf row={pair.mobile} borderless />
+                  <HistoryDeviceHalf row={pair.desktop} />
+                  <TableCell className={COMPACT_CELL}>
+                    <span
+                      title={pair.primary.createdAt}
+                      className="font-mono text-xs tabular-nums text-muted-foreground"
+                    >
+                      {formatRunAt(pair.primary.createdAt)}
+                    </span>
+                  </TableCell>
+                </TableRow>
+              );
+            })
+          )}
+        </TableBody>
+      </Table>
+    </Card>
+  );
+}
+
 interface HistoryTableProps {
   rows: HistoryRow[];
 }
@@ -614,6 +956,21 @@ export function HistoryTable({ rows }: HistoryTableProps) {
       return cmp * dir;
     });
   }, [rows, query, sort]);
+
+  // When the archive spans BOTH devices, mirror the PageSpeed page and fold each
+  // URL's mobile + desktop run into one paired entry. Single-device archives keep
+  // the original sortable one-row-per-run layout. The layout is decided from the
+  // full dataset (not the filtered `visible` set) so it doesn't flip mid-filter;
+  // the paired list itself reads from the (newest-first) `visible` rows. Score
+  // sorting is disabled in paired mode — a single sort can't disambiguate devices.
+  const paired = useMemo(
+    () => hasBothDevices(rows, (row) => row.formFactor),
+    [rows],
+  );
+  const pairs = useMemo(
+    () => (paired ? pairHistoryRows(visible) : []),
+    [paired, visible],
+  );
 
   const isFiltering = query.trim().length > 0;
 
@@ -750,7 +1107,13 @@ export function HistoryTable({ rows }: HistoryTableProps) {
         </div>
 
         {view === "cards" ? (
-          <HistoryCardsView rows={visible} isFiltering={isFiltering} />
+          paired ? (
+            <PairedHistoryCardsView pairs={pairs} isFiltering={isFiltering} />
+          ) : (
+            <HistoryCardsView rows={visible} isFiltering={isFiltering} />
+          )
+        ) : paired ? (
+          <PairedHistoryTableView pairs={pairs} isFiltering={isFiltering} />
         ) : (
         <Card className="overflow-hidden py-0">
           <Table>

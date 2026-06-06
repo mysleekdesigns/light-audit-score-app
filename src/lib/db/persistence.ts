@@ -483,9 +483,16 @@ export function getRunReport(runId: string): RunReport | undefined {
  * restored job degrades gracefully *without* the variance / spread / opportunities
  * sub-detail — the median scores, Core Web Vitals, environment, and report links
  * all survive. Only settled runs (`done`/`error`) are ever persisted, so a
- * reconstructed batch never carries `queued`/`running` jobs (and a completed batch
- * is terminal, so the stream route sends one snapshot and closes). Returns
- * `undefined` for an unknown id. Never throws.
+ * reconstructed batch never carries `queued`/`running` jobs.
+ *
+ * **Always terminal.** A batch only reaches here because the live
+ * {@link AuditQueue} no longer owns it (the process that was running it is gone),
+ * so an in-flight job can never resume. The persisted status is coerced to a
+ * terminal one via {@link reconstructedStatus} — a process killed mid-run leaves
+ * the row at `queued`/`running`, and surfacing that verbatim would make the audit
+ * stream send a perpetually-"running" snapshot it never closes (the client would
+ * spin on "Running…" forever). So the stream route always sends one snapshot and
+ * closes. Returns `undefined` for an unknown id. Never throws.
  */
 export function reconstructBatch(batchId: string): Batch | undefined {
   try {
@@ -507,7 +514,7 @@ export function reconstructBatch(batchId: string): Batch | undefined {
     const jobs = runRows.map(rowToJob);
     return {
       id: batchRow.id,
-      status: batchRow.status as BatchStatus,
+      status: reconstructedStatus(batchRow.status as BatchStatus, jobs),
       device: deriveDevice(runRows, batchRow),
       source: batchRow.source === "psi" ? "psi" : "local",
       options:
@@ -634,6 +641,35 @@ const EMPTY_ENVIRONMENT: RunEnvironment = {
   throttlingMethod: "",
   cpuSlowdownMultiplier: null,
 };
+
+/** Batch lifecycle states from which no further progress will ever be emitted. */
+const TERMINAL_BATCH_STATUSES = new Set<BatchStatus>([
+  "completed",
+  "completed_with_errors",
+  "cancelled",
+]);
+
+/**
+ * Resolve the terminal status a reconstructed batch should carry. A batch only
+ * reaches {@link reconstructBatch} once the live queue no longer owns it, so an
+ * already-terminal status is returned as-is (the Phase 15 happy path). A
+ * still-non-terminal status means the process died mid-run before the batch
+ * finalized; it must be coerced terminal (or the stream never closes). The
+ * coerced state is derived from the persisted (settled) runs, mirroring the
+ * queue's `maybeFinalizeBatch`: any error → `completed_with_errors`, all done →
+ * `completed`, and none persisted → `cancelled` (interrupted with nothing to
+ * show — keeps the result panel honest rather than claiming "completed 0/0").
+ */
+function reconstructedStatus(
+  persisted: BatchStatus,
+  jobs: AuditJob[],
+): BatchStatus {
+  if (TERMINAL_BATCH_STATUSES.has(persisted)) return persisted;
+  if (jobs.length === 0) return "cancelled";
+  return jobs.some((j) => j.status === "error")
+    ? "completed_with_errors"
+    : "completed";
+}
 
 /** Aggregate {@link BatchCounts} from a job list (mirrors the queue's `computeCounts`). */
 function countsFromJobs(jobs: AuditJob[]): BatchCounts {

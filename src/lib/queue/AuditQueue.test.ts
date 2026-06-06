@@ -161,6 +161,25 @@ describe("AuditQueue", () => {
     });
   });
 
+  it("createBatch with zero URLs returns an already-finalized (completed) snapshot", () => {
+    // Defensive contract: the API/form reject empty URL lists, but the queue must
+    // never produce a batch that can't finalize. An empty batch enqueues no jobs,
+    // so it must be finalized inline — otherwise `maybeFinalizeBatch` never runs
+    // and the client spins on "Running…" forever.
+    const queue = new AuditQueue();
+
+    const batch = queue.createBatch({
+      urls: [],
+      device: "mobile",
+      options: OPTIONS,
+      concurrency: 1,
+    });
+
+    expect(batch.jobs).toHaveLength(0);
+    expect(batch.status).toBe("completed");
+    expect(batch.counts).toMatchObject({ total: 0, done: 0, error: 0 });
+  });
+
   it("records a re-run's priorBatchId on the batch (undefined for a fresh batch)", () => {
     // PRD §6 Phase 13: lineage is recorded but does not affect execution.
     mockRunAudit.mockResolvedValue(makeResult("https://a.test/", 90));

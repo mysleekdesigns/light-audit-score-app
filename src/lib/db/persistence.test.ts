@@ -394,6 +394,52 @@ describe("reconstructBatch (PRD §6 Phase 15)", () => {
     expect(reconstructBatch("does-not-exist")).toBeUndefined();
   });
 
+  it("coerces a non-terminal status to cancelled when no runs settled (interrupted mid-run)", () => {
+    // A batch whose process died mid-run persists a non-terminal status (here
+    // `running`) with zero settled runs. The live queue no longer owns it, so it
+    // can never finalize on its own — reconstructBatch must present it terminal or
+    // the audit stream would spin on "Running…" forever. With nothing settled it's
+    // an interrupted batch with no results → cancelled.
+    const batch = makeBatch("rb-stuck", [
+      makeJob("rb-s1", 0, "https://a.test/"),
+      makeJob("rb-s2", 1, "https://b.test/"),
+    ]);
+    recordBatch(batch); // persisted as "queued" with total 2
+    updateBatchStatus("rb-stuck", {
+      status: "running",
+      startedAt: new Date().toISOString(),
+    });
+    // No recordRun — the process died before any job settled.
+
+    const restored = reconstructBatch("rb-stuck")!;
+    expect(restored.status).toBe("cancelled");
+    expect(restored.jobs).toEqual([]);
+    expect(restored.counts).toMatchObject({ total: 0, done: 0, error: 0 });
+  });
+
+  it("coerces a non-terminal status to completed from the runs that did settle", async () => {
+    // Some runs settled before the interruption; the persisted status is still
+    // non-terminal. The surviving runs are all `done` → completed (mirrors how the
+    // live queue's maybeFinalizeBatch would have finalized that same job set).
+    const j1 = makeJob("rb-p1", 0, "https://a.test/");
+    const batch = makeBatch("rb-partial", [
+      j1,
+      makeJob("rb-p2", 1, "https://b.test/"),
+    ]);
+    recordBatch(batch);
+    await recordRun(batch, j1, makeResult("https://a.test/"));
+    updateBatchStatus("rb-partial", {
+      status: "running",
+      startedAt: new Date().toISOString(),
+    });
+    // rb-p2 never settled (no recordRun), so its run row is absent.
+
+    const restored = reconstructBatch("rb-partial")!;
+    expect(restored.status).toBe("completed");
+    expect(restored.jobs.map((j) => j.id)).toEqual(["rb-p1"]);
+    expect(restored.counts).toMatchObject({ total: 1, done: 1, error: 0 });
+  });
+
   it("reconstructs a failed run as an error job carrying its message", () => {
     const bad: AuditJob = {
       ...makeJob("rb-bad", 0, "https://bad.test/"),

@@ -248,6 +248,16 @@ export class AuditQueue implements AuditQueueApi {
       });
     }
 
+    // Defensive: a batch with zero jobs enqueues nothing, so `runJob` — and with
+    // it `maybeFinalizeBatch` — never runs, leaving the batch stuck `queued`
+    // forever (the client would spin on "Running…"). The API/form both reject
+    // empty URL lists, so this is belt-and-suspenders, but the queue's own
+    // contract must never produce a non-finalizing batch. Finalize inline so the
+    // returned snapshot is already terminal.
+    if (jobs.length === 0) {
+      this.maybeFinalizeBatch(batch);
+    }
+
     return cloneBatch(batch);
   }
 
