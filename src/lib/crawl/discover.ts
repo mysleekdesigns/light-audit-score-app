@@ -36,6 +36,7 @@ import { fetchRobots, ROBOTS_USER_AGENT, type RobotsMatcher } from "./robots";
 import { gatherSitemapUrls } from "./sitemap";
 import {
   compileExcludePathMatcher,
+  MAX_PAGES,
   type DiscoveredUrl,
   type DiscoverInput,
   type DiscoverResult,
@@ -53,9 +54,14 @@ const MAX_CRAWL_FETCHES = 100;
 
 /**
  * Cap on URLs collected from the sitemap before same-origin filtering + the
- * final `maxPages` cap. Bounds memory on enormous sitemaps.
+ * final `maxPages` cap. Tied to {@link MAX_PAGES}: the result is sliced to
+ * `input.maxPages` anyway, so collecting *more* sitemap URLs than the page
+ * budget is wasted, and collecting *fewer* would relabel in-budget, owner-
+ * declared URLs as `crawl` once the BFS re-finds them (sitemap is added first,
+ * so a fully-collected sitemap keeps its `source: "sitemap"` tag on dedupe).
+ * Also bounds memory on enormous sitemaps.
  */
-const MAX_SITEMAP_COLLECT = 500;
+const MAX_SITEMAP_COLLECT = MAX_PAGES;
 
 /** Drop a leading `www.` (case-insensitive) from a host. */
 function stripWww(host: string): string {

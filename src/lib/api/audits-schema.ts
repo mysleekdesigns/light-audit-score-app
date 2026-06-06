@@ -20,8 +20,12 @@ import {
   type CreateBatchInput,
 } from "@/lib/queue/types";
 
-/** Maximum URLs accepted in a single batch — bounds abuse / runaway batches. */
-export const MAX_URLS = 500;
+/**
+ * Maximum URLs accepted in a single batch — bounds abuse / runaway batches.
+ * Kept equal to discovery's `MAX_PAGES` (`@/lib/crawl/types`) so a fully-selected
+ * discovery set can always be submitted here — raise the two together.
+ */
+export const MAX_URLS = 10000;
 
 /**
  * Validate a single URL string: trim it, require a parseable absolute URL, and

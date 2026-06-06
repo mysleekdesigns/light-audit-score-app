@@ -24,12 +24,13 @@ export const MAX_DEPTH = 4;
 export const DEFAULT_DEPTH = 2;
 
 /**
- * Max pages a discovery run may return. Capped at 500 to match the batch's
- * `MAX_URLS` (`@/lib/api/audits-schema`) so a fully-selected discovery set can
- * always be submitted to `POST /api/audits` without tripping its limit.
+ * Max pages a discovery run may return. Kept equal to the batch's `MAX_URLS`
+ * (`@/lib/api/audits-schema`) so a fully-selected discovery set can always be
+ * submitted to `POST /api/audits` without tripping its limit — raise the two
+ * together.
  */
 export const MIN_PAGES = 1;
-export const MAX_PAGES = 500;
+export const MAX_PAGES = 10000;
 /** Default page cap. */
 export const DEFAULT_PAGES = 25;
 

@@ -77,7 +77,10 @@ describe("parseDiscoverBody — bounds clamping", () => {
   });
 
   it("clamps maxPages above MAX_PAGES down", () => {
-    const result = parseDiscoverBody({ url: "https://example.com", maxPages: 9999 });
+    const result = parseDiscoverBody({
+      url: "https://example.com",
+      maxPages: MAX_PAGES + 1,
+    });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.maxPages).toBe(MAX_PAGES);
