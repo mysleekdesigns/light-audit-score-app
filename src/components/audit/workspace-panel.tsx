@@ -17,14 +17,15 @@
  * double-labels the `<section aria-label="Audit results">` AuditResults renders.
  */
 
-import { type ReactNode } from "react";
-import { SquareCheckBig, SquareDashed } from "lucide-react";
+import { type ReactNode, useState } from "react";
+import { Eye, EyeOff, SquareCheckBig, SquareDashed } from "lucide-react";
 
 import {
   DiscoveredUrlsPanel,
   type DiscoverySelection,
 } from "@/components/audit/discovered-urls-panel";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 export type WorkspaceView = "idle" | "discovered" | "results";
 
@@ -44,6 +45,12 @@ export function WorkspacePanel({
   results,
   disabled = false,
 }: WorkspacePanelProps) {
+  // Curation filter for the discovered table: when on, only the selected
+  // (checked) rows are shown — the natural companion to per-template sampling,
+  // which leaves most rows unchecked. Held here so the toolbar toggle (header)
+  // and the table (body) stay in lockstep; shared by both forms via this panel.
+  const [hideUnselected, setHideUnselected] = useState(false);
+
   if (view === "idle") return null;
 
   const discovered = view === "discovered" && selection != null;
@@ -56,7 +63,12 @@ export function WorkspacePanel({
           {title}
         </h2>
         {discovered && selection ? (
-          <DiscoveredReadout selection={selection} disabled={disabled} />
+          <DiscoveredReadout
+            selection={selection}
+            disabled={disabled}
+            hideUnselected={hideUnselected}
+            onToggleHideUnselected={() => setHideUnselected((v) => !v)}
+          />
         ) : null}
       </header>
 
@@ -67,7 +79,11 @@ export function WorkspacePanel({
         className="motion-safe:animate-in motion-safe:fade-in motion-safe:duration-200"
       >
         {discovered && selection ? (
-          <DiscoveredUrlsPanel selection={selection} disabled={disabled} />
+          <DiscoveredUrlsPanel
+            selection={selection}
+            disabled={disabled}
+            hideUnselected={hideUnselected}
+          />
         ) : (
           results
         )}
@@ -76,13 +92,17 @@ export function WorkspacePanel({
   );
 }
 
-/** The discovered title-bar readout: origin · selected count + a select-all toggle. */
+/** The discovered title-bar readout: origin · selected count + curation toggles. */
 function DiscoveredReadout({
   selection,
   disabled,
+  hideUnselected,
+  onToggleHideUnselected,
 }: {
   selection: DiscoverySelection;
   disabled: boolean;
+  hideUnselected: boolean;
+  onToggleHideUnselected: () => void;
 }) {
   const { result, selected, toggleAll } = selection;
   const total = result.urls.length;
@@ -91,6 +111,9 @@ function DiscoveredReadout({
     0,
   );
   const allSelected = total > 0 && selectedCount === total;
+  // Only meaningful when there's something to hide — or while a filter is
+  // already applied (so the user can always toggle it back off).
+  const showHideToggle = hideUnselected || selectedCount < total;
 
   return (
     <div className="flex items-center gap-3">
@@ -104,7 +127,41 @@ function DiscoveredReadout({
         {" · "}
         <span className="text-foreground tabular-nums">{selectedCount}</span> of{" "}
         <span className="tabular-nums">{total}</span> selected
+        {hideUnselected ? (
+          <span className="text-primary"> · filtered</span>
+        ) : null}
       </p>
+      {showHideToggle ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={onToggleHideUnselected}
+          disabled={disabled}
+          aria-pressed={hideUnselected}
+          title={
+            hideUnselected
+              ? "Show every discovered URL again"
+              : "Hide the unchecked URLs and show only the selected ones"
+          }
+          className={cn(
+            "font-mono text-[0.65rem] uppercase tracking-[0.18em]",
+            hideUnselected && "text-primary hover:text-primary",
+          )}
+        >
+          {hideUnselected ? (
+            <>
+              <Eye data-icon="inline-start" />
+              Show all
+            </>
+          ) : (
+            <>
+              <EyeOff data-icon="inline-start" />
+              Hide unselected
+            </>
+          )}
+        </Button>
+      ) : null}
       {total > 0 ? (
         <Button
           type="button"

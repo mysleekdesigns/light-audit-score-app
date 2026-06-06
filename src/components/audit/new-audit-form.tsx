@@ -14,6 +14,7 @@ import {
 import { parseUrls } from "@/lib/parseUrls";
 import type { CreateBatchRequest } from "@/lib/client/auditClient";
 import { selectedUrls, type DiscoverResult } from "@/lib/crawl/types";
+import { samplePerTemplate } from "@/lib/crawl/template";
 import { CrawlPanel } from "@/components/audit/crawl-panel";
 import {
   WorkspacePanel,
@@ -186,6 +187,9 @@ export function NewAuditForm({
   const [warmCache, setWarmCache] = useState(true);
   const [userAgentPreset, setUserAgentPreset] =
     useState<UserAgentPreset>("default");
+  // Per-template sampling cap for crawl discovery (0 = All). Persisted + shared
+  // with the PSI form; drives the auto-selection of the discovered set.
+  const [pagesPerTemplate, setPagesPerTemplate] = useState(0);
 
   // Seed device / runs / concurrency / categories from the persisted defaults
   // exactly once, the render after the hook has read localStorage (`loaded`
@@ -205,6 +209,7 @@ export function NewAuditForm({
     setAccuracyMode(defaults.accuracyMode);
     setWarmCache(defaults.warmCache);
     setUserAgentPreset(defaults.userAgentPreset);
+    setPagesPerTemplate(defaults.pagesPerTemplate);
   }
 
   const { urls: pastedUrls, invalid } = useMemo(() => parseUrls(text), [text]);
@@ -228,13 +233,29 @@ export function NewAuditForm({
     [latestBenchmarkIndex],
   );
 
-  // A fresh discovery: store the result, select everything by default (the user
-  // curates down), and point the workspace at the discovered table.
-  const handleDiscover = useCallback((result: DiscoverResult) => {
-    setCrawlResult(result);
-    setCrawlSelected(new Set(result.urls.map((u) => u.url)));
-    setWorkspaceView("discovered");
-  }, []);
+  // A fresh discovery: store the result, auto-select per the pages-per-template
+  // cap (All by default → everything; the user curates down), and point the
+  // workspace at the discovered table.
+  const handleDiscover = useCallback(
+    (result: DiscoverResult) => {
+      setCrawlResult(result);
+      setCrawlSelected(samplePerTemplate(result.urls, pagesPerTemplate));
+      setWorkspaceView("discovered");
+    },
+    [pagesPerTemplate],
+  );
+
+  // Changing the cap re-samples the discovered set from scratch (an explicit
+  // re-sample replaces any manual row tweaks — expected for this action) and
+  // remembers the choice for next time.
+  const handlePagesPerTemplateChange = useCallback(
+    (n: number) => {
+      setPagesPerTemplate(n);
+      update({ pagesPerTemplate: n });
+      if (crawlResult) setCrawlSelected(samplePerTemplate(crawlResult.urls, n));
+    },
+    [crawlResult, update],
+  );
 
   const toggleCrawlUrl = useCallback((url: string) => {
     setCrawlSelected((prev) => {
@@ -521,6 +542,8 @@ export function NewAuditForm({
                   <CrawlPanel
                     onDiscover={handleDiscover}
                     result={crawlResult}
+                    pagesPerTemplate={pagesPerTemplate}
+                    onPagesPerTemplateChange={handlePagesPerTemplateChange}
                     disabled={isRunning}
                   />
                 </TabsContent>

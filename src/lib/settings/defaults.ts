@@ -26,6 +26,10 @@ import {
   DEFAULT_CONCURRENCY,
 } from "@/lib/queue/types";
 import {
+  clampPagesPerTemplate,
+  PAGES_PER_TEMPLATE_ALL,
+} from "@/lib/crawl/template";
+import {
   type UserAgentPreset,
   sanitizeUserAgentPreset,
 } from "@/lib/lighthouse/user-agents";
@@ -84,6 +88,14 @@ export interface AuditDefaults {
    * key, resolved to a UA string only when assembling engine options.
    */
   userAgentPreset: UserAgentPreset;
+  /**
+   * Per-template sampling cap for crawl discovery: keep at most this many URLs
+   * per inferred path template (`/products/*`, `/blog/:id/*`). `0` =
+   * {@link PAGES_PER_TEMPLATE_ALL} = no sampling (select every discovered URL).
+   * A representative-coverage lever for big crawls; shared by the local + PSI
+   * forms. See `@/lib/crawl/template`.
+   */
+  pagesPerTemplate: number;
 }
 
 /** Every category defaults to the "good" bar (90). */
@@ -107,6 +119,8 @@ export const DEFAULT_AUDIT_DEFAULTS: AuditDefaults = {
   thresholds: { ...DEFAULT_THRESHOLDS },
   warmCache: true,
   userAgentPreset: "default",
+  // 0 = All: no per-template sampling until the user opts in.
+  pagesPerTemplate: PAGES_PER_TEMPLATE_ALL,
 };
 
 /**
@@ -142,6 +156,9 @@ export const MATCH_DEVTOOLS_PRESET: Partial<AuditDefaults> = {
  * v3 added resultsView (Phase 11).
  * v4 widened formFactor to DeviceSelection — it can now hold "both" (Phase 12).
  * v5 added warmCache + userAgentPreset (Best Practices parity levers).
+ * pagesPerTemplate was added on v5 without a bump — it is purely additive with a
+ * safe default (0 = All), so `normalizeDefaults` upgrades old blobs in place and
+ * users keep their tuned settings.
  */
 export const SETTINGS_STORAGE_KEY = "lighthouse:audit-defaults:v5";
 
@@ -223,6 +240,9 @@ export function normalizeDefaults(raw: unknown): AuditDefaults {
     // Default true: only an explicit stored `false` turns warm cache off.
     warmCache: source.warmCache !== false,
     userAgentPreset: sanitizeUserAgentPreset(source.userAgentPreset),
+    // Absent in older blobs → clamps to 0 (All), so the field is additive and
+    // back-compatible without a storage-key bump (see SETTINGS_STORAGE_KEY).
+    pagesPerTemplate: clampPagesPerTemplate(source.pagesPerTemplate),
   };
 }
 

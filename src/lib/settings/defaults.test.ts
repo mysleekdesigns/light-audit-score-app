@@ -201,6 +201,15 @@ describe("normalizeDefaults", () => {
     );
   });
 
+  it("normalizes pagesPerTemplate (additive, defaults to 0 = All)", () => {
+    // Absent in older blobs → 0 (All), so the field upgrades without a key bump.
+    expect(normalizeDefaults({}).pagesPerTemplate).toBe(0);
+    expect(DEFAULT_AUDIT_DEFAULTS.pagesPerTemplate).toBe(0);
+    // Honoured + clamped when present; garbage degrades to All.
+    expect(normalizeDefaults({ pagesPerTemplate: 3 }).pagesPerTemplate).toBe(3);
+    expect(normalizeDefaults({ pagesPerTemplate: "5" }).pagesPerTemplate).toBe(0);
+  });
+
   it("round-trips through serialize → JSON.parse → normalize", () => {
     const custom = normalizeDefaults({
       formFactor: "desktop",

@@ -36,6 +36,10 @@ import {
   MIN_PAGES,
   type DiscoverResult,
 } from "@/lib/crawl/types";
+import {
+  PAGES_PER_TEMPLATE_ALL,
+  PAGES_PER_TEMPLATE_OPTIONS,
+} from "@/lib/crawl/template";
 import { ApiError } from "@/lib/client/auditClient";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -69,6 +73,13 @@ function range(from: number, to: number): number[] {
 }
 
 const DEPTH_OPTIONS = range(MIN_DEPTH, MAX_DEPTH);
+
+/**
+ * Sentinel `<Select>` value for "no per-template sampling" — maps to
+ * {@link PAGES_PER_TEMPLATE_ALL} (0) on the way out. Select values must be
+ * non-empty strings, so the All option carries this rather than "0".
+ */
+const PPT_ALL_VALUE = "all";
 
 /**
  * Parse the exclude-paths textarea into a clean `string[]`: patterns split on
@@ -110,6 +121,13 @@ export interface CrawlPanelProps {
    * the compact in-tab diagnostics summary. Null until the first discovery.
    */
   result: DiscoverResult | null;
+  /**
+   * Per-template sampling cap (owned by the parent so it persists + drives the
+   * selection). `0` = {@link PAGES_PER_TEMPLATE_ALL} = keep every discovered URL.
+   */
+  pagesPerTemplate: number;
+  /** Sets the sampling cap; the parent re-samples the selection live. */
+  onPagesPerTemplateChange: (n: number) => void;
   /** Locks inputs while a batch from this form is running. */
   disabled?: boolean;
 }
@@ -117,11 +135,14 @@ export interface CrawlPanelProps {
 export function CrawlPanel({
   onDiscover,
   result,
+  pagesPerTemplate,
+  onPagesPerTemplateChange,
   disabled = false,
 }: CrawlPanelProps) {
   const seedId = useId();
   const depthId = useId();
   const pagesId = useId();
+  const templateId = useId();
   const scopeId = useId();
   const excludeId = useId();
 
@@ -239,7 +260,7 @@ export function CrawlPanel({
           </FieldDescription>
         </Field>
 
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4 sm:grid-cols-3">
           <Field>
             <FieldLabel htmlFor={depthId}>Crawl depth</FieldLabel>
             <Select
@@ -290,6 +311,42 @@ export function CrawlPanel({
             />
             <FieldDescription>
               Hard cap on discovered URLs ({MIN_PAGES}–{MAX_PAGES}).
+            </FieldDescription>
+          </Field>
+
+          <Field>
+            <FieldLabel htmlFor={templateId}>Pages / template</FieldLabel>
+            <Select
+              value={
+                pagesPerTemplate > 0 ? String(pagesPerTemplate) : PPT_ALL_VALUE
+              }
+              onValueChange={(value) =>
+                onPagesPerTemplateChange(
+                  value === PPT_ALL_VALUE ? PAGES_PER_TEMPLATE_ALL : Number(value),
+                )
+              }
+              disabled={disabled || isDiscovering}
+            >
+              <SelectTrigger
+                id={templateId}
+                className="w-full"
+                title="Sample at most N representative pages per URL template (e.g. /products/*) from the discovered set — keeps big crawls fast and (for PageSpeed) within quota."
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value={PPT_ALL_VALUE}>All pages</SelectItem>
+                  {PAGES_PER_TEMPLATE_OPTIONS.map((n) => (
+                    <SelectItem key={n} value={String(n)}>
+                      {n} per template
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <FieldDescription>
+              Auto-selects N pages per URL template.
             </FieldDescription>
           </Field>
         </div>

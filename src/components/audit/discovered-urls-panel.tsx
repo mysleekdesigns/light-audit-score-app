@@ -30,6 +30,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { DiscoverResult } from "@/lib/crawl/types";
+import { inferTemplate } from "@/lib/crawl/template";
 import { cn } from "@/lib/utils";
 
 /** Shared header label styling — matches the results table for visual parity. */
@@ -52,13 +53,23 @@ interface DiscoveredUrlsPanelProps {
   selection: DiscoverySelection;
   /** Locks the row controls while a batch from this form is running. */
   disabled?: boolean;
+  /** When true, render only the selected (checked) rows — the toolbar filter. */
+  hideUnselected?: boolean;
 }
 
 export function DiscoveredUrlsPanel({
   selection,
   disabled = false,
+  hideUnselected = false,
 }: DiscoveredUrlsPanelProps) {
   const { result, selected, toggleOne, removeOne } = selection;
+
+  // Apply the toolbar's "Hide unselected" filter (pairs with per-template
+  // sampling, which leaves most rows unchecked). Selection counts in the header
+  // still reflect the full set — this only narrows what the table renders.
+  const visibleUrls = hideUnselected
+    ? result.urls.filter((item) => selected.has(item.url))
+    : result.urls;
 
   // Empty discovery (valid origin, zero URLs): keep the dashed guidance card the
   // crawl tab used to show, now full-width inside the workspace.
@@ -74,6 +85,23 @@ export function DiscoveredUrlsPanel({
     );
   }
 
+  // Filtered down to nothing: the user hid unselected rows but has none selected.
+  if (visibleUrls.length === 0) {
+    return (
+      <div className="flex flex-col items-start gap-1 rounded-lg border border-dashed border-border/70 bg-muted/20 p-8">
+        <CircleSlash className="size-5 text-muted-foreground" />
+        <p className="text-sm font-medium text-foreground">
+          No selected URLs to show
+        </p>
+        <p className="text-sm text-muted-foreground">
+          Every discovered URL is unchecked. Use{" "}
+          <span className="font-medium text-foreground">Show all</span> above to
+          bring them back, then select the pages you want.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <Card className="overflow-hidden py-0">
       <Table>
@@ -83,6 +111,7 @@ export function DiscoveredUrlsPanel({
               <span className="sr-only">Selected</span>
             </TableHead>
             <TableHead className={cn(HEAD_LABEL, "w-full")}>URL</TableHead>
+            <TableHead className={HEAD_LABEL}>Template</TableHead>
             <TableHead className={HEAD_LABEL}>Source</TableHead>
             <TableHead className={cn(HEAD_LABEL, "text-right")}>Depth</TableHead>
             <TableHead className="w-10">
@@ -91,8 +120,9 @@ export function DiscoveredUrlsPanel({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {result.urls.map((item) => {
+          {visibleUrls.map((item) => {
             const isChecked = selected.has(item.url);
+            const template = inferTemplate(item.url);
             return (
               <TableRow key={item.url} className="hover:bg-muted/40">
                 <TableCell>
@@ -143,6 +173,14 @@ export function DiscoveredUrlsPanel({
                     )}
                   >
                     {item.url.replace(/^https?:\/\//, "")}
+                  </span>
+                </TableCell>
+                <TableCell>
+                  <span
+                    title={`Template: ${template}`}
+                    className="block max-w-[14rem] truncate font-mono text-xs text-muted-foreground"
+                  >
+                    {template}
                   </span>
                 </TableCell>
                 <TableCell>

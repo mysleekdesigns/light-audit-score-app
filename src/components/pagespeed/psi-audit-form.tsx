@@ -65,6 +65,8 @@ import {
 } from "@/lib/queue/types";
 import type { ScheduleTarget } from "@/lib/schedules/types";
 import { selectedUrls, type DiscoverResult } from "@/lib/crawl/types";
+import { samplePerTemplate } from "@/lib/crawl/template";
+import { useAuditDefaults } from "@/hooks/useAuditDefaults";
 import { CATEGORY_LABELS } from "@/lib/scores";
 
 /** Sentinel `<Select>` value for "no locale override" (PSI default). */
@@ -134,6 +136,16 @@ export function PsiAuditForm({
   const [runs, setRuns] = useState<number>(3);
   const [concurrency, setConcurrency] = useState<number>(DEFAULT_CONCURRENCY);
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  // Per-template sampling cap (0 = All) — the one persisted, cross-tool default
+  // this lean form shares with the local audit form. Hydrated below once the
+  // settings hook has read localStorage (guarded so SSR stays on the default).
+  const { defaults, update, loaded } = useAuditDefaults();
+  const [pagesPerTemplate, setPagesPerTemplate] = useState(0);
+  const [hydrated, setHydrated] = useState(false);
+  if (loaded && !hydrated) {
+    setHydrated(true);
+    setPagesPerTemplate(defaults.pagesPerTemplate);
+  }
 
   const { urls: pastedUrls, invalid } = useMemo(() => parseUrls(text), [text]);
   // Crawl tab URLs = the selected subset of the discovered set, discovery order.
@@ -165,11 +177,24 @@ export function PsiAuditForm({
     [urls],
   );
 
-  const handleDiscover = useCallback((result: DiscoverResult) => {
-    setCrawlResult(result);
-    setCrawlSelected(new Set(result.urls.map((u) => u.url)));
-    setWorkspaceView("discovered");
-  }, []);
+  const handleDiscover = useCallback(
+    (result: DiscoverResult) => {
+      setCrawlResult(result);
+      setCrawlSelected(samplePerTemplate(result.urls, pagesPerTemplate));
+      setWorkspaceView("discovered");
+    },
+    [pagesPerTemplate],
+  );
+
+  // Re-sample the discovered set when the cap changes, and remember the choice.
+  const handlePagesPerTemplateChange = useCallback(
+    (n: number) => {
+      setPagesPerTemplate(n);
+      update({ pagesPerTemplate: n });
+      if (crawlResult) setCrawlSelected(samplePerTemplate(crawlResult.urls, n));
+    },
+    [crawlResult, update],
+  );
 
   const toggleCrawlUrl = useCallback((url: string) => {
     setCrawlSelected((prev) => {
@@ -332,6 +357,8 @@ export function PsiAuditForm({
                   <CrawlPanel
                     onDiscover={handleDiscover}
                     result={crawlResult}
+                    pagesPerTemplate={pagesPerTemplate}
+                    onPagesPerTemplateChange={handlePagesPerTemplateChange}
                     disabled={isRunning}
                   />
                 </TabsContent>
