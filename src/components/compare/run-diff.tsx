@@ -1,7 +1,13 @@
 "use client";
 
-import { ArrowDown, ArrowUp, ExternalLink, Minus } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 
+import {
+  DeltaArrow,
+  deltaClass,
+  deltaSrLabel,
+  formatDelta,
+} from "@/components/compare/score-delta";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,56 +30,6 @@ import {
 } from "@/lib/compare/diff";
 
 const HEAD_LABEL = "font-mono text-[0.7rem] uppercase tracking-[0.16em]";
-const IMPROVED = "text-score-good";
-const REGRESSED = "text-score-poor";
-const NEUTRAL = "text-muted-foreground";
-
-/** Format a signed numeric delta for display (rounded, with sign), or em dash. */
-function formatDelta(delta: number | null, fractionDigits = 0): string {
-  if (delta === null) return "—";
-  if (delta === 0) return "±0";
-  const rounded =
-    fractionDigits > 0
-      ? Number(delta.toFixed(fractionDigits))
-      : Math.round(delta);
-  if (rounded === 0) return "±0";
-  return `${rounded > 0 ? "+" : ""}${rounded}`;
-}
-
-/** A direction arrow paired with text — colour is never the sole signal. */
-function DeltaArrow({
-  improved,
-  flat,
-}: {
-  improved: boolean | null;
-  /** True when there is a real delta of exactly 0 (vs. a missing value). */
-  flat: boolean;
-}) {
-  if (improved === null) {
-    return flat ? (
-      <Minus aria-hidden className="size-3 shrink-0 text-muted-foreground" />
-    ) : null;
-  }
-  const Icon = improved ? ArrowUp : ArrowDown;
-  return (
-    <Icon
-      aria-hidden
-      className={cn("size-3 shrink-0", improved ? IMPROVED : REGRESSED)}
-    />
-  );
-}
-
-/** Colour class for a delta cell given improvement state. */
-function deltaClass(improved: boolean | null): string {
-  if (improved === null) return NEUTRAL;
-  return improved ? IMPROVED : REGRESSED;
-}
-
-/** Screen-reader text describing a delta's direction. */
-function deltaSrLabel(improved: boolean | null, flat: boolean): string {
-  if (improved === null) return flat ? "no change" : "not comparable";
-  return improved ? "improved" : "regressed";
-}
 
 /** One category-score diff row. Higher score is better → up arrow = improvement. */
 function ScoreRow({ diff }: { diff: ScoreDiff }) {

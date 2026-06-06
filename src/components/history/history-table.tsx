@@ -9,6 +9,7 @@ import {
   ChevronsUpDown,
   ExternalLink,
   FileJson,
+  Filter,
   Search,
   Sheet,
   Trash2,
@@ -20,6 +21,7 @@ import { EnvironmentBadge } from "@/components/audit/environment-badge";
 import { RerunBatchButton } from "@/components/audit/rerun-batch-button";
 import { ResultsViewToggle } from "@/components/audit/results-view-toggle";
 import { ScoreRings } from "@/components/audit/score-rings";
+import { ScoreDelta } from "@/components/compare/score-delta";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -56,6 +58,7 @@ import {
   reportHtmlUrl,
   reportJsonUrl,
 } from "@/lib/client/auditClient";
+import { diffScores, type ScoreDiff } from "@/lib/compare/diff";
 import type { HistoryRow } from "@/lib/db/persistence";
 import {
   downloadCsv,
@@ -63,11 +66,17 @@ import {
   openUrlsInNewTabs,
   timestampSlug,
 } from "@/lib/export/download";
+import { collapseRuns, type CollapsedRun } from "@/lib/history/collapse";
 import type { DevicePair } from "@/lib/pairing/devicePairs";
 import { hasBothDevices, pairByDevice } from "@/lib/pairing/devicePairs";
 import { rowsToCsv, rowsToJson } from "@/lib/export/exporters";
 import type { LighthouseCategory } from "@/lib/lighthouse/types";
-import { CATEGORY_SHORT_LABELS, formatScore, scoreColorClass } from "@/lib/scores";
+import {
+  CATEGORY_SHORT_LABELS,
+  formatScore,
+  GOOD_THRESHOLD,
+  scoreColorClass,
+} from "@/lib/scores";
 import { cn } from "@/lib/utils";
 
 /** The four score columns, in PRD display order, paired with their sort keys. */
@@ -87,6 +96,13 @@ type SortDirection = "asc" | "desc";
 
 /** Shared header label styling — mono, uppercase, tracked, matching the house style. */
 const HEAD_LABEL = "font-mono text-[0.7rem] uppercase tracking-[0.16em]";
+
+/**
+ * Right padding for score column headers, matching the `ScoreCell` trend slot
+ * (w-4 + gap-1) so each category label stays right-aligned over its numbers
+ * rather than over the trailing trend arrow.
+ */
+const SCORE_HEAD = "pr-5";
 
 /**
  * Compact cell padding for the densified archive — tighter vertical rhythm than
@@ -118,6 +134,79 @@ function compareScores(
   if (aNull) return 1; // a sinks
   if (bNull) return -1; // b sinks
   return a - b;
+}
+
+/**
+ * Section rank for the grouped "by URL" ordering: 0 = the site root / homepage,
+ * 1 = other public pages, 2 = the blog and all its sub-pages. Combined with host
+ * and path this sorts the bare domain to the top, ordinary pages next, and the
+ * blog (with every sub-category) last — the way the archive organises by default.
+ * Falls back to treating the raw string as its own key for non-URL inputs.
+ */
+function urlGroupKey(raw: string): { host: string; section: number; path: string } {
+  try {
+    const u = new URL(raw);
+    const host = u.host.replace(/^www\./, "").toLowerCase();
+    const path = ((u.pathname || "/").replace(/\/+$/, "") || "/").toLowerCase();
+    const section =
+      path === "/" ? 0 : path === "/blog" || path.startsWith("/blog/") ? 2 : 1;
+    return { host, section, path };
+  } catch {
+    const fallback = raw.toLowerCase();
+    return { host: fallback, section: 1, path: fallback };
+  }
+}
+
+/** Compare two URLs by the grouped ordering (host → section → path, numeric-aware). */
+function compareUrlGroup(a: string, b: string): number {
+  const ka = urlGroupKey(a);
+  const kb = urlGroupKey(b);
+  if (ka.host !== kb.host) return ka.host.localeCompare(kb.host);
+  if (ka.section !== kb.section) return ka.section - kb.section;
+  return ka.path.localeCompare(kb.path, undefined, { numeric: true });
+}
+
+/**
+ * A run "passes" the Needs-work gate only when every category is present and at
+ * or above the green threshold (90). Errored runs never pass.
+ */
+function rowPasses(row: HistoryRow): boolean {
+  if (row.status === "error") return false;
+  return SCORE_COLUMNS.every(({ category }) => {
+    const value = row.scores[category];
+    return value != null && value >= GOOD_THRESHOLD;
+  });
+}
+
+/** A run "needs work" when it failed or any category scores below 90. */
+function rowNeedsWork(row: HistoryRow): boolean {
+  return !rowPasses(row);
+}
+
+/**
+ * A paired URL needs work when any audited device side needs work. A side that
+ * wasn't audited (null) is ignored; a pair always has at least its `primary`.
+ */
+function pairNeedsWork(pair: DevicePair<CollapsedRun>): boolean {
+  const sides = [pair.mobile, pair.desktop].filter(
+    (entry): entry is CollapsedRun => entry != null,
+  );
+  return sides.some((entry) => rowNeedsWork(entry.latest));
+}
+
+/**
+ * Per-category score deltas between a series' previous and latest run, indexed by
+ * category for direct cell lookup. Returns null when there's nothing to compare
+ * (a first run, or the latest failed) so the trend simply doesn't render.
+ */
+function entryScoreDiffs(
+  entry: CollapsedRun,
+): Partial<Record<LighthouseCategory, ScoreDiff>> | null {
+  if (!entry.previous || entry.latest.status === "error") return null;
+  const diffs = diffScores(entry.previous.scores, entry.latest.scores);
+  const byCategory: Partial<Record<LighthouseCategory, ScoreDiff>> = {};
+  for (const diff of diffs) byCategory[diff.category] = diff;
+  return byCategory;
 }
 
 interface SortState {
@@ -199,24 +288,40 @@ function SourceBadge({ source }: { source: HistoryRow["source"] }) {
   );
 }
 
-/** A single score cell: mono, tabular, colour-banded. */
+/**
+ * A single score cell: mono, tabular, colour-banded, with the latest score and —
+ * when the page was audited before — a compact trend (arrow + signed delta vs the
+ * previous run) sitting to its right. The trend occupies a fixed-width slot so the
+ * score column stays right-aligned whether or not a delta is present; the slot
+ * renders content only when the score actually moved. Pair the matching
+ * {@link SCORE_HEAD} padding on the column header so the label stays over the
+ * numbers.
+ */
 function ScoreCell({
   score,
+  diff,
   className,
 }: {
   score: number | null | undefined;
+  diff?: ScoreDiff | null;
   className?: string;
 }) {
   const value = score ?? null;
   return (
     <TableCell className={cn(COMPACT_CELL, "text-right", className)}>
-      <span
-        className={cn(
-          "font-mono text-sm tabular-nums",
-          scoreColorClass(value),
-        )}
-      >
-        {formatScore(value)}
+      <span className="inline-flex items-baseline justify-end gap-1">
+        <span className={cn("font-mono text-sm tabular-nums", scoreColorClass(value))}>
+          {formatScore(value)}
+        </span>
+        <span className="inline-flex w-4 justify-start">
+          {diff ? (
+            <ScoreDelta
+              direction={diff.direction}
+              delta={diff.delta}
+              title={`Previous run: ${formatScore(diff.baseline)} → now ${formatScore(diff.comparison)}`}
+            />
+          ) : null}
+        </span>
       </span>
     </TableCell>
   );
@@ -473,17 +578,57 @@ function HistoryEmptyState({ isFiltering }: { isFiltering: boolean }) {
       </p>
       <p className="max-w-sm text-sm text-muted-foreground">
         {isFiltering
-          ? "No persisted run matches that URL filter."
+          ? "No persisted run matches the current filters."
           : "Completed runs are persisted here automatically. Run an audit to populate the archive."}
       </p>
     </div>
   );
 }
 
-/** A single ring-card for the cards view — the History analogue of the live result card. */
-function HistoryRunCard({ row }: { row: HistoryRow }) {
-  const href = row.finalUrl ?? row.url;
-  const isError = row.status === "error";
+/** Quiet caption styling for the "first run" / "no change" trend notes. */
+const TREND_CAPTION =
+  "font-mono text-[0.625rem] uppercase tracking-[0.16em] text-muted-foreground/60";
+
+/**
+ * A compact "since last run" trend strip for the cards view: only the categories
+ * that actually moved, each as a short label + arrow + signed delta. Falls back
+ * to a quiet caption when the page is brand-new or unchanged since its last run.
+ */
+function ScoreTrendStrip({
+  diffs,
+}: {
+  diffs: Partial<Record<LighthouseCategory, ScoreDiff>> | null;
+}) {
+  if (!diffs) return <p className={TREND_CAPTION}>First run · nothing to compare</p>;
+
+  const moved = SCORE_COLUMNS.map(({ category }) => diffs[category]).filter(
+    (diff): diff is ScoreDiff =>
+      diff != null && (diff.direction === "up" || diff.direction === "down"),
+  );
+  if (moved.length === 0)
+    return <p className={TREND_CAPTION}>No change since last run</p>;
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <span className={TREND_CAPTION}>vs last</span>
+      {moved.map((diff) => (
+        <span key={diff.category} className="inline-flex items-center gap-1">
+          <span className="font-mono text-[0.625rem] uppercase tracking-[0.14em] text-muted-foreground">
+            {CATEGORY_SHORT_LABELS[diff.category]}
+          </span>
+          <ScoreDelta direction={diff.direction} delta={diff.delta} />
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** A single ring-card for the cards view — the latest run of one page, with its trend. */
+function HistoryRunCard({ entry }: { entry: CollapsedRun }) {
+  const { latest } = entry;
+  const href = latest.finalUrl ?? latest.url;
+  const isError = latest.status === "error";
+  const diffs = entryScoreDiffs(entry);
 
   return (
     <Card size="sm" className="ring-foreground/10">
@@ -496,7 +641,7 @@ function HistoryRunCard({ row }: { row: HistoryRow }) {
               rel="noopener noreferrer"
               className="block truncate font-mono text-xs text-foreground underline-offset-4 outline-none hover:text-primary hover:underline focus-visible:ring-3 focus-visible:ring-ring/50"
             >
-              {row.url}
+              {latest.url}
             </a>
           </TooltipTrigger>
           <TooltipContent className="font-mono">{href}</TooltipContent>
@@ -506,14 +651,14 @@ function HistoryRunCard({ row }: { row: HistoryRow }) {
             variant="outline"
             className="font-mono text-[0.65rem] uppercase tracking-[0.12em] text-muted-foreground"
           >
-            {row.formFactor}
+            {latest.formFactor}
           </Badge>
-          <SourceBadge source={row.source} />
+          <SourceBadge source={latest.source} />
           <span
-            title={row.createdAt}
+            title={latest.createdAt}
             className="font-mono text-[0.65rem] tabular-nums text-muted-foreground"
           >
-            {formatRunAt(row.createdAt)}
+            {formatRunAt(latest.createdAt)}
           </span>
         </div>
       </CardHeader>
@@ -527,37 +672,38 @@ function HistoryRunCard({ row }: { row: HistoryRow }) {
               Failed
             </Badge>
             <span className="text-xs text-muted-foreground">
-              {row.errorMessage ?? "Unknown error"}
+              {latest.errorMessage ?? "Unknown error"}
             </span>
           </div>
         ) : (
           <>
-            <ScoreRings scores={row.scores} size={48} />
-            {row.metrics ? (
-              <CoreWebVitalsStrip metrics={row.metrics} />
+            <ScoreRings scores={latest.scores} size={48} />
+            <ScoreTrendStrip diffs={diffs} />
+            {latest.metrics ? (
+              <CoreWebVitalsStrip metrics={latest.metrics} />
             ) : null}
           </>
         )}
-        {row.environment ? (
-          <EnvironmentBadge variant="compact" environment={row.environment} />
+        {latest.environment ? (
+          <EnvironmentBadge variant="compact" environment={latest.environment} />
         ) : null}
         <div className="flex items-center justify-end">
-          <RowActions row={row} />
+          <RowActions row={latest} />
         </div>
       </CardContent>
     </Card>
   );
 }
 
-/** The ring-card grid over the same filtered + sorted rows as the table. */
+/** The ring-card grid over the same de-duplicated, filtered + sorted pages as the table. */
 function HistoryCardsView({
-  rows,
+  entries,
   isFiltering,
 }: {
-  rows: HistoryRow[];
+  entries: CollapsedRun[];
   isFiltering: boolean;
 }) {
-  if (rows.length === 0) {
+  if (entries.length === 0) {
     return (
       <Card className="overflow-hidden">
         <HistoryEmptyState isFiltering={isFiltering} />
@@ -566,9 +712,9 @@ function HistoryCardsView({
   }
   return (
     <ul className="grid list-none gap-4 p-0 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-      {rows.map((row) => (
-        <li key={row.id}>
-          <HistoryRunCard row={row} />
+      {entries.map((entry) => (
+        <li key={entry.latest.id}>
+          <HistoryRunCard entry={entry} />
         </li>
       ))}
     </ul>
@@ -576,34 +722,35 @@ function HistoryCardsView({
 }
 
 // --- Paired (Mobile + Desktop per URL) views -------------------------------
-// Mirror the PageSpeed page: when the visible runs span both devices, fold each
-// URL's mobile + desktop run into a single entry. Pairing is scoped per batch so
-// the same URL audited in two different batches never collides (see devicePairs).
+// Mirror the PageSpeed page: when the archive spans both devices, fold each URL's
+// (already de-duplicated) mobile + desktop series into a single entry. Pairing is
+// scoped per engine + URL so a page audited both locally and via PSI stays
+// separate, and each side carries its own "since last run" trend.
 
 /** Mono uppercase device caption ("Mobile" / "Desktop"), matching the house label style. */
 const DEVICE_LABEL =
   "font-mono text-[0.625rem] uppercase tracking-[0.18em] text-muted-foreground";
 
 /**
- * Pair the rows into per-URL `{ mobile, desktop }` couples, grouped by `batchId`
- * first so the same URL run in two batches stays separate. Input order (newest
- * first from `listHistory`) is preserved across both the batch grouping and the
- * pairing, so the paired list stays newest-first.
+ * Pair collapsed series into per-URL `{ mobile, desktop }` couples, grouped by
+ * engine + URL first so the same page audited via two engines stays separate.
+ * Input order is preserved across the grouping and pairing (callers re-sort).
  */
-function pairHistoryRows(rows: HistoryRow[]): DevicePair<HistoryRow>[] {
-  const byBatch = new Map<string, HistoryRow[]>();
-  for (const row of rows) {
-    const group = byBatch.get(row.batchId);
-    if (group) group.push(row);
-    else byBatch.set(row.batchId, [row]);
+function pairCollapsedRuns(entries: CollapsedRun[]): DevicePair<CollapsedRun>[] {
+  const byKey = new Map<string, CollapsedRun[]>();
+  for (const entry of entries) {
+    const key = `${entry.latest.source} ${entry.latest.url}`;
+    const group = byKey.get(key);
+    if (group) group.push(entry);
+    else byKey.set(key, [entry]);
   }
-  const pairs: DevicePair<HistoryRow>[] = [];
-  for (const group of byBatch.values()) {
+  const pairs: DevicePair<CollapsedRun>[] = [];
+  for (const group of byKey.values()) {
     pairs.push(
       ...pairByDevice(
         group,
-        (row) => row.url,
-        (row) => row.formFactor,
+        (entry) => entry.latest.url,
+        (entry) => entry.latest.formFactor,
       ),
     );
   }
@@ -611,19 +758,21 @@ function pairHistoryRows(rows: HistoryRow[]): DevicePair<HistoryRow>[] {
 }
 
 /**
- * One device's section within a {@link PairedHistoryCard}: a device caption, then
- * the rings + CWV + environment (done), the failure line (error), or an em-dash
- * note when this URL wasn't audited on this device. Each present device keeps its
- * own re-run / report / delete actions.
+ * One device's section within a {@link PairedHistoryCard}: a device caption (with
+ * a run-count marker), then the rings + trend + CWV + environment (done), the
+ * failure line (error), or an em-dash note when this URL wasn't audited on this
+ * device. Each present device keeps its own re-run / report / delete actions.
  */
 function HistoryDeviceSection({
   device,
-  row,
+  entry,
 }: {
   device: "Mobile" | "Desktop";
-  row: HistoryRow | null;
+  entry: CollapsedRun | null;
 }) {
-  const isError = row?.status === "error";
+  const latest = entry?.latest ?? null;
+  const isError = latest?.status === "error";
+  const diffs = entry ? entryScoreDiffs(entry) : null;
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-2">
@@ -637,26 +786,27 @@ function HistoryDeviceSection({
           </Badge>
         ) : null}
       </div>
-      {!row ? (
+      {!latest ? (
         <p className="font-mono text-xs text-muted-foreground/50">
           Not audited on {device.toLowerCase()}
         </p>
       ) : isError ? (
         <p className="text-xs text-muted-foreground">
-          {row.errorMessage ?? "Unknown error"}
+          {latest.errorMessage ?? "Unknown error"}
         </p>
       ) : (
         <>
-          <ScoreRings scores={row.scores} size={48} />
-          {row.metrics ? <CoreWebVitalsStrip metrics={row.metrics} /> : null}
-          {row.environment ? (
-            <EnvironmentBadge variant="compact" environment={row.environment} />
+          <ScoreRings scores={latest.scores} size={48} />
+          <ScoreTrendStrip diffs={diffs} />
+          {latest.metrics ? <CoreWebVitalsStrip metrics={latest.metrics} /> : null}
+          {latest.environment ? (
+            <EnvironmentBadge variant="compact" environment={latest.environment} />
           ) : null}
         </>
       )}
-      {row ? (
+      {latest ? (
         <div className="flex items-center justify-end">
-          <RowActions row={row} />
+          <RowActions row={latest} />
         </div>
       ) : null}
     </div>
@@ -664,8 +814,8 @@ function HistoryDeviceSection({
 }
 
 /** A paired ring-card: one card per URL carrying both device ring-sets, stacked. */
-function PairedHistoryCard({ pair }: { pair: DevicePair<HistoryRow> }) {
-  const { primary } = pair;
+function PairedHistoryCard({ pair }: { pair: DevicePair<CollapsedRun> }) {
+  const primary = pair.primary.latest;
   const href = primary.finalUrl ?? primary.url;
   return (
     <Card size="sm" className="ring-foreground/10">
@@ -694,20 +844,20 @@ function PairedHistoryCard({ pair }: { pair: DevicePair<HistoryRow> }) {
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <HistoryDeviceSection device="Mobile" row={pair.mobile} />
+        <HistoryDeviceSection device="Mobile" entry={pair.mobile} />
         <div className="border-t border-border/50" />
-        <HistoryDeviceSection device="Desktop" row={pair.desktop} />
+        <HistoryDeviceSection device="Desktop" entry={pair.desktop} />
       </CardContent>
     </Card>
   );
 }
 
-/** The paired ring-card grid over the same filtered rows as the paired table. */
+/** The paired ring-card grid over the same de-duplicated pages as the paired table. */
 function PairedHistoryCardsView({
   pairs,
   isFiltering,
 }: {
-  pairs: DevicePair<HistoryRow>[];
+  pairs: DevicePair<CollapsedRun>[];
   isFiltering: boolean;
 }) {
   if (pairs.length === 0) {
@@ -720,7 +870,7 @@ function PairedHistoryCardsView({
   return (
     <ul className="grid list-none gap-4 p-0 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
       {pairs.map((pair) => (
-        <li key={pair.primary.id}>
+        <li key={pair.primary.latest.id}>
           <PairedHistoryCard pair={pair} />
         </li>
       ))}
@@ -735,14 +885,15 @@ function PairedHistoryCardsView({
  * but keeps its actions. `borderless` drops the left hairline on the mobile half.
  */
 function HistoryDeviceHalf({
-  row,
+  entry,
   borderless = false,
 }: {
-  row: HistoryRow | null;
+  entry: CollapsedRun | null;
   borderless?: boolean;
 }) {
   const edge = borderless ? undefined : "border-l border-border/50";
-  if (!row) {
+  const latest = entry?.latest ?? null;
+  if (!latest) {
     return (
       <>
         {SCORE_COLUMNS.map(({ category }, i) => (
@@ -759,27 +910,29 @@ function HistoryDeviceHalf({
       </>
     );
   }
-  if (row.status === "error") {
+  if (latest.status === "error") {
     return (
       <>
-        <FailedCell message={row.errorMessage} className={edge} />
+        <FailedCell message={latest.errorMessage} className={edge} />
         <TableCell className={cn(COMPACT_CELL, "text-right")}>
-          <RowActions row={row} />
+          <RowActions row={latest} />
         </TableCell>
       </>
     );
   }
+  const diffs = entry ? entryScoreDiffs(entry) : null;
   return (
     <>
       {SCORE_COLUMNS.map(({ category }, i) => (
         <ScoreCell
           key={category}
-          score={row.scores[category]}
+          score={latest.scores[category]}
+          diff={diffs?.[category]}
           className={i === 0 ? edge : undefined}
         />
       ))}
       <TableCell className={cn(COMPACT_CELL, "text-right")}>
-        <RowActions row={row} />
+        <RowActions row={latest} />
       </TableCell>
     </>
   );
@@ -788,16 +941,17 @@ function HistoryDeviceHalf({
 /**
  * The paired archive table: one row per URL with the four category scores shown
  * twice under a two-level "Mobile | Desktop" header (matching the PageSpeed page).
- * Each device half carries its own re-run / report / delete actions; a missing
- * device shows em dashes. Score columns aren't sortable in this mode — a single
- * sort can't disambiguate the two devices — but the URL filter still applies and
- * rows stay newest-first.
+ * Each device half carries its own re-run / report / delete actions plus a
+ * compact "since last run" trend under each score; a missing device shows em
+ * dashes. Score columns aren't sortable in this mode — a single sort can't
+ * disambiguate the two devices — but the URL filter still applies and rows stay
+ * in the grouped "by URL" order.
  */
 function PairedHistoryTableView({
   pairs,
   isFiltering,
 }: {
-  pairs: DevicePair<HistoryRow>[];
+  pairs: DevicePair<CollapsedRun>[];
   isFiltering: boolean;
 }) {
   // URL + (4 scores + actions) × 2 devices + Run at.
@@ -830,7 +984,7 @@ function PairedHistoryTableView({
           {/* Sub-header: the four category short-labels + a report slot, per device. */}
           <TableRow className="hover:bg-transparent">
             {SCORE_COLUMNS.map(({ category }) => (
-              <TableHead key={`m-${category}`} className={cn(HEAD_LABEL, "text-right")}>
+              <TableHead key={`m-${category}`} className={cn(HEAD_LABEL, "text-right", SCORE_HEAD)}>
                 {CATEGORY_SHORT_LABELS[category]}
               </TableHead>
             ))}
@@ -840,7 +994,7 @@ function PairedHistoryTableView({
             {SCORE_COLUMNS.map(({ category }, i) => (
               <TableHead
                 key={`d-${category}`}
-                className={cn(HEAD_LABEL, "text-right", i === 0 && "border-l border-border/50")}
+                className={cn(HEAD_LABEL, "text-right", SCORE_HEAD, i === 0 && "border-l border-border/50")}
               >
                 {CATEGORY_SHORT_LABELS[category]}
               </TableHead>
@@ -859,9 +1013,10 @@ function PairedHistoryTableView({
             </TableRow>
           ) : (
             pairs.map((pair) => {
-              const href = pair.primary.finalUrl ?? pair.primary.url;
+              const primary = pair.primary.latest;
+              const href = primary.finalUrl ?? primary.url;
               return (
-                <TableRow key={pair.primary.id} className="hover:bg-muted/40">
+                <TableRow key={primary.id} className="hover:bg-muted/40">
                   <TableCell className={cn(COMPACT_CELL, "max-w-0")}>
                     <div className="flex items-center gap-1.5">
                       <Tooltip>
@@ -877,17 +1032,17 @@ function PairedHistoryTableView({
                         </TooltipTrigger>
                         <TooltipContent className="font-mono">{href}</TooltipContent>
                       </Tooltip>
-                      <SourceBadge source={pair.primary.source} />
+                      <SourceBadge source={primary.source} />
                     </div>
                   </TableCell>
-                  <HistoryDeviceHalf row={pair.mobile} borderless />
-                  <HistoryDeviceHalf row={pair.desktop} />
+                  <HistoryDeviceHalf entry={pair.mobile} borderless />
+                  <HistoryDeviceHalf entry={pair.desktop} />
                   <TableCell className={COMPACT_CELL}>
                     <span
-                      title={pair.primary.createdAt}
+                      title={primary.createdAt}
                       className="font-mono text-xs tabular-nums text-muted-foreground"
                     >
-                      {formatRunAt(pair.primary.createdAt)}
+                      {formatRunAt(primary.createdAt)}
                     </span>
                   </TableCell>
                 </TableRow>
@@ -906,19 +1061,23 @@ interface HistoryTableProps {
 
 /**
  * Sortable + filterable archive of every persisted run. All sorting/filtering
- * happens in-browser over the rows passed from the server (no fetching). Sort by
- * URL, any of the four category scores (nulls last), or run time; filter by URL
- * substring.
+ * happens in-browser over the rows passed from the server (no fetching). Defaults
+ * to a grouped "by URL" order (site root → other public pages → blog and its
+ * sub-pages, alphabetical within each); the headers still re-sort by URL, any of
+ * the four category scores (nulls last), or run time. Filter by URL substring,
+ * and/or flip the Needs-work toggle to hide everything that already scores 90+.
  */
 export function HistoryTable({ rows }: HistoryTableProps) {
   const filterId = useId();
   const { defaults, update } = useAuditDefaults();
   const view = defaults.resultsView;
   const [query, setQuery] = useState("");
-  // Default order matches `listHistory` (newest first).
+  // Hide URLs that passed every category at 90+, leaving only ones needing work.
+  const [needsWorkOnly, setNeedsWorkOnly] = useState(false);
+  // Default order groups by URL (root → pages → blog) rather than by run time.
   const [sort, setSort] = useState<SortState>({
-    key: "createdAt",
-    direction: "desc",
+    key: "url",
+    direction: "asc",
   });
 
   const handleSort = useCallback((key: SortKey) => {
@@ -930,70 +1089,122 @@ export function HistoryTable({ rows }: HistoryTableProps) {
     );
   }, []);
 
+  // De-duplicate first: one entry per (engine, device, URL) series — its latest
+  // run plus the prior run to diff against — so the archive shows a single row per
+  // page with a trend, not a stack of repeated runs.
+  const entries = useMemo(() => collapseRuns(rows), [rows]);
+
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
     const filtered = needle
-      ? rows.filter((row) => row.url.toLowerCase().includes(needle))
-      : rows;
+      ? entries.filter((entry) => entry.latest.url.toLowerCase().includes(needle))
+      : entries;
 
     const dir = sort.direction === "asc" ? 1 : -1;
     return filtered.toSorted((a, b) => {
-      let cmp: number;
+      const ra = a.latest;
+      const rb = b.latest;
       if (sort.key === "url") {
-        cmp = a.url.localeCompare(b.url);
-      } else if (sort.key === "createdAt") {
-        cmp = a.createdAt.localeCompare(b.createdAt);
-      } else {
-        // Score columns. Nulls always sink to the bottom regardless of sort
-        // direction; only the non-null vs non-null comparison is reversed.
-        const av = a.scores[sort.key];
-        const bv = b.scores[sort.key];
-        const aNull = av === null || av === undefined;
-        const bNull = bv === null || bv === undefined;
-        if (aNull || bNull) return compareScores(av, bv);
-        return compareScores(av, bv) * dir;
+        // Grouped order: site root, then other public pages, then the blog and
+        // its sub-pages — alphabetical within each section. Same URL (different
+        // engine/device) stays newest-first regardless of the sort direction.
+        const grouped = compareUrlGroup(ra.url, rb.url);
+        if (grouped !== 0) return grouped * dir;
+        return rb.createdAt.localeCompare(ra.createdAt);
       }
-      return cmp * dir;
+      if (sort.key === "createdAt") {
+        return ra.createdAt.localeCompare(rb.createdAt) * dir;
+      }
+      // Score columns. Nulls always sink to the bottom regardless of sort
+      // direction; only the non-null vs non-null comparison is reversed.
+      const av = ra.scores[sort.key];
+      const bv = rb.scores[sort.key];
+      const aNull = av === null || av === undefined;
+      const bNull = bv === null || bv === undefined;
+      if (aNull || bNull) return compareScores(av, bv);
+      return compareScores(av, bv) * dir;
     });
-  }, [rows, query, sort]);
+  }, [entries, query, sort]);
 
   // When the archive spans BOTH devices, mirror the PageSpeed page and fold each
-  // URL's mobile + desktop run into one paired entry. Single-device archives keep
-  // the original sortable one-row-per-run layout. The layout is decided from the
-  // full dataset (not the filtered `visible` set) so it doesn't flip mid-filter;
-  // the paired list itself reads from the (newest-first) `visible` rows. Score
-  // sorting is disabled in paired mode — a single sort can't disambiguate devices.
+  // URL's mobile + desktop series into one paired entry. Single-device archives
+  // keep the sortable one-row-per-page layout. The layout is decided from the full
+  // dataset (not the filtered `visible` set) so it doesn't flip mid-filter. Paired
+  // rows are re-sorted by the same grouped "by URL" rule as the flat table.
   const paired = useMemo(
     () => hasBothDevices(rows, (row) => row.formFactor),
     [rows],
   );
+  const basePairs = useMemo(() => {
+    if (!paired) return [];
+    return pairCollapsedRuns(visible).toSorted((a, b) => {
+      const grouped = compareUrlGroup(a.url, b.url);
+      if (grouped !== 0) return grouped;
+      return b.primary.latest.createdAt.localeCompare(a.primary.latest.createdAt);
+    });
+  }, [paired, visible]);
+
+  // "Needs work" gate: drop everything that passed every category at 90+, leaving
+  // only the pages that still need attention. Applied per-page in the flat layout
+  // and per-URL (any failing device side) in the paired layout.
+  const flatRows = useMemo(
+    () =>
+      needsWorkOnly
+        ? visible.filter((entry) => rowNeedsWork(entry.latest))
+        : visible,
+    [visible, needsWorkOnly],
+  );
   const pairs = useMemo(
-    () => (paired ? pairHistoryRows(visible) : []),
-    [paired, visible],
+    () => (needsWorkOnly ? basePairs.filter(pairNeedsWork) : basePairs),
+    [basePairs, needsWorkOnly],
   );
 
-  const isFiltering = query.trim().length > 0;
+  // How many pages still need work within the current URL filter (independent of
+  // the toggle itself) — surfaced on the toggle so its effect stays legible.
+  const needsWorkCount = useMemo(
+    () =>
+      paired
+        ? basePairs.filter(pairNeedsWork).length
+        : visible.filter((entry) => rowNeedsWork(entry.latest)).length,
+    [paired, basePairs, visible],
+  );
+
+  const isFiltering = query.trim().length > 0 || needsWorkOnly;
+
+  // The latest runs actually shown — and therefore exported / bulk-opened: the
+  // flat list in single-device mode, or both present sides of every visible pair.
+  const exportRows = useMemo<HistoryRow[]>(
+    () =>
+      paired
+        ? pairs.flatMap((pair) =>
+            [pair.mobile, pair.desktop]
+              .filter((entry): entry is CollapsedRun => entry != null)
+              .map((entry) => entry.latest),
+          )
+        : flatRows.map((entry) => entry.latest),
+    [paired, pairs, flatRows],
+  );
 
   // HTML reports for the visible rows that actually have one — for bulk-open.
   const openableHrefs = useMemo(
     () =>
-      visible
+      exportRows
         .filter((row) => row.status !== "error" && row.hasHtmlReport)
         .map((row) => reportHtmlUrl(row.id)),
-    [visible],
+    [exportRows],
   );
 
-  const hasRows = visible.length > 0;
+  const hasRows = exportRows.length > 0;
   const openableCount = openableHrefs.length;
 
   // Serialize in the handler (not on render) — exports the currently visible set.
   const exportJson = useCallback(() => {
-    downloadJson(`lighthouse-history-${timestampSlug()}.json`, rowsToJson(visible));
-  }, [visible]);
+    downloadJson(`lighthouse-history-${timestampSlug()}.json`, rowsToJson(exportRows));
+  }, [exportRows]);
 
   const exportCsv = useCallback(() => {
-    downloadCsv(`lighthouse-history-${timestampSlug()}.csv`, rowsToCsv(visible));
-  }, [visible]);
+    downloadCsv(`lighthouse-history-${timestampSlug()}.csv`, rowsToCsv(exportRows));
+  }, [exportRows]);
 
   const openAll = useCallback(() => {
     const opened = openUrlsInNewTabs(openableHrefs);
@@ -1032,6 +1243,33 @@ export function HistoryTable({ rows }: HistoryTableProps) {
           </div>
 
           <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+            {/* Hide everything already scoring 90+; keep only URLs needing work. */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant={needsWorkOnly ? "default" : "outline"}
+                  size="sm"
+                  aria-pressed={needsWorkOnly}
+                  disabled={rows.length === 0}
+                  onClick={() => setNeedsWorkOnly((prev) => !prev)}
+                >
+                  <Filter data-icon="inline-start" />
+                  Needs work
+                  {needsWorkCount > 0 ? (
+                    <span className="font-mono text-[0.7rem] tabular-nums opacity-80">
+                      {needsWorkCount}
+                    </span>
+                  ) : null}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">
+                {needsWorkOnly
+                  ? "Showing only URLs with a category below 90. Click to show all runs."
+                  : "Hide URLs that passed every category at 90+, leaving only the ones that need work."}
+              </TooltipContent>
+            </Tooltip>
+
             <ResultsViewToggle
               value={view}
               onChange={(next) => update({ resultsView: next })}
@@ -1058,7 +1296,7 @@ export function HistoryTable({ rows }: HistoryTableProps) {
                 </Button>
               </TooltipTrigger>
               <TooltipContent className="font-mono">
-                Export {visible.length} run{visible.length === 1 ? "" : "s"} · JSON
+                Export {exportRows.length} run{exportRows.length === 1 ? "" : "s"} · JSON
               </TooltipContent>
             </Tooltip>
             <Tooltip>
@@ -1076,7 +1314,7 @@ export function HistoryTable({ rows }: HistoryTableProps) {
                 </Button>
               </TooltipTrigger>
               <TooltipContent className="font-mono">
-                Export {visible.length} run{visible.length === 1 ? "" : "s"} · CSV
+                Export {exportRows.length} run{exportRows.length === 1 ? "" : "s"} · CSV
               </TooltipContent>
             </Tooltip>
             <Tooltip>
@@ -1106,11 +1344,17 @@ export function HistoryTable({ rows }: HistoryTableProps) {
           </div>
         </div>
 
+        {rows.length > 0 ? (
+          <p className="font-mono text-[0.7rem] uppercase tracking-[0.14em] text-muted-foreground/70">
+            Latest run per URL · trend shown vs the previous run
+          </p>
+        ) : null}
+
         {view === "cards" ? (
           paired ? (
             <PairedHistoryCardsView pairs={pairs} isFiltering={isFiltering} />
           ) : (
-            <HistoryCardsView rows={visible} isFiltering={isFiltering} />
+            <HistoryCardsView entries={flatRows} isFiltering={isFiltering} />
           )
         ) : paired ? (
           <PairedHistoryTableView pairs={pairs} isFiltering={isFiltering} />
@@ -1135,6 +1379,7 @@ export function HistoryTable({ rows }: HistoryTableProps) {
                     sort={sort}
                     onSort={handleSort}
                     numeric
+                    className={SCORE_HEAD}
                   />
                 ))}
                 <SortHeader
@@ -1149,7 +1394,7 @@ export function HistoryTable({ rows }: HistoryTableProps) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {visible.length === 0 ? (
+              {flatRows.length === 0 ? (
                 <TableRow className="hover:bg-transparent">
                   <TableCell colSpan={8} className="h-64 p-0">
                     <div className="flex flex-col items-center justify-center gap-3 text-center">
@@ -1161,15 +1406,17 @@ export function HistoryTable({ rows }: HistoryTableProps) {
                       </p>
                       <p className="max-w-sm text-sm text-muted-foreground">
                         {isFiltering
-                          ? "No persisted run matches that URL filter."
+                          ? "No persisted run matches the current filters."
                           : "Completed runs are persisted here automatically. Run an audit to populate the archive."}
                       </p>
                     </div>
                   </TableCell>
                 </TableRow>
               ) : (
-                visible.map((row) => {
+                flatRows.map((entry) => {
+                  const row = entry.latest;
                   const href = row.finalUrl ?? row.url;
+                  const diffs = entryScoreDiffs(entry);
                   return (
                     <TableRow key={row.id} className="hover:bg-muted/40">
                       <TableCell className={cn(COMPACT_CELL, "max-w-0")}>
@@ -1207,6 +1454,7 @@ export function HistoryTable({ rows }: HistoryTableProps) {
                           <ScoreCell
                             key={category}
                             score={row.scores[category]}
+                            diff={diffs?.[category]}
                           />
                         ))
                       )}
