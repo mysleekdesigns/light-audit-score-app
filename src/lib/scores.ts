@@ -108,7 +108,7 @@ export const CATEGORY_LABELS: Record<LighthouseCategory, string> = {
 export const CATEGORY_SHORT_LABELS: Record<LighthouseCategory, string> = {
   performance: "Perf",
   accessibility: "A11y",
-  "best-practices": "Best Pr.",
+  "best-practices": "BP",
   seo: "SEO",
 };
 

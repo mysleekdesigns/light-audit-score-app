@@ -77,7 +77,7 @@ function Sparkline({
 }
 
 /**
- * A row of four compact per-category sparklines (Perf / A11y / Best Pr. / SEO),
+ * A row of four compact per-category sparklines (Perf / A11y / BP / SEO),
  * each labelled and showing its latest value coloured by score band. Satisfies
  * the PRD's "trend sparklines per URL over time".
  */
