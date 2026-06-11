@@ -23,9 +23,9 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Lighthouse — Local Audit Console",
+  title: "LightAudit — Lighthouse Audit Console",
   description:
-    "A local instrument for measuring Lighthouse scores across one or many pages: median-of-N runs, bounded concurrency, persisted history.",
+    "An instrument for measuring Lighthouse scores across one or many pages: median-of-N runs, bounded concurrency, persisted history.",
 };
 
 export default function RootLayout({

@@ -70,10 +70,10 @@ export function SiteHeader() {
           </span>
           <span className="flex flex-col leading-none">
             <span className="font-mono text-sm font-semibold uppercase tracking-[0.28em] text-foreground">
-              Lighthouse
+              LightAudit
             </span>
             <span className="font-mono text-[0.6rem] uppercase tracking-[0.3em] text-muted-foreground">
-              Local Audit Console
+              Lighthouse Audit Console
             </span>
           </span>
         </Link>
