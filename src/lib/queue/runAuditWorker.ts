@@ -95,10 +95,22 @@ function resolveAliasHooks(): string | null {
   return resolveScript("scripts/alias-hooks.mjs");
 }
 
-/** Last non-empty line of a buffer, for compact error context. */
-function lastLine(text: string): string {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
-  return lines.length > 0 ? lines[lines.length - 1] : "";
+/**
+ * Compact but useful tail of child stderr for a crash message. The worker now
+ * funnels its own failures through a structured `{ ok:false }` IPC message
+ * (see scripts/audit-worker.ts), so this only fires for crashes that signal
+ * nothing — and for those we want the real error, not just the last line.
+ * Returns the last few non-empty lines with Node's trailing `Node.js vX` banner
+ * stripped (it's the last line of every uncaught crash and says nothing), capped
+ * so a runaway stack can't bloat the message.
+ */
+export function stderrTail(text: string): string {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trimEnd())
+    .filter((l) => l.trim().length > 0 && !/^Node\.js v\d/.test(l.trim()));
+  const tail = lines.slice(-15).join("\n");
+  return tail.length > 1_500 ? `…${tail.slice(-1_500)}` : tail;
 }
 
 /** Error thrown when a worker is killed by an {@link AbortSignal} (user cancel). */
@@ -252,13 +264,13 @@ export async function runAuditInWorker(
       }
 
       if (code !== 0) {
-        const tail = lastLine(stderr);
+        const detail = stderrTail(stderr);
         finish(() => {
           removeOutFile();
           reject(
             new Error(
               `Audit worker exited with code ${code}${exitSignal ? `/${exitSignal}` : ""} for ${url}` +
-                (tail ? `: ${tail}` : ""),
+                (detail ? `:\n${detail}` : ""),
             ),
           );
         });

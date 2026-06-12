@@ -27,8 +27,14 @@
 
 import { promises as fs } from "node:fs";
 
+import { classifyAuditError } from "@/lib/lighthouse/diagnose";
 import { runAudit } from "@/lib/lighthouse/median";
 import { resolveAuditOptions } from "@/lib/lighthouse/options";
+
+/** URL under audit — captured so the catch-all handlers can classify failures. */
+let currentUrl = "the requested page";
+/** Single-shot guard: success and failure paths must never both signal. */
+let settled = false;
 
 /** Send an IPC message and resolve only once it has been flushed to the parent. */
 function send(message: { ok: true } | { ok: false; message: string }): Promise<void> {
@@ -37,6 +43,48 @@ function send(message: { ok: true } | { ok: false; message: string }): Promise<v
     else resolve();
   });
 }
+
+/**
+ * Report a terminal failure exactly once, then exit non-zero.
+ *
+ * Crucially this is also the net for async errors that fire OUTSIDE `main()`'s
+ * awaited chain: Lighthouse drives Chrome over a CDP websocket, and if that
+ * socket errors (ECONNRESET / "socket hang up") or Chrome dies mid-run, the
+ * rejection/exception escapes `main().catch` and would bare-crash the process
+ * with an unreadable `exit 1` + "Node.js vX" banner (see runAuditWorker.ts).
+ * Routing every terminal failure through here turns that into the SAME
+ * structured `{ ok:false, message }` IPC signal the queue already understands,
+ * so one flaky page degrades to a clean per-URL error instead of crashing.
+ *
+ * @param preclassifiedMessage when set (errors from `main()`'s chain, already
+ *   funnelled through `classifyAuditError` by `runSingleAudit`), use it verbatim;
+ *   otherwise classify the raw escaped error here.
+ */
+function reportFatal(error: unknown, preclassifiedMessage?: string): void {
+  if (settled) return;
+  settled = true;
+  const err = error instanceof Error ? error : new Error(String(error));
+  // Full stack to stderr for diagnosis — the parent surfaces this tail when no
+  // IPC message arrives, so an intermittent crash self-describes next time.
+  console.error(
+    `[audit-worker] fatal error for ${currentUrl}:\n${err.stack ?? err.message}`,
+  );
+  const message = preclassifiedMessage ?? classifyAuditError(err, currentUrl);
+  const exit = (): never => process.exit(1);
+  // Guard against a send() that never flushes (IPC channel already torn down).
+  const fallback = setTimeout(exit, 2_000);
+  fallback.unref?.();
+  void send({ ok: false, message }).finally(() => {
+    clearTimeout(fallback);
+    exit();
+  });
+}
+
+// Register BEFORE main() so async engine errors are caught from the first tick.
+// A registered uncaughtException handler also stops Node's default auto-crash,
+// giving reportFatal time to flush the IPC message before we exit ourselves.
+process.on("uncaughtException", (err) => reportFatal(err));
+process.on("unhandledRejection", (reason) => reportFatal(reason));
 
 async function main(): Promise<void> {
   const rawInput = process.env.LH_AUDIT_INPUT;
@@ -53,18 +101,24 @@ async function main(): Promise<void> {
   } catch (error) {
     throw new Error(`audit worker: invalid LH_AUDIT_INPUT JSON: ${String(error)}`);
   }
+  if (typeof parsed.url === "string" && parsed.url.length > 0) {
+    currentUrl = parsed.url;
+  }
 
   // Options arrive already validated, but re-resolving is cheap and defensive.
   const options = resolveAuditOptions(parsed.options);
   const result = await runAudit(parsed.url, options);
 
   await fs.writeFile(outPath, JSON.stringify(result), "utf8");
+  if (settled) return; // a late async error already reported failure
+  settled = true;
   await send({ ok: true });
   process.exit(0);
 }
 
-main().catch(async (error) => {
+main().catch((error) => {
+  // Errors from main()'s awaited chain are already classified by runSingleAudit;
+  // pass the message through verbatim via the single-shot reportFatal path.
   const message = error instanceof Error ? error.message : String(error);
-  await send({ ok: false, message });
-  process.exit(1);
+  reportFatal(error, message);
 });
