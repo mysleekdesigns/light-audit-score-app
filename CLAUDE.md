@@ -55,9 +55,46 @@ invariants and preload the right skill:
 
 ## Rules & hooks
 
-- Scoped rules live in `.claude/rules/` (security always-on; engine-workers, analysis-contract,
-  db load when matching files are read). Follow them — they encode invariants like "Lighthouse
-  only runs in the forked worker" and "AnalysisStreamEvent is frozen".
-- Deterministic hooks (`.claude/settings.json` + `.claude/hooks/`) block secret-looking content
-  in writes/commands, staging of `.env*`/`.mcp.json`, force-pushes to main/develop, and run
-  `eslint --fix` after every TS edit. If a hook blocks you, fix the cause — never bypass it.
+- Scoped rules live in `.claude/rules/` and are auto-loaded by file match: **security** is
+  always on; **engine-workers**, **analysis-contract**, and **db** load when their matching
+  files are read. They encode invariants like "Lighthouse only runs in the forked worker",
+  "`AnalysisStreamEvent` is frozen", and "all DB paths go through `src/lib/db/paths.ts`".
+- Deterministic hooks (`.claude/settings.json` → `.claude/hooks/`) enforce safety at tool-time.
+  If a hook blocks you, **fix the cause — never bypass it**:
+
+  | Hook | Fires on | Blocks / does |
+  |---|---|---|
+  | `guard-secrets.mjs` | `PreToolUse(Edit\|Write)` | Writing secret-looking content into any file |
+  | `guard-bash.mjs` | `PreToolUse(Bash)` | Secret-looking content in commands; staging `.env*`/`.mcp.json`; force-pushes to `main`/`develop` |
+  | `lint-fix.mjs` | `PostToolUse(Edit\|Write)` | Runs `eslint --fix` on touched TS, then blocks on any residual lint error |
+
+  (`test-hooks.mjs` is a local test harness for the guards — it is **not** wired into
+  `settings.json`, so it never runs as a hook.)
+
+## How it fits together
+
+A typical phase of work threads all of the above into one chain:
+
+1. **`/next-phase` orchestrates.** It reads the plan (`SAAS_PLAN.md` by default), picks the next
+   unchecked phase, and fans the independent slices out to sub-agents — keeping verification, the
+   plan checkbox update, and the commit for itself (never delegated, so one consistent standard).
+2. **Specialist agents do the slices.** Each `.claude/agents/` agent carries the project's
+   invariants and **preloads its skill** (`electron-packager` → `electron-packaging`,
+   `license-cloud-engineer` → `licensing`, `ai-provider-engineer` → `byo-ai-providers`). Restate
+   the relevant skill in every spawn prompt — built-in Explore/Plan agents don't read this file.
+3. **Skills supply the how.** Whoever does the work invokes the matching skill via the Skill tool
+   and follows it — `frontend-design` + `vercel-react-best-practices` + `shadcn` for UI (review
+   with `web-design-guidelines`), the phase skills for packaging/licensing/providers.
+4. **Rules enforce invariants passively.** The moment a matching file is read, its rule loads and
+   constrains the edit (worker isolation, frozen contracts, DB-path discipline, secrets in the
+   keychain) — no one has to remember them.
+5. **Hooks are the deterministic backstop.** They fire at tool-time regardless of intent (the
+   table above): secret guards on writes/commands, `.env*`/`.mcp.json` + force-push blocks on
+   Bash, and `eslint --fix` after every TS edit.
+6. **`security-reviewer` gates the diff.** After any change touching license checks, auth,
+   billing, secrets, Electron config, deep links, or the local HTTP server, run it (read-only)
+   and resolve its Critical/High findings **before** the phase is considered done.
+
+In short: **skills say how · agents carry context and preload skills · rules enforce invariants
+on matching files · hooks block unsafe actions at tool-time · and `/next-phase` +
+`security-reviewer` tie a phase together from kickoff to a verified, committed result.**
