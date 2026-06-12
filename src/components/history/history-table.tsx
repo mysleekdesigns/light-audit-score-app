@@ -10,6 +10,7 @@ import {
   ExternalLink,
   FileJson,
   Filter,
+  Globe,
   Search,
   Sheet,
   Trash2,
@@ -22,6 +23,12 @@ import { RerunBatchButton } from "@/components/audit/rerun-batch-button";
 import { ResultsViewToggle } from "@/components/audit/results-view-toggle";
 import { ScoreRings } from "@/components/audit/score-rings";
 import { ScoreDelta } from "@/components/compare/score-delta";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -695,23 +702,10 @@ function HistoryRunCard({ entry }: { entry: CollapsedRun }) {
   );
 }
 
-/** The ring-card grid over the same de-duplicated, filtered + sorted pages as the table. */
-function HistoryCardsView({
-  entries,
-  isFiltering,
-}: {
-  entries: CollapsedRun[];
-  isFiltering: boolean;
-}) {
-  if (entries.length === 0) {
-    return (
-      <Card className="overflow-hidden">
-        <HistoryEmptyState isFiltering={isFiltering} />
-      </Card>
-    );
-  }
+/** The ring-card grid for one website's de-duplicated, filtered + sorted pages. */
+function CardsBody({ entries }: { entries: CollapsedRun[] }) {
   return (
-    <ul className="grid list-none gap-4 p-0 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+    <ul className="grid list-none gap-4 p-0 pt-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
       {entries.map((entry) => (
         <li key={entry.latest.id}>
           <HistoryRunCard entry={entry} />
@@ -852,23 +846,10 @@ function PairedHistoryCard({ pair }: { pair: DevicePair<CollapsedRun> }) {
   );
 }
 
-/** The paired ring-card grid over the same de-duplicated pages as the paired table. */
-function PairedHistoryCardsView({
-  pairs,
-  isFiltering,
-}: {
-  pairs: DevicePair<CollapsedRun>[];
-  isFiltering: boolean;
-}) {
-  if (pairs.length === 0) {
-    return (
-      <Card className="overflow-hidden">
-        <HistoryEmptyState isFiltering={isFiltering} />
-      </Card>
-    );
-  }
+/** The paired ring-card grid for one website's de-duplicated pages. */
+function PairedCardsBody({ pairs }: { pairs: DevicePair<CollapsedRun>[] }) {
   return (
-    <ul className="grid list-none gap-4 p-0 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+    <ul className="grid list-none gap-4 p-0 pt-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
       {pairs.map((pair) => (
         <li key={pair.primary.latest.id}>
           <PairedHistoryCard pair={pair} />
@@ -939,27 +920,18 @@ function HistoryDeviceHalf({
 }
 
 /**
- * The paired archive table: one row per URL with the four category scores shown
- * twice under a two-level "Mobile | Desktop" header (matching the PageSpeed page).
- * Each device half carries its own re-run / report / delete actions plus a
- * compact "since last run" trend under each score; a missing device shows em
- * dashes. Score columns aren't sortable in this mode — a single sort can't
- * disambiguate the two devices — but the URL filter still applies and rows stay
- * in the grouped "by URL" order.
+ * The paired archive table for one website: one row per URL with the four
+ * category scores shown twice under a two-level "Mobile | Desktop" header
+ * (matching the PageSpeed page). Each device half carries its own re-run /
+ * report / delete actions plus a compact "since last run" trend under each
+ * score; a missing device shows em dashes. Rendered inside a website's accordion
+ * section, so it never sees an empty set and needs no outer surface of its own.
  */
-function PairedHistoryTableView({
-  pairs,
-  isFiltering,
-}: {
-  pairs: DevicePair<CollapsedRun>[];
-  isFiltering: boolean;
-}) {
-  // URL + (4 scores + actions) × 2 devices + Run at.
-  const totalCols = 2 * (SCORE_COLUMNS.length + 1) + 2;
+function PairedTableBody({ pairs }: { pairs: DevicePair<CollapsedRun>[] }) {
   return (
-    <Card className="overflow-hidden py-0">
+    <div className="overflow-hidden rounded-lg border border-border/60">
       <Table>
-        <TableHeader className="sticky top-0 z-10 bg-card [&_th]:bg-card">
+        <TableHeader className="bg-card [&_th]:bg-card">
           {/* Top header: device-spanning groups over the per-device sub-columns. */}
           <TableRow className="hover:bg-transparent">
             <TableHead rowSpan={2} className={cn(HEAD_LABEL, "w-full align-bottom")}>
@@ -1005,16 +977,9 @@ function PairedHistoryTableView({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {pairs.length === 0 ? (
-            <TableRow className="hover:bg-transparent">
-              <TableCell colSpan={totalCols} className="h-64 p-0">
-                <HistoryEmptyState isFiltering={isFiltering} />
-              </TableCell>
-            </TableRow>
-          ) : (
-            pairs.map((pair) => {
-              const primary = pair.primary.latest;
-              const href = primary.finalUrl ?? primary.url;
+          {pairs.map((pair) => {
+            const primary = pair.primary.latest;
+            const href = primary.finalUrl ?? primary.url;
               return (
                 <TableRow key={primary.id} className="hover:bg-muted/40">
                   <TableCell className={cn(COMPACT_CELL, "max-w-0")}>
@@ -1047,11 +1012,201 @@ function PairedHistoryTableView({
                   </TableCell>
                 </TableRow>
               );
-            })
-          )}
+            })}
         </TableBody>
       </Table>
-    </Card>
+    </div>
+  );
+}
+
+/**
+ * The flat archive table for one website: one row per page (its latest run) with
+ * the four category scores, device, run time, and per-row actions. Column headers
+ * stay sortable (sorting is global across every site). Rendered inside a website's
+ * accordion section, so it never sees an empty set and needs no surface of its own.
+ */
+function FlatTableBody({
+  entries,
+  sort,
+  handleSort,
+}: {
+  entries: CollapsedRun[];
+  sort: SortState;
+  handleSort: (key: SortKey) => void;
+}) {
+  return (
+    <div className="overflow-hidden rounded-lg border border-border/60">
+      <Table>
+        <TableHeader className="bg-card [&_th]:bg-card">
+          <TableRow className="hover:bg-transparent">
+            <SortHeader
+              label="URL"
+              sortKey="url"
+              sort={sort}
+              onSort={handleSort}
+              className="w-full"
+            />
+            <TableHead className={HEAD_LABEL}>Device</TableHead>
+            {SCORE_COLUMNS.map(({ category, sortKey }) => (
+              <SortHeader
+                key={category}
+                label={CATEGORY_SHORT_LABELS[category]}
+                sortKey={sortKey}
+                sort={sort}
+                onSort={handleSort}
+                numeric
+                className={SCORE_HEAD}
+              />
+            ))}
+            <SortHeader
+              label="Run at"
+              sortKey="createdAt"
+              sort={sort}
+              onSort={handleSort}
+            />
+            <TableHead className={cn(HEAD_LABEL, "text-right")}>Report</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {entries.map((entry) => {
+            const row = entry.latest;
+            const href = row.finalUrl ?? row.url;
+            const diffs = entryScoreDiffs(entry);
+            return (
+              <TableRow key={row.id} className="hover:bg-muted/40">
+                <TableCell className={cn(COMPACT_CELL, "max-w-0")}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <a
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block truncate font-mono text-xs text-foreground underline-offset-4 hover:text-primary hover:underline"
+                      >
+                        {row.url}
+                      </a>
+                    </TooltipTrigger>
+                    <TooltipContent className="font-mono">{href}</TooltipContent>
+                  </Tooltip>
+                </TableCell>
+                <TableCell className={COMPACT_CELL}>
+                  <div className="flex items-center gap-1.5">
+                    <Badge
+                      variant="outline"
+                      className="font-mono text-[0.65rem] uppercase tracking-[0.12em] text-muted-foreground"
+                    >
+                      {row.formFactor}
+                    </Badge>
+                    <SourceBadge source={row.source} />
+                  </div>
+                </TableCell>
+                {row.status === "error" ? (
+                  <FailedCell message={row.errorMessage} />
+                ) : (
+                  SCORE_COLUMNS.map(({ category }) => (
+                    <ScoreCell
+                      key={category}
+                      score={row.scores[category]}
+                      diff={diffs?.[category]}
+                    />
+                  ))
+                )}
+                <TableCell className={COMPACT_CELL}>
+                  <span
+                    title={row.createdAt}
+                    className="font-mono text-xs tabular-nums text-muted-foreground"
+                  >
+                    {formatRunAt(row.createdAt)}
+                  </span>
+                </TableCell>
+                <TableCell className={cn(COMPACT_CELL, "text-right")}>
+                  <RowActions row={row} />
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+/** A page's hostname, `www.` stripped; falls back to the raw string for non-URLs. */
+function hostOf(rawUrl: string): string {
+  try {
+    return new URL(rawUrl).hostname.replace(/^www\./, "");
+  } catch {
+    return rawUrl;
+  }
+}
+
+/**
+ * Bucket items by the hostname of their URL, preserving first-appearance order
+ * (a Map keeps insertion order) — so when the caller passes already-sorted
+ * entries the websites come out in that same grouped order, and pages keep their
+ * order within each site. Generic over the flat (`CollapsedRun`) and paired
+ * (`DevicePair`) layouts via the `getUrl` accessor.
+ */
+function groupByHost<T>(
+  items: readonly T[],
+  getUrl: (item: T) => string,
+): { host: string; items: T[] }[] {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const host = hostOf(getUrl(item));
+    const bucket = groups.get(host);
+    if (bucket) bucket.push(item);
+    else groups.set(host, [item]);
+  }
+  return Array.from(groups, ([host, hostItems]) => ({ host, items: hostItems }));
+}
+
+/**
+ * One website's collapsible section: an accordion header carrying the hostname
+ * and a compact telemetry strip (pages audited + how many still need work), over
+ * a body — that site's table or cards — supplied as children. Mirrors the live
+ * Audit results' per-host accordion so the two surfaces read the same way.
+ */
+function HostSection({
+  host,
+  pageCount,
+  needsWorkCount,
+  children,
+}: {
+  host: string;
+  pageCount: number;
+  needsWorkCount: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <AccordionItem
+      value={host}
+      className="rounded-lg border border-border/60 bg-card/40 px-4"
+    >
+      <AccordionTrigger className="items-center hover:no-underline">
+        <span className="flex flex-1 flex-wrap items-center justify-between gap-x-4 gap-y-1 pr-3">
+          <span className="flex items-center gap-2">
+            <Globe aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="font-mono text-sm text-foreground">{host}</span>
+          </span>
+          <span className="flex items-center gap-4 font-mono text-[0.7rem] uppercase tracking-[0.16em] tabular-nums">
+            {needsWorkCount > 0 ? (
+              <span className="text-muted-foreground">
+                <span className="text-score-average">{needsWorkCount}</span> need
+                work
+              </span>
+            ) : (
+              <span className="text-score-good">All pass</span>
+            )}
+            <span className="text-muted-foreground">
+              <span className="text-foreground">{pageCount}</span>{" "}
+              {pageCount === 1 ? "page" : "pages"}
+            </span>
+          </span>
+        </span>
+      </AccordionTrigger>
+      <AccordionContent>{children}</AccordionContent>
+    </AccordionItem>
   );
 }
 
@@ -1167,6 +1322,19 @@ export function HistoryTable({ rows }: HistoryTableProps) {
         ? basePairs.filter(pairNeedsWork).length
         : visible.filter((entry) => rowNeedsWork(entry.latest)).length,
     [paired, basePairs, visible],
+  );
+
+  // Group the visible pages by website (hostname) into the collapsible sections.
+  // Built from the already-sorted entries/pairs, so sites come out in the same
+  // grouped order and pages keep their order within each site. Only the active
+  // layout's layer is populated (flat vs. paired).
+  const flatHostGroups = useMemo(
+    () => (paired ? [] : groupByHost(flatRows, (entry) => entry.latest.url)),
+    [paired, flatRows],
+  );
+  const pairedHostGroups = useMemo(
+    () => (paired ? groupByHost(pairs, (pair) => pair.url) : []),
+    [paired, pairs],
   );
 
   const isFiltering = query.trim().length > 0 || needsWorkOnly;
@@ -1346,136 +1514,65 @@ export function HistoryTable({ rows }: HistoryTableProps) {
 
         {rows.length > 0 ? (
           <p className="font-mono text-[0.7rem] uppercase tracking-[0.14em] text-muted-foreground/70">
-            Latest run per URL · trend shown vs the previous run
+            Grouped by website · latest run per URL · trend vs the previous run
           </p>
         ) : null}
 
-        {view === "cards" ? (
-          paired ? (
-            <PairedHistoryCardsView pairs={pairs} isFiltering={isFiltering} />
-          ) : (
-            <HistoryCardsView entries={flatRows} isFiltering={isFiltering} />
-          )
+        {!hasRows ? (
+          <Card className="overflow-hidden">
+            <HistoryEmptyState isFiltering={isFiltering} />
+          </Card>
         ) : paired ? (
-          <PairedHistoryTableView pairs={pairs} isFiltering={isFiltering} />
+          // One collapsible section per website, all closed by default; the user
+          // expands the sites they care about. Uncontrolled so an opened section
+          // stays open across filtering (Radix keeps its own open-state).
+          <Accordion
+            type="multiple"
+            defaultValue={[]}
+            className="flex flex-col gap-3"
+          >
+            {pairedHostGroups.map((group) => (
+              <HostSection
+                key={group.host}
+                host={group.host}
+                pageCount={group.items.length}
+                needsWorkCount={group.items.filter(pairNeedsWork).length}
+              >
+                {view === "cards" ? (
+                  <PairedCardsBody pairs={group.items} />
+                ) : (
+                  <PairedTableBody pairs={group.items} />
+                )}
+              </HostSection>
+            ))}
+          </Accordion>
         ) : (
-        <Card className="overflow-hidden py-0">
-          <Table>
-            <TableHeader className="sticky top-0 z-10 bg-card [&_th]:bg-card">
-              <TableRow className="hover:bg-transparent">
-                <SortHeader
-                  label="URL"
-                  sortKey="url"
-                  sort={sort}
-                  onSort={handleSort}
-                  className="w-full"
-                />
-                <TableHead className={HEAD_LABEL}>Device</TableHead>
-                {SCORE_COLUMNS.map(({ category, sortKey }) => (
-                  <SortHeader
-                    key={category}
-                    label={CATEGORY_SHORT_LABELS[category]}
-                    sortKey={sortKey}
+          <Accordion
+            type="multiple"
+            defaultValue={[]}
+            className="flex flex-col gap-3"
+          >
+            {flatHostGroups.map((group) => (
+              <HostSection
+                key={group.host}
+                host={group.host}
+                pageCount={group.items.length}
+                needsWorkCount={
+                  group.items.filter((entry) => rowNeedsWork(entry.latest)).length
+                }
+              >
+                {view === "cards" ? (
+                  <CardsBody entries={group.items} />
+                ) : (
+                  <FlatTableBody
+                    entries={group.items}
                     sort={sort}
-                    onSort={handleSort}
-                    numeric
-                    className={SCORE_HEAD}
+                    handleSort={handleSort}
                   />
-                ))}
-                <SortHeader
-                  label="Run at"
-                  sortKey="createdAt"
-                  sort={sort}
-                  onSort={handleSort}
-                />
-                <TableHead className={cn(HEAD_LABEL, "text-right")}>
-                  Report
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {flatRows.length === 0 ? (
-                <TableRow className="hover:bg-transparent">
-                  <TableCell colSpan={8} className="h-64 p-0">
-                    <div className="flex flex-col items-center justify-center gap-3 text-center">
-                      <div className="flex size-12 items-center justify-center rounded-full border border-border/70 bg-muted/30">
-                        <Archive className="size-5 text-muted-foreground" />
-                      </div>
-                      <p className="text-sm font-medium text-foreground">
-                        {isFiltering ? "No matching runs" : "No audits yet"}
-                      </p>
-                      <p className="max-w-sm text-sm text-muted-foreground">
-                        {isFiltering
-                          ? "No persisted run matches the current filters."
-                          : "Completed runs are persisted here automatically. Run an audit to populate the archive."}
-                      </p>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ) : (
-                flatRows.map((entry) => {
-                  const row = entry.latest;
-                  const href = row.finalUrl ?? row.url;
-                  const diffs = entryScoreDiffs(entry);
-                  return (
-                    <TableRow key={row.id} className="hover:bg-muted/40">
-                      <TableCell className={cn(COMPACT_CELL, "max-w-0")}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <a
-                              href={href}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="block truncate font-mono text-xs text-foreground underline-offset-4 hover:text-primary hover:underline"
-                            >
-                              {row.url}
-                            </a>
-                          </TooltipTrigger>
-                          <TooltipContent className="font-mono">
-                            {href}
-                          </TooltipContent>
-                        </Tooltip>
-                      </TableCell>
-                      <TableCell className={COMPACT_CELL}>
-                        <div className="flex items-center gap-1.5">
-                          <Badge
-                            variant="outline"
-                            className="font-mono text-[0.65rem] uppercase tracking-[0.12em] text-muted-foreground"
-                          >
-                            {row.formFactor}
-                          </Badge>
-                          <SourceBadge source={row.source} />
-                        </div>
-                      </TableCell>
-                      {row.status === "error" ? (
-                        <FailedCell message={row.errorMessage} />
-                      ) : (
-                        SCORE_COLUMNS.map(({ category }) => (
-                          <ScoreCell
-                            key={category}
-                            score={row.scores[category]}
-                            diff={diffs?.[category]}
-                          />
-                        ))
-                      )}
-                      <TableCell className={COMPACT_CELL}>
-                        <span
-                          title={row.createdAt}
-                          className="font-mono text-xs tabular-nums text-muted-foreground"
-                        >
-                          {formatRunAt(row.createdAt)}
-                        </span>
-                      </TableCell>
-                      <TableCell className={cn(COMPACT_CELL, "text-right")}>
-                        <RowActions row={row} />
-                      </TableCell>
-                    </TableRow>
-                  );
-                })
-              )}
-            </TableBody>
-          </Table>
-        </Card>
+                )}
+              </HostSection>
+            ))}
+          </Accordion>
         )}
       </div>
     </TooltipProvider>
