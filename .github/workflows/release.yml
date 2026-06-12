@@ -1,0 +1,147 @@
+# LightAudit release pipeline (SAAS_PLAN.md Phase A)
+#
+# Triggered on version tags (v*) or manual workflow_dispatch.
+# Builds signed artifacts on macOS, Windows, and Linux using electron-builder.
+#
+# Signing secrets referenced here are NOT present yet — add them to GitHub repo
+# secrets when certificates arrive. The build will succeed without them (unsigned),
+# but the electron-builder code-signing config is wired and ready.
+#
+# BLOCKED-ON-USER items:
+#   - Apple Developer ID cert: CSC_LINK, CSC_KEY_PASSWORD, APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID
+#   - Windows OV cert: WIN_CSC_LINK, WIN_CSC_KEY_PASSWORD
+#   - GitHub token for publish: GITHUB_TOKEN (automatically available in Actions)
+#
+# Artifacts are uploaded as GitHub release assets and drafted (not published)
+# until manually reviewed.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: "Create as draft release"
+        required: false
+        default: "true"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14         # Apple Silicon (arm64)
+            platform: mac
+            arch: arm64
+          - os: macos-13         # Intel (x64) — cross-compile for universal if needed
+            platform: mac
+            arch: x64
+          - os: windows-2022
+            platform: win
+            arch: x64
+          - os: ubuntu-22.04
+            platform: linux
+            arch: x64
+
+    runs-on: ${{ matrix.os }}
+    name: Build ${{ matrix.platform }}-${{ matrix.arch }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Build the Next.js app + worker + prepare standalone output
+      - name: Build Next.js + worker + prepare
+        run: npm run electron:build
+        env:
+          # Needed so Next.js build doesn't error on missing env
+          NODE_ENV: production
+
+      # macOS: signing + notarization
+      # BLOCKED-ON-USER: requires Apple Developer ID cert in GitHub secrets
+      - name: Import macOS certificate
+        if: matrix.platform == 'mac' && env.CSC_LINK != ''
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          echo "Certificate import handled by electron-builder via env vars."
+
+      # Package with electron-builder
+      - name: Build Electron app (macOS)
+        if: matrix.platform == 'mac'
+        run: npm run electron:dist -- --mac --${{ matrix.arch }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS signing — no-op when secrets are absent (unsigned build)
+          CSC_LINK: ${{ secrets.CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD || '' }}
+          # Notarization — BLOCKED-ON-USER
+          APPLE_ID: ${{ secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID || '' }}
+
+      - name: Build Electron app (Windows)
+        if: matrix.platform == 'win'
+        run: npm run electron:dist -- --win --${{ matrix.arch }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Windows signing — BLOCKED-ON-USER
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK || '' }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD || '' }}
+
+      - name: Build Electron app (Linux)
+        if: matrix.platform == 'linux'
+        run: npm run electron:dist -- --linux --${{ matrix.arch }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Upload built artifacts
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: LightAudit-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            dist/*.dmg
+            dist/*.exe
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.zip
+            dist/latest*.yml
+          retention-days: 30
+          if-no-files-found: warn
+
+      # Draft GitHub release (only on tag push, not workflow_dispatch)
+      - name: Create or update draft release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            dist/*.dmg
+            dist/*.exe
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.zip
+            dist/latest*.yml
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

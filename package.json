@@ -2,16 +2,33 @@
   "name": "lightaudit",
   "version": "0.1.0",
   "private": true,
+  "description": "LightAudit — Local-first Lighthouse auditing desktop app",
+  "author": {
+    "name": "LightAudit",
+    "email": "simon@crawlforge.dev"
+  },
+  "main": "electron/main.js",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
+    "rebuild:node": "npm rebuild better-sqlite3",
+    "pretest": "npm rebuild better-sqlite3 >/dev/null 2>&1 || true",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "audit": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/alias-hooks.mjs scripts/audit-cli.ts"
+    "audit": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/alias-hooks.mjs scripts/audit-cli.ts",
+    "electron:dev": "electron .",
+    "electron:build-worker": "node electron/build-worker.mjs",
+    "electron:prepare": "node electron/prepare-package.mjs",
+    "electron:clean": "node -e \"require('node:fs').rmSync('.next',{recursive:true,force:true});require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "electron:build": "npm run electron:clean && next build && npm run electron:build-worker && npm run electron:prepare",
+    "electron:dist": "electron-builder --config electron-builder.yml",
+    "electron:dist:dir": "electron-builder --config electron-builder.yml --dir",
+    "electron:pack": "npm run electron:build && npm run electron:dist:dir",
+    "electron:pack:then-test": "npm run electron:pack && npm run rebuild:node"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.160",
@@ -21,6 +38,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.2",
+    "electron-updater": "^6.8.9",
     "fast-xml-parser": "^5.8.0",
     "lighthouse": "^13.3.0",
     "lucide-react": "^1.16.0",
@@ -38,12 +56,15 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@electron/rebuild": "^3.7.2",
     "@tailwindcss/postcss": "^4",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "drizzle-kit": "^0.31.10",
+    "electron": "^36.4.0",
+    "electron-builder": "^25.1.8",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
     "playwright": "^1.60.0",

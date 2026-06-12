@@ -27,6 +27,11 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+// Detect whether we are running inside a packaged Electron app.
+// In the packaged build the Next standalone server is spawned from Electron's
+// main process which sets this env var to signal the packaged context.
+const IS_PACKAGED = process.env.LH_PACKAGED === "1";
+
 import type { AuditOptions, AuditResult } from "@/lib/lighthouse/types";
 
 /**
@@ -44,6 +49,11 @@ const MAX_STDERR = 4_000;
  * for `next dev` / `next start`, both run via npm from the repo root). Throws a
  * clear, preflight-style error (PRD §8) if the file is missing rather than
  * failing cryptically deep inside `fork`.
+ *
+ * In the packaged Electron app this function is only called for paths that are
+ * genuinely needed — the alias-hooks path is skipped via the LH_ALIAS_HOOKS_PATH
+ * seam (null in packaged mode), and the worker script path is overridden via
+ * LH_AUDIT_WORKER_SCRIPT before this function is reached.
  */
 function resolveScript(relPath: string): string {
   const abs = path.resolve(process.cwd(), relPath);
@@ -54,6 +64,35 @@ function resolveScript(relPath: string): string {
     );
   }
   return abs;
+}
+
+/**
+ * Resolve the alias-hooks ESM loader path.
+ *
+ * Priority:
+ *   1. LH_ALIAS_HOOKS_PATH env var (set by Electron main process — null/empty
+ *      in packaged builds where the compiled JS worker needs no alias hook).
+ *   2. Fallback: resolve from CWD (dev / next start mode).
+ *
+ * Returns null when running inside a packaged Electron build (the worker is
+ * pre-compiled JS; alias resolution is baked in at build time).
+ */
+function resolveAliasHooks(): string | null {
+  // Packaged mode: main.js does NOT set LH_ALIAS_HOOKS_PATH (or sets it empty).
+  // The compiled audit-worker.js does not need the runtime alias hook.
+  if (IS_PACKAGED) return null;
+
+  // Env override (set by Electron main.js in dev mode, or by tests).
+  const envPath = process.env.LH_ALIAS_HOOKS_PATH;
+  if (envPath) {
+    if (!existsSync(envPath)) {
+      throw new Error(`LH_ALIAS_HOOKS_PATH not found: ${envPath}`);
+    }
+    return envPath;
+  }
+
+  // Dev fallback: resolve from CWD
+  return resolveScript("scripts/alias-hooks.mjs");
 }
 
 /** Last non-empty line of a buffer, for compact error context. */
@@ -97,7 +136,7 @@ export async function runAuditInWorker(
   // unchanged. The worker only loads the heavy engine; it is never bundled.
   process.env.LH_AUDIT_WORKER_SCRIPT ??= resolveScript("scripts/audit-worker.ts");
   const workerScript = process.env.LH_AUDIT_WORKER_SCRIPT;
-  const aliasHooks = resolveScript("scripts/alias-hooks.mjs");
+  const aliasHooks = resolveAliasHooks();
   const outFile = path.join(
     os.tmpdir(),
     `lh-result-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
@@ -107,20 +146,36 @@ export async function runAuditInWorker(
     void fs.rm(outFile, { force: true });
   };
 
+  // Build execArgv: in dev/next-start mode we need the alias-hooks loader for
+  // Node native TS type-stripping + @/ alias resolution. In packaged mode the
+  // worker is pre-compiled JS and needs no loader (alias baked in by esbuild).
+  const execArgv: string[] = [
+    "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON",
+    "--disable-warning=ExperimentalWarning",
+  ];
+  if (aliasHooks) {
+    execArgv.push("--import", pathToFileURL(aliasHooks).href);
+  }
+
+  // In a packaged Electron app the Next server runs under the Electron binary
+  // (process.execPath IS the Electron binary). To fork a plain Node child we
+  // must set ELECTRON_RUN_AS_NODE=1 so the Electron binary behaves as Node.
+  // In dev (next dev / next start) process.execPath is already plain Node, so
+  // this env var is harmless but included for safety when IS_PACKAGED is true.
+  const forkEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    LH_AUDIT_INPUT: JSON.stringify({ url, options }),
+    LH_AUDIT_OUTPUT: outFile,
+    // Signal the packaged context to child (in case it needs to know)
+    ...(IS_PACKAGED ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+  };
+
   return await new Promise<AuditResult>((resolve, reject) => {
     const child = fork(workerScript, [], {
       // Mirror the Phase 1 CLI launcher: native TS + `@/` alias, quiet warnings.
-      execArgv: [
-        "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON",
-        "--disable-warning=ExperimentalWarning",
-        "--import",
-        pathToFileURL(aliasHooks).href,
-      ],
-      env: {
-        ...process.env,
-        LH_AUDIT_INPUT: JSON.stringify({ url, options }),
-        LH_AUDIT_OUTPUT: outFile,
-      },
+      // In packaged mode: no alias-hooks (compiled JS); in dev: full TS loader.
+      execArgv,
+      env: forkEnv,
       // Keep IPC for the completion signal; capture stderr for error context.
       stdio: ["ignore", "ignore", "pipe", "ipc"],
     });
