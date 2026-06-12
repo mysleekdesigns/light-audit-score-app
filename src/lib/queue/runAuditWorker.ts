@@ -109,8 +109,16 @@ export function stderrTail(text: string): string {
     .split(/\r?\n/)
     .map((l) => l.trimEnd())
     .filter((l) => l.trim().length > 0 && !/^Node\.js v\d/.test(l.trim()));
-  const tail = lines.slice(-15).join("\n");
-  return tail.length > 1_500 ? `…${tail.slice(-1_500)}` : tail;
+  if (lines.length === 0) return "";
+  // The first non-stack-frame line is usually the real cause — e.g.
+  // `Error: ENOENT: no such file or directory, open '<file>'` — and a pure tail
+  // would drop it when the stack is deep. Keep that head line plus the last few
+  // frames for context.
+  const head = lines.find((l) => !/^\s*at\s/.test(l));
+  const tail = lines.slice(-12);
+  const picked = head && !tail.includes(head) ? [head, ...tail] : tail;
+  const out = picked.join("\n");
+  return out.length > 1_500 ? `${out.slice(0, 1_499)}…` : out;
 }
 
 /** Error thrown when a worker is killed by an {@link AbortSignal} (user cancel). */

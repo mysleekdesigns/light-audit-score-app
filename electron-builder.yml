@@ -51,6 +51,35 @@ files:
   # prepare-package.mjs scrubs this too; this is the belt-and-suspenders guard.
   - "!.next/standalone/dist/**"
   - "!.next/standalone/.next/cache/**"
+  # NEVER package the dev/test SQLite DB + report files. getDataDir() defaults to
+  # `<cwd>/data`, so running the standalone server from inside .next/standalone
+  # during local testing leaves a `data/` dir there. At runtime LH_DATA_DIR points
+  # at the OS app-data dir (never the install dir), so this is pure dev cruft.
+  # prepare-package.mjs scrubs it too; this is the belt-and-suspenders guard.
+  - "!.next/standalone/data/**"
+  # Repo-root LEAK guard (security review). `output: "standalone"` + the sibling
+  # `cloud/` license-server workspace makes @vercel/nft trace the whole repo root
+  # into .next/standalone/ (cloud/ source, src/, design docs, configs, lockfiles).
+  # next.config.ts pins outputFileTracingRoot and prepare-package.mjs hard-SCRUBS
+  # these (the AUTHORITATIVE defence — negation-glob dot-matching is unreliable).
+  # These negations are the belt-and-suspenders third layer.
+  - "!.next/standalone/cloud/**"      # license-server source — must never ship
+  - "!.next/standalone/src/**"        # app TS source — compiled into .next/
+  - "!.next/standalone/cache/**"
+  # OUR design/licensing docs at the standalone root (NOT third-party
+  # node_modules/**/*.md, which are inert package licenses/readmes the scrub keeps).
+  - "!.next/standalone/*.md"          # SAAS_PLAN.md / PRD.md / CLAUDE.md / README
+  - "!.next/standalone/**/*.tsbuildinfo"
+  - "!.next/standalone/package-lock.json"
+  - "!.next/standalone/tsconfig.json"
+  - "!.next/standalone/next.config.ts"
+  - "!.next/standalone/vitest.config.ts"
+  - "!.next/standalone/eslint.config.mjs"
+  - "!.next/standalone/drizzle.config.ts"
+  - "!.next/standalone/postcss.config.mjs"
+  - "!.next/standalone/components.json"
+  - "!.next/standalone/skills-lock.json"
+  - "!.next/standalone/electron-builder.yml"
 
 # Files/dirs to unpack from the ASAR (must be fork()able, dlopen()able, or
 # require process.chdir() into their directory).

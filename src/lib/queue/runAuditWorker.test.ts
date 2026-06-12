@@ -69,6 +69,18 @@ describe("stderrTail", () => {
   it("is empty when there is nothing but the banner", () => {
     expect(stderrTail("Node.js v22.15.1\n")).toBe("");
   });
+
+  it("keeps the error head line even behind a deep stack (the ENOENT path)", () => {
+    const deepStack = [
+      "Error: ENOENT: no such file or directory, open '/app/lighthouse/core/audits/x.js'",
+      ...Array.from({ length: 30 }, (_, i) => `    at frame${i} (/app/x.js:${i}:1)`),
+      "Node.js v22.15.1",
+    ].join("\n");
+    const tail = stderrTail(deepStack);
+    expect(tail).toContain("ENOENT");
+    expect(tail).toContain("core/audits/x.js"); // the actual missing file
+    expect(tail).not.toMatch(/Node\.js v/);
+  });
 });
 
 describe("runAuditInWorker failure surfacing (forked fixtures)", () => {
