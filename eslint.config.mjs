@@ -21,6 +21,9 @@ const eslintConfig = defineConfig([
     ".github/**",
     // electron-builder output directory — never lint build artifacts
     "dist/**",
+    // The license cloud (SAAS_PLAN.md Phase B) is a self-contained app with its
+    // own tooling under cloud/ — it is linted/typechecked/built by its own gate.
+    "cloud/**",
   ]),
 ]);
 
