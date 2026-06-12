@@ -364,6 +364,40 @@ export async function deleteRun(runId: string): Promise<boolean> {
 }
 
 /**
+ * Delete a whole persisted batch: its child AI analyses, every `runs` row, those
+ * runs' stored report files, and finally the `batches` row. A console (the History
+ * view) shows a batch as a unit, so the destructive "Clear" acts batch-wide rather
+ * than per-run. Children are removed before parents to respect the FKs
+ * (`analyses.run_id → runs.id`, `runs.batchId → batches.id`), mirroring
+ * {@link deleteRun}'s order and reusing {@link removeReportFiles}. Returns whether
+ * the batch existed. Never throws.
+ */
+export async function deleteBatch(batchId: string): Promise<boolean> {
+  try {
+    const db = getDb();
+    const batch = db.select().from(batches).where(eq(batches.id, batchId)).get();
+    if (!batch) return false;
+
+    const runIds = db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(eq(runs.batchId, batchId))
+      .all()
+      .map((r) => r.id);
+
+    // Children before parents: analyses → runs (+ their report files) → batch.
+    for (const runId of runIds) deleteAnalysesForRun(runId);
+    db.delete(runs).where(eq(runs.batchId, batchId)).run();
+    await Promise.all(runIds.map((id) => removeReportFiles(id)));
+    db.delete(batches).where(eq(batches.id, batchId)).run();
+    return true;
+  } catch (err) {
+    warn("deleteBatch", err);
+    return false;
+  }
+}
+
+/**
  * Delete ALL persisted history: every `runs` and `batches` row plus the entire
  * reports directory. Runs are deleted before batches to respect the
  * `runs.batchId → batches.id` FK. The `schedules` table is left untouched (it's

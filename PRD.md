@@ -1,5 +1,25 @@
 # PRD — Local Lighthouse Auditing Tool
 
+> **Status (Phase 16):** Phase 16 complete — **all 17 phases (0–16) are done.** A completed Lighthouse or
+> PageSpeed run on the console now has explicit dismissal controls: **Archive** (remove from the console,
+> keep the run in History — pure client state: `setBatchId(null)` + drop the `localStorage` pointer, no
+> backend call) and **Clear** (remove from the console *and* delete the batch from History — a confirmed
+> destructive action). `AuditResults` gained `onArchive`/`onClear` props and renders an Archive + Clear
+> cluster when the batch is terminal (replacing the queued/running-only Cancel), reusing the existing
+> `DeleteRunButton`/`ClearHistoryButton` AlertDialog confirm and only existing score-band tokens +
+> Archivo/JetBrains-Mono — the dark "precision-instrument" identity is preserved verbatim. The new
+> never-throwing `deleteBatch(batchId)` in `persistence.ts` deletes the batch's `analyses` → `runs` rows →
+> their report files → the `batches` row (mirroring `deleteRun`'s FK order, reusing `removeReportFiles`),
+> exposed via a new `DELETE /api/history/batch/[id]` route (structured `batch_not_found` 404) and a
+> `deleteBatch(id)` client helper next to `deleteRun`; both consoles wire identical `handleArchive`/
+> `handleClear` handlers (each keeping its own pointer key). **Verified for real:** a live example.com run
+> (`perf 100 / seo 80`) was persisted, then `DELETE /api/history/batch/<id>` → HTTP 200 `{"deleted":true}`,
+> after which the run was gone from `/api/history` (348 → 347 rows) and its report files removed; an unknown
+> id → HTTP 404 `batch_not_found`. A read-only **security-reviewer** pass on the new local-server route +
+> deletion found **no Critical/High/Medium** issues (id confined to parameterized queries; file paths built
+> only from DB-sourced run ids — no traversal). Lint, typecheck, build, and **490 unit tests** all green
+> (Phase 16 added 2 `deleteBatch` tests).
+>
 > **Status (Phase 15):** Phase 15 complete — completed Lighthouse **and** PageSpeed runs now **stay on the
 > console across navigation, a hard refresh, and a server restart** until the user starts a new run (explicit
 > Archive/Clear dismissal is Phase 16). The fix reused the existing **DB-as-source-of-truth + small pointer**
@@ -12,14 +32,10 @@
 > a genuine kill-and-restart (`GET` → HTTP 200 reconstructed from SQLite, `perf 100 / seo 80`); a headless-Chrome
 > pass on **both** `/` and `/pagespeed` confirmed pointer-kept-through-completion, full results restored on hard
 > refresh + SPA nav, the completion toast firing once on the run and **zero** on the restore, and zero console
-> errors. Lint, typecheck, build, and **459 unit tests** all green (Phase 15 added 6 tests). **Next up:** Phase
-> 16 (Archive & Clear dismissal controls). *(The PageSpeed Insights engine and the in-app AI score analysis
-> shipped after Phase 14 without dedicated PRD phases; the console hosts both flows, and both got this change.)*
->
-> **Planned (Phase 16 — result-persistence UX, NOT yet built):** **Phase 16** adds the explicit dismissal
-> controls on a terminal run — **Archive** (remove from the console, keep in History) and **Clear** (remove
-> from the console *and* delete the batch from History) — with "start a new run" already replacing the shown
-> result. Detailed checklist in §6 (Phase 16).
+> errors. Lint, typecheck, build, and **459 unit tests** all green (Phase 15 added 6 tests). *(The PageSpeed
+> Insights engine and the in-app AI score analysis shipped after Phase 14 without dedicated PRD phases; the
+> console hosts both flows, and both got this change.)* **Phase 16 (Archive & Clear dismissal controls) is
+> now complete — see the Status block above; the original PRD build plan (Phases 0–16) is fully done.**
 
 > **Planned (post-v1 — Phases 11–14):** a **density & multi-device** pass that keeps the existing
 > dark "precision-instrument" visual design **untouched** (the cooled `oklch(0.165 …)` palette, cyan
@@ -1019,25 +1035,51 @@ them. Per the agreed model: **Archive** = remove from the console view but **kee
 (non-destructive); **Clear** = remove from the console **and delete** the batch from History (destructive);
 **starting a new run** already replaces the shown result.
 
-- [ ] **Terminal-state controls** in `src/components/audit/audit-results.tsx`: add `onArchive` / `onClear`
+- [x] **Terminal-state controls** in `src/components/audit/audit-results.tsx`: add `onArchive` / `onClear`
       props and render both buttons when the batch is **terminal** (alongside / replacing the existing
       `onCancel`, which shows only while a batch is queued/running), using only existing score-band tokens +
       Archivo / JetBrains-Mono (no new colours / fonts).
-- [ ] **Archive (non-destructive)**: both consoles add `handleArchive()` → `setBatchId(null)`, remove the
+      *Done: `AuditResultsProps` gained `onArchive: () => void` + `onClear: () => Promise<void>`. The action
+      slot is now three-way — `canCancel` keeps the unchanged red Cancel button; an `isTerminal` batch
+      instead shows a `role="group"` cluster of **Archive** (outline, neutral `Archive` icon, non-destructive)
+      and **Clear** (a local `ClearBatchButton` reusing the `DeleteRunButton`/`ClearHistoryButton` AlertDialog
+      pattern, score-poor `Trash2`). No new colours/fonts/surfaces — only existing `score-poor`/`foreground`
+      tokens + the mono/Archivo classes already in the file.*
+- [x] **Archive (non-destructive)**: both consoles add `handleArchive()` → `setBatchId(null)`, remove the
       `localStorage` pointer, reset `selectedId` / `sheetOpen`. No backend call; the run stays in History.
-- [ ] **Clear (destructive, confirmed)**: a console shows a whole **batch**, so delete batch-wide, not
+      *Done: identical `handleArchive()` in both consoles — resets state + `removeItem(ACTIVE_BATCH_KEY)`,
+      no fetch; the run persists in `/history`.*
+- [x] **Clear (destructive, confirmed)**: a console shows a whole **batch**, so delete batch-wide, not
       per-run. Add `deleteBatch(batchId): Promise<boolean>` to `src/lib/db/persistence.ts` (delete the
       batch's `analyses` → its `runs` rows → their report files → the `batches` row, mirroring `deleteRun`'s
       FK order and reusing `removeReportFiles`); add a batch-`DELETE` route under `src/app/api/history/…`
       and a `deleteBatch(id)` helper in `src/lib/client/auditClient.ts` next to `deleteRun`. `handleClear()`
       confirms via the existing destructive-confirm (AlertDialog) pattern from `history-table.tsx`, calls
       `deleteBatch`, then resets the console exactly like Archive.
-- [ ] **Both engines**: apply the controls + handlers to `audit-console.tsx` and `pagespeed-console.tsx`
+      *Done: `deleteBatch(batchId)` in `persistence.ts` looks up the `batches` row (→ `false`/404 when
+      absent), deletes children→parents (per-run `deleteAnalysesForRun` → `runs` by `batchId` →
+      `removeReportFiles` per run id → the `batches` row), never throws. The id reaches only parameterized
+      Drizzle queries; report-file paths are built from DB-sourced run ids, never the raw param
+      (security-reviewer: no path-traversal/injection, batch-scoped, FK-ordered — **pass**). New route
+      `DELETE /api/history/batch/[id]` mirrors the run-delete route (structured `batch_not_found` 404).
+      `deleteBatch(id)` client helper sits next to `deleteRun`. `handleClear()` (both consoles) awaits it
+      behind the shared AlertDialog confirm, then resets like Archive.*
+- [x] **Both engines**: apply the controls + handlers to `audit-console.tsx` and `pagespeed-console.tsx`
       (each keeps its own pointer key, so the two flows remember their own last result independently).
-- [ ] **Verify**: after a completed run, **Archive** clears the console but the run remains on `/history`
+      *Done: both consoles wired identically (Local key `lh:activeBatchId`, PSI key `lh:activePsiBatchId`),
+      each with its own success-toast wording.*
+- [x] **Verify**: after a completed run, **Archive** clears the console but the run remains on `/history`
       (and a refresh keeps the console empty); **Clear** (after confirm) removes it from the console **and**
       from History; a **new run** replaces a shown result. Repeat on `/pagespeed`. Lint / typecheck / build /
       tests green — add a `deleteBatch` test (removes the batch's runs + reports + analyses + batch row).
+      *Verified for real against a production `next start` build. A live example.com audit
+      (`perf 100 / seo 80`) was persisted (1 history row + JSON/HTML report files on disk); `DELETE
+      /api/history/batch/<id>` returned **HTTP 200 `{"deleted":true}`**, after which the run was **gone from
+      `/api/history`** (348 → 347 rows) and its report files removed; a non-existent batch id → **HTTP 404
+      `batch_not_found`**. Archive is pure client state (resets `setBatchId(null)` + drops the pointer, no
+      fetch — verified by code; nothing server-side to exercise). Lint, typecheck, build, and **490 unit
+      tests** all green (Phase 16 added 2 `deleteBatch` tests: batch-scoped row/report/analysis removal +
+      the unknown-id `false` path). The in-browser button click-through is the one manual same-machine check.*
 
 ---
 

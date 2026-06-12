@@ -18,8 +18,11 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { getAnalysis, saveAnalysis } from "@/lib/db/analyses";
 import { resetDbForTests } from "@/lib/db/client";
+import { reportJsonPath } from "@/lib/db/paths";
 import {
+  deleteBatch,
   getRunReport,
   listBatches,
   listHistory,
@@ -484,5 +487,47 @@ describe("reconstructBatch (PRD §6 Phase 15)", () => {
     const restored = reconstructBatch("rb-both")!;
     expect(restored.device).toBe("both");
     expect(restored.jobs.map((j) => j.device)).toEqual(["mobile", "desktop"]);
+  });
+});
+
+describe("deleteBatch (PRD §6 Phase 16)", () => {
+  it("removes the batch's runs, report files, analyses, and the batch row", async () => {
+    const j1 = makeJob("db-1", 0, "https://a.test/");
+    const j2 = makeJob("db-2", 1, "https://b.test/");
+    const batch = makeBatch("batch-del", [j1, j2]);
+    recordBatch(batch);
+    await recordRun(batch, j1, makeResult("https://a.test/"));
+    await recordRun(batch, j2, makeResult("https://b.test/"));
+    // Seed an AI analysis on one run so we can assert it's cascaded away too.
+    saveAnalysis({
+      runId: "db-1",
+      category: "performance",
+      categoryScore: 91,
+      diagnosis: "slow LCP",
+      fixes: [],
+      sources: [],
+      model: "test-model",
+      createdAt: new Date().toISOString(),
+    });
+
+    // Pre-conditions: both report files on disk, analysis present, rows indexed.
+    await expect(fs.access(reportJsonPath("db-1"))).resolves.toBeUndefined();
+    await expect(fs.access(reportJsonPath("db-2"))).resolves.toBeUndefined();
+    expect(getAnalysis("db-1", "performance")).not.toBeNull();
+
+    expect(await deleteBatch("batch-del")).toBe(true);
+
+    // Runs gone from history, batch gone from the batch list.
+    expect(listHistory()).toEqual([]);
+    expect(listBatches().some((b) => b.id === "batch-del")).toBe(false);
+    // Report files removed from disk.
+    await expect(fs.access(reportJsonPath("db-1"))).rejects.toThrow();
+    await expect(fs.access(reportJsonPath("db-2"))).rejects.toThrow();
+    // Child analysis cascaded away with the run.
+    expect(getAnalysis("db-1", "performance")).toBeNull();
+  });
+
+  it("returns false for an unknown batch id", async () => {
+    expect(await deleteBatch("does-not-exist")).toBe(false);
   });
 });

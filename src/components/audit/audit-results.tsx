@@ -7,8 +7,9 @@
  * detail sheet via `onSelect`. Pure view — all state lives in the console parent.
  */
 
-import { memo } from "react";
-import { Ban, Radio } from "lucide-react";
+import { memo, useState } from "react";
+import { Archive, Ban, Radio, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 
 import { CoreWebVitalsStrip } from "@/components/audit/core-web-vitals";
 import { EnvironmentBadge } from "@/components/audit/environment-badge";
@@ -17,6 +18,17 @@ import { ResultsTable } from "@/components/audit/results-table";
 import { ResultsViewToggle } from "@/components/audit/results-view-toggle";
 import { ScoreRings } from "@/components/audit/score-rings";
 import { JobStatusBadge } from "@/components/audit/status-badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Accordion,
@@ -42,6 +54,10 @@ interface AuditResultsProps {
   onCancel: () => void;
   /** True while a cancel request is in flight (disables the button). */
   cancelling: boolean;
+  /** Dismiss a finished batch from the console but keep it in History (non-destructive). */
+  onArchive: () => void;
+  /** Delete a finished batch from History entirely (destructive; confirmed). */
+  onClear: () => Promise<void>;
 }
 
 /** Whole-batch progress as a 0–100 percentage of finished (done + error) jobs. */
@@ -91,6 +107,8 @@ export function AuditResults({
   onSelect,
   onCancel,
   cancelling,
+  onArchive,
+  onClear,
 }: AuditResultsProps) {
   const { defaults, update } = useAuditDefaults();
   const view = defaults.resultsView;
@@ -99,6 +117,12 @@ export function AuditResults({
   const groups = groupJobsByHost(batch.jobs);
   // The batch can still be stopped while any job is outstanding.
   const canCancel = batch.status === "queued" || batch.status === "running";
+  // A finished batch (mirrors the console's terminal set) swaps Cancel for the
+  // Archive / Clear dismissal cluster.
+  const isTerminal =
+    batch.status === "completed" ||
+    batch.status === "completed_with_errors" ||
+    batch.status === "cancelled";
   // Only the first website opens on load; the rest start collapsed. Keyed by
   // batch id so a new batch resets to "first open".
   const firstHost = groups[0]?.host;
@@ -155,6 +179,29 @@ export function AuditResults({
                 <Ban data-icon="inline-start" />
                 {cancelling ? "Cancelling…" : "Cancel"}
               </Button>
+            ) : isTerminal ? (
+              // Terminal dismissal cluster: Archive (non-destructive — keeps the
+              // run in History) sits in neutral mono tones; Clear (destructive —
+              // deletes the run from History) carries the score-poor warning tokens
+              // behind a confirm dialog.
+              <div
+                className="flex items-center gap-1.5"
+                role="group"
+                aria-label="Dismiss finished batch"
+              >
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={onArchive}
+                  aria-label="Archive — dismiss from console, keep in history"
+                  className="font-mono text-[0.7rem] uppercase tracking-[0.16em] text-muted-foreground hover:text-foreground"
+                >
+                  <Archive data-icon="inline-start" />
+                  Archive
+                </Button>
+                <ClearBatchButton onClear={onClear} />
+              </div>
             ) : null}
           </div>
         </div>
@@ -211,6 +258,72 @@ export function AuditResults({
         })}
       </Accordion>
     </section>
+  );
+}
+
+/**
+ * The destructive half of the terminal cluster: a small outline button in the
+ * score-poor warning tokens that confirms via an AlertDialog before deleting the
+ * batch's runs + stored reports from History. Owns its own `open`/`clearing`
+ * state and mirrors the {@link DeleteRunButton}/{@link ClearHistoryButton} pattern
+ * in `history-table.tsx` — the dialog stays mounted through the async call and
+ * closes only once the clear settles, surfacing a toast on failure.
+ */
+function ClearBatchButton({ onClear }: { onClear: () => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [clearing, setClearing] = useState(false);
+
+  const run = async () => {
+    setClearing(true);
+    try {
+      await onClear();
+      setOpen(false);
+    } catch {
+      toast.error("Could not clear this run from history.");
+    } finally {
+      setClearing(false);
+    }
+  };
+
+  return (
+    <AlertDialog open={open} onOpenChange={setOpen}>
+      <AlertDialogTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          aria-label="Clear — delete this run from history"
+          className="border-score-poor/40 font-mono text-[0.7rem] uppercase tracking-[0.16em] text-score-poor hover:bg-score-poor/10 hover:text-score-poor"
+        >
+          <Trash2 data-icon="inline-start" />
+          Clear
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Clear this run from history?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This permanently deletes this batch&apos;s runs and their stored
+            reports from history. This can&apos;t be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={clearing}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={clearing}
+            onClick={(event) => {
+              // Keep the dialog mounted through the async call; it closes once the
+              // clear settles (success path) rather than on click.
+              event.preventDefault();
+              void run();
+            }}
+          >
+            {clearing ? "Clearing…" : "Clear run"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 

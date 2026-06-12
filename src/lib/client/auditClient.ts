@@ -129,6 +129,15 @@ export async function deleteRun(runId: string): Promise<void> {
   if (!response.ok) throw await toApiError(response);
 }
 
+/** Delete a whole persisted batch (its runs + stored reports + AI analyses + the batch row). Throws {@link ApiError} on failure. */
+export async function deleteBatch(id: string): Promise<void> {
+  const response = await fetch(
+    `/api/history/batch/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+  if (!response.ok) throw await toApiError(response);
+}
+
 /** Counts removed by {@link clearHistory}. */
 export interface ClearHistoryResult {
   runs: number;

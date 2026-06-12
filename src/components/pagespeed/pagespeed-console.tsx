@@ -20,6 +20,7 @@ import {
   ApiError,
   cancelBatch,
   createBatch,
+  deleteBatch,
   getBatch,
   type CreateBatchRequest,
 } from "@/lib/client/auditClient";
@@ -148,6 +149,30 @@ export function PageSpeedConsole({
     }
   }
 
+  // Archive: dismiss a finished PSI batch from the console without touching the
+  // backend — the run stays in History. Drops the active-batch pointer and resets
+  // the detail sheet so the console returns to a clean form.
+  function handleArchive() {
+    setBatchId(null);
+    localStorage.removeItem(ACTIVE_BATCH_KEY);
+    setSelectedId(null);
+    setSheetOpen(false);
+  }
+
+  // Clear: destructively delete a finished PSI batch from History, then reset the
+  // console exactly like Archive. Left to throw on failure so the AlertDialog in
+  // AuditResults catches it and toasts; the destructive confirm itself lives in
+  // that view layer (mirroring DeleteRunButton in history-table.tsx).
+  async function handleClear() {
+    if (!batchId) return;
+    await deleteBatch(batchId);
+    setBatchId(null);
+    localStorage.removeItem(ACTIVE_BATCH_KEY);
+    setSelectedId(null);
+    setSheetOpen(false);
+    toast.success("PageSpeed run cleared from history.");
+  }
+
   const running = submitting || (batchId !== null && !isComplete);
 
   const selectedJob: AuditJob | null =
@@ -177,6 +202,8 @@ export function PageSpeedConsole({
               onSelect={handleSelect}
               onCancel={handleCancel}
               cancelling={cancelling}
+              onArchive={handleArchive}
+              onClear={handleClear}
             />
           ) : null
         }
