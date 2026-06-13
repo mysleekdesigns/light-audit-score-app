@@ -10,7 +10,7 @@ export const metadata: Metadata = {
 
 export default function SettingsPage() {
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-8">
+    <div className="flex flex-col gap-8">
       <PageHeader
         kicker="06 — Settings"
         title="Settings"
