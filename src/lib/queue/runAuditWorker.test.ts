@@ -132,6 +132,20 @@ describe("runAuditInWorker failure surfacing (forked fixtures)", () => {
         "process.send({ ok: true }, () => process.exit(0));",
       ].join("\n"),
     );
+
+    // A `.ts` worker carrying real type syntax: must be forkable in dev mode.
+    // Before the --experimental-strip-types gate in runAuditWorker this threw
+    // ERR_UNKNOWN_FILE_EXTENSION on Node < 23.6 (e.g. Electron 36's Node 22),
+    // which is exactly how electron:dev audits failed. Regression guard for
+    // that fix — passes on both flagged (22.6–23.5) and default-on (≥23.6) Node.
+    fixtures.tsSuccess = writeFixture(
+      "success.ts",
+      [
+        "const out: string = process.env.LH_AUDIT_OUTPUT as string;",
+        "require('node:fs').writeFileSync(out, JSON.stringify({ requestedUrl: 'ts-ok' }));",
+        "process.send({ ok: true }, () => process.exit(0));",
+      ].join("\n"),
+    );
   });
 
   afterAll(() => {
@@ -162,6 +176,11 @@ describe("runAuditInWorker failure surfacing (forked fixtures)", () => {
   it("still resolves the result on a clean success", async () => {
     const result = (await runWith(fixtures.success)) as { requestedUrl?: string };
     expect(result.requestedUrl).toBe("ok");
+  });
+
+  it("forks a .ts worker with type syntax (electron:dev strip-types guard)", async () => {
+    const result = (await runWith(fixtures.tsSuccess)) as { requestedUrl?: string };
+    expect(result.requestedUrl).toBe("ts-ok");
   });
 
   it("exports WorkerAbortError for the queue's cancel path", () => {

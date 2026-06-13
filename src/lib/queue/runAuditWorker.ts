@@ -96,6 +96,28 @@ function resolveAliasHooks(): string | null {
 }
 
 /**
+ * Whether the worker fork needs `--experimental-strip-types` to load the `.ts`
+ * worker. `fork` reuses `process.execPath`, so the runtime that will execute the
+ * worker is the one running THIS process — its `process.versions.node` decides.
+ *
+ * Node enables TypeScript type-stripping by default in v23.6.0. Below that the
+ * `.ts` worker fork dies with `ERR_UNKNOWN_FILE_EXTENSION` unless the flag is
+ * passed (the flag itself landed in v22.6.0). This is the dev-mode path only —
+ * Electron embeds its own Node (e.g. Electron 36 → Node 22.15, where stripping
+ * is off by default), so `electron:dev` audits need the flag even when the
+ * developer's system Node is new enough. The packaged build forks compiled JS
+ * (alias-hooks null), so this never applies there.
+ *
+ * Returns false for Node < 22.6 (flag unsupported — nothing we can do) and for
+ * Node ≥ 23.6 (stripping is already the default).
+ */
+function needsExperimentalStripTypes(): boolean {
+  const [major = 0, minor = 0] = process.versions.node.split(".").map(Number);
+  if (major > 23 || (major === 23 && minor >= 6)) return false; // default on
+  return major > 22 || (major === 22 && minor >= 6); // flag available
+}
+
+/**
  * Compact but useful tail of child stderr for a crash message. The worker now
  * funnels its own failures through a structured `{ ok:false }` IPC message
  * (see scripts/audit-worker.ts), so this only fires for crashes that signal
@@ -174,6 +196,13 @@ export async function runAuditInWorker(
     "--disable-warning=ExperimentalWarning",
   ];
   if (aliasHooks) {
+    // The worker is the `.ts` source; on Node < 23.6 (e.g. Electron's embedded
+    // Node 22) type-stripping is off by default and the fork would otherwise
+    // fail with ERR_UNKNOWN_FILE_EXTENSION. The ExperimentalWarning it emits is
+    // already silenced by the --disable-warning above.
+    if (needsExperimentalStripTypes()) {
+      execArgv.push("--experimental-strip-types");
+    }
     execArgv.push("--import", pathToFileURL(aliasHooks).href);
   }
 
