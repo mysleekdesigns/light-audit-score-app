@@ -176,11 +176,20 @@ export function diffMetrics(
   });
 }
 
-/** Format an ISO time into a compact axis/point label; falls back to the raw value. */
+/**
+ * Format an ISO time into a compact axis/point label; falls back to the raw
+ * value.
+ *
+ * The locale is pinned rather than left ambient: these labels are baked into the
+ * chart's data props during SSR, so a browser on a different locale would render
+ * different text than the server did and fail hydration. The surrounding copy is
+ * English-only. The chart's narrow-width tick also splits this on its comma, so
+ * the day must come first.
+ */
 function trendLabel(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "2-digit",
     hour: "2-digit",

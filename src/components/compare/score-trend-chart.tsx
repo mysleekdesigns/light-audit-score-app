@@ -1,6 +1,14 @@
 "use client";
 
-import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ReferenceArea,
+  ReferenceLine,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import {
   ChartContainer,
@@ -11,14 +19,16 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart";
 import { LIGHTHOUSE_CATEGORIES } from "@/lib/lighthouse/types";
-import { CATEGORY_LABELS } from "@/lib/scores";
+import { CATEGORY_LABELS, GOOD_THRESHOLD } from "@/lib/scores";
 import type { ScoreTrendPoint } from "@/lib/compare/diff";
 
 /**
  * Map each category to a chart line colour from the theme's `--chart-*` tokens
  * (read from globals.css; never raw hex). Labels reuse the shared category map.
+ * Exported so the sparklines below the chart can draw each category in its own
+ * series colour and act as a second reading of the same key.
  */
-const TREND_CONFIG = {
+export const TREND_CONFIG = {
   performance: { label: CATEGORY_LABELS.performance, color: "var(--chart-1)" },
   accessibility: { label: CATEGORY_LABELS.accessibility, color: "var(--chart-2)" },
   "best-practices": { label: CATEGORY_LABELS["best-practices"], color: "var(--chart-3)" },
@@ -30,12 +40,15 @@ interface ScoreTrendChartProps {
 }
 
 /**
- * X tick that pulls its text back inside the plot at the two edges.
+ * X tick that pulls its text back inside the plot at the two edges, and drops to
+ * the date alone while the card is narrow.
  *
  * Recharts centres every tick label on its point, and the first/last points sit
  * on the plot's edges — so half of each spilled outside the SVG and was clipped
  * ("Jun 15, 01:25 PM" lost its "M"). Anchoring the ends `start`/`end` keeps the
- * full timestamp legible without reserving dead margin on both sides.
+ * full timestamp legible without reserving dead margin on both sides. A 115px
+ * timestamp still cannot survive a 240px plot, so below `@sm` only the day is
+ * drawn — the exact time is a tap away in the tooltip.
  */
 function EdgeTick({
   x = 0,
@@ -53,16 +66,22 @@ function EdgeTick({
 }) {
   const anchor =
     index === 0 ? "start" : index >= lastIndex ? "end" : "middle";
+  const full = String(payload?.value ?? "");
+  // "Jun 15, 01:25 PM" → "Jun 15". Labels always carry the day first.
+  const short = full.split(",")[0];
+  const shared = { x, y, dy: 10, textAnchor: anchor } as const;
   return (
-    <text
-      x={x}
-      y={y}
-      dy={10}
-      textAnchor={anchor}
-      className="fill-muted-foreground text-[0.625rem]"
-    >
-      {payload?.value}
-    </text>
+    <>
+      <text {...shared} className="fill-muted-foreground text-[0.625rem] @sm:hidden">
+        {short}
+      </text>
+      <text
+        {...shared}
+        className="hidden fill-muted-foreground text-[0.625rem] @sm:block"
+      >
+        {full}
+      </text>
+    </>
   );
 }
 
@@ -70,17 +89,42 @@ function EdgeTick({
  * Multi-series time-series of the four category scores (0–100) across a URL's
  * runs, oldest → newest. Renders inside the shadcn `ChartContainer`; recharts is
  * client-only so this file is a client component.
+ *
+ * The Y domain stays a full 0–100 — a trend that silently rescales to its own
+ * range would make a 96→97 wobble look like a cliff — and the space that honesty
+ * costs is paid back by marking the 90 threshold: the passing band is tinted
+ * behind the lines, so "we are in the green" is readable before any individual
+ * number is.
  */
 export function ScoreTrendChart({ data }: ScoreTrendChartProps) {
   return (
     <ChartContainer
       config={TREND_CONFIG}
-      className="aspect-auto h-56 w-full font-mono"
+      className="aspect-auto h-52 w-full font-mono @lg:h-64"
     >
       {/* `left: 0`, not a negative inset: -8 pulled the Y axis under the SVG's
           own left edge, so every label was clipped to its last character and
           0 / 50 / 90 / 100 all read as "0". */}
       <LineChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+        {/* Only the passing band is tinted, painted before the grid and lines so
+            they sit on top. Banding all three read badly on this dark card: a 6%
+            red wash over the empty bottom half of a 0–100 axis is a large, loud
+            block drawing the eye to exactly where there is no data. One green
+            band plus the 90 threshold says the same thing quietly, and the
+            footer's score legend still carries the full scale. */}
+        <ReferenceArea
+          y1={GOOD_THRESHOLD}
+          y2={100}
+          fill="var(--score-good)"
+          fillOpacity={0.09}
+          ifOverflow="extendDomain"
+        />
+        <ReferenceLine
+          y={GOOD_THRESHOLD}
+          stroke="var(--score-good)"
+          strokeOpacity={0.4}
+          strokeDasharray="2 4"
+        />
         <CartesianGrid vertical={false} strokeDasharray="2 4" />
         <XAxis
           dataKey="label"
@@ -106,10 +150,12 @@ export function ScoreTrendChart({ data }: ScoreTrendChartProps) {
         <ChartTooltip
           content={<ChartTooltipContent className="font-mono" labelKey="label" />}
         />
-        {/* Four category names are wider than a phone — wrap instead of
-            overflowing the card and clipping the outer two entries. */}
+        {/* Four category names are wider than a phone. A 2×2 grid fills the card
+            evenly instead of leaving a ragged third row of one orphaned entry. */}
         <ChartLegend
-          content={<ChartLegendContent className="flex-wrap gap-x-4 gap-y-1" />}
+          content={
+            <ChartLegendContent className="grid grid-cols-2 justify-items-start gap-x-4 gap-y-1 @sm:flex @sm:flex-wrap" />
+          }
         />
         {LIGHTHOUSE_CATEGORIES.map((category) => (
           <Line

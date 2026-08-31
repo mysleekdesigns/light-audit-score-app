@@ -7,6 +7,7 @@ import {
   GitCompareArrows,
   History,
   LineChart,
+  Link2,
   Smartphone,
 } from "lucide-react";
 
@@ -54,6 +55,17 @@ import { ScoreTrendChart } from "./score-trend-chart";
 
 const SECTION_LABEL =
   "font-mono text-[0.625rem] uppercase tracking-[0.18em] text-muted-foreground";
+
+/**
+ * The URL picker's label, matched to `ReadoutCell`'s own micro-cap rather than
+ * approximated: the picker sits inside the readout bezel as its first cell, so
+ * its label has to land on the same baseline and weight as "RUNS" beside it.
+ */
+const CELL_LABEL =
+  "flex items-center gap-1.5 font-mono text-[0.6rem] font-medium uppercase tracking-[0.18em] text-muted-foreground";
+
+/** Hairline between readout cells, once they sit in a row rather than a 2×2 grid. */
+const FACT_DIVIDER = "@2xl:border-l @2xl:border-border/60 @2xl:pl-6";
 
 /** Format an ISO timestamp into a compact local datetime for option labels. */
 function formatRunLabel(row: HistoryRow): string {
@@ -164,13 +176,17 @@ function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
 
   // What the selected URL actually holds — the target band's readout. Runs are
   // already ascending by time, so the span is simply first → last.
-  const span = useMemo(
-    () => ({
-      from: formatDay(groupRuns[0]),
-      to: formatDay(groupRuns[groupRuns.length - 1]),
-    }),
-    [groupRuns],
-  );
+  const span = useMemo(() => {
+    const from = formatDay(groupRuns[0]);
+    const to = formatDay(groupRuns[groupRuns.length - 1]);
+    if (from === to) return from;
+    // Within one month the repeated name is dead weight — and it is exactly what
+    // pushed "Jun 11 → Jun 15" onto a second line in the phone's 2×2 readout, so
+    // it collapses to "Jun 11 → 15".
+    const [fromMonth] = from.split(" ");
+    const [toMonth, toDay] = to.split(" ");
+    return `${from} → ${fromMonth === toMonth ? toDay : to}`;
+  }, [groupRuns]);
   const devices = useMemo(() => describeDevices(groupRuns), [groupRuns]);
   const engines = useMemo(() => describeEngines(groupRuns), [groupRuns]);
 
@@ -205,11 +221,18 @@ function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
   return (
     <div className="flex flex-col gap-6">
       {/* Target band ------------------------------------------------------
-          The picker used to be a lone 350px select on the page background with
-          ~2000px of void beside it at desk widths. It is now an instrument band
-          matching the audit consoles: the primary input on the left, a readout
-          of what that selection actually contains trailing right once the card
-          is wide enough. Sizes off the card's own container query. */}
+          One bezel, one row of cells, and the picker is the first of them —
+          its "URL" micro-cap sits exactly where every other cell's label does,
+          with the select standing in for the value.
+
+          It was previously two boxes side by side: a capped 672px picker on the
+          left and a taller readout on the right. Because the two were bottom
+          aligned, the left half opened a void above the picker the moment the
+          row engaged (~863px), and the picker stopped growing while the card
+          kept going. Folding the picker into the bezel means the width is
+          always spoken for: the URL takes whatever the four facts leave, and
+          below `@4xl` it simply takes the whole row with the facts spread
+          evenly underneath. */}
       <Card>
         <CardContent className="@container flex flex-col gap-4 px-4">
           <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
@@ -221,19 +244,31 @@ function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
             </p>
           </header>
 
-          <div className="flex flex-col gap-4 @3xl:flex-row @3xl:items-end @3xl:justify-between @3xl:gap-6">
-            {/* Grows with the card so long URLs stop truncating, but stops
-                short of a select stretched across an ultrawide display. */}
-            <div className="flex min-w-0 flex-1 flex-col gap-2 @3xl:max-w-2xl">
-              <label htmlFor={urlSelectId} className={SECTION_LABEL}>
-                URL
-              </label>
-              <Select value={selectedUrl} onValueChange={handleUrlChange}>
+          <Readout>
+            <div className="grid gap-x-6 gap-y-4 @4xl:grid-cols-[minmax(0,1fr)_auto] @4xl:items-end">
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <label htmlFor={urlSelectId} className={CELL_LABEL}>
+                  <Link2 className="size-3" aria-hidden />
+                  URL
+                </label>
+                <Select value={selectedUrl} onValueChange={handleUrlChange}>
+                {/* The trigger wraps rather than truncates. A single-line trigger
+                    clipped 223px of the URL on a phone — and still 123px at
+                    1024px — so the one thing the whole page is about was
+                    unreadable. Height goes auto and the value's line clamp is
+                    lifted; the run-count badge the option carries is dropped
+                    here, since the Runs cell in the readout already states it. */}
                 <SelectTrigger
                   id={urlSelectId}
-                  className="w-full font-mono text-xs"
+                  className="w-full whitespace-normal py-1.5 text-left font-mono text-xs data-[size=default]:h-auto data-[size=default]:min-h-8 *:data-[slot=select-value]:line-clamp-none"
                 >
-                  <SelectValue placeholder="Select a URL" />
+                  <SelectValue placeholder="Select a URL">
+                    {/* `text-left` lives on the trigger, not here: this span is
+                        inline, and `text-align` only applies to a block box —
+                        so a wrapped URL inherited the button's UA centring and
+                        its second line sat in the middle of the field. */}
+                    <span className="min-w-0 wrap-anywhere">{selectedUrl}</span>
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
@@ -254,124 +289,135 @@ function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
                     ))}
                   </SelectGroup>
                 </SelectContent>
-              </Select>
-            </div>
+                </Select>
+              </div>
 
-            <Readout className="@3xl:w-auto @3xl:shrink-0">
-              <ReadoutCells>
+              {/* Facts. Two rows of two while the bezel is narrow, an even
+                  four-column strip once it can hold one — never a wrapping row
+                  that packs left and leaves a quarter of the bezel blank. From
+                  `@2xl` each cell after the first hangs a hairline off its own
+                  left edge, so the strip reads as one ruled instrument face. */}
+              <ReadoutCells className="grid grid-cols-2 items-end gap-x-6 gap-y-3 @2xl:grid-cols-4 @2xl:gap-x-0 @4xl:flex">
                 <ReadoutCell
                   icon={<History className="size-3" aria-hidden />}
                   label="Runs"
                   value={String(groupRuns.length)}
                 />
                 <ReadoutCell
+                  className={FACT_DIVIDER}
                   icon={<CalendarRange className="size-3" aria-hidden />}
                   label="Span"
-                  value={
-                    span.from === span.to
-                      ? span.from
-                      : `${span.from} → ${span.to}`
-                  }
+                  value={span}
                 />
                 <ReadoutCell
+                  className={FACT_DIVIDER}
                   icon={<Smartphone className="size-3" aria-hidden />}
                   label="Devices"
                   value={devices}
                 />
                 <ReadoutCell
+                  className={FACT_DIVIDER}
                   icon={<Cpu className="size-3" aria-hidden />}
                   label="Engine"
                   value={engines.label}
                   tone={engines.mixed ? "warn" : "default"}
                 />
               </ReadoutCells>
-              <ReadoutNote>
-                {engines.mixed
-                  ? "This URL has both local and PageSpeed runs. They are measured on different hardware, so a diff across the two engines reflects more than the page."
-                  : "Pick two runs below to diff their scores and Core Web Vitals."}
-              </ReadoutNote>
-            </Readout>
-          </div>
+            </div>
+            <ReadoutNote>
+              {engines.mixed
+                ? "This URL has both local and PageSpeed runs. They are measured on different hardware, so a diff across the two engines reflects more than the page."
+                : "Pick two runs below to diff their scores and Core Web Vitals."}
+            </ReadoutNote>
+          </Readout>
         </CardContent>
       </Card>
 
-      {/* Trend + Diff — stacked on narrow screens, side-by-side on very wide. */}
-      <div className="grid gap-6 xl:grid-cols-2 xl:items-start">
+      {/* Trend + Diff -----------------------------------------------------
+          Stacked while the page is one column, side by side from `lg`. The
+          split used to wait for `xl`, which left 1024–1279px rendering two
+          944px-wide cards whose widest content was a four-column table: the
+          numbers ended up hundreds of pixels apart with nothing between them.
+          Both cards are `@container`s, so everything inside sizes off its own
+          column — the same card is 310px on a phone, 688px on a tablet and
+          588px in half a desktop, and each needs a different answer. */}
+      <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
         {/* Trend section --------------------------------------------------- */}
-        <Card>
-        <CardHeader className="border-b">
-          <CardTitle className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.16em]">
-            <LineChart aria-hidden className="size-3.5 text-primary" />
-            Score Trend
-          </CardTitle>
-          <CardDescription className="font-mono text-xs tabular-nums">
-            {groupRuns.length} {groupRuns.length === 1 ? "run" : "runs"} · oldest →
-            newest
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-5">
-          {hasTrend ? (
-            <>
-              <ScoreTrendChart data={trend} />
-              <div className="flex flex-col gap-2">
-                <span className={SECTION_LABEL}>Per-category</span>
-                <ScoreSparklines data={trend} />
+        <Card className="@container">
+          <CardHeader className="border-b">
+            <CardTitle className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.16em]">
+              <LineChart aria-hidden className="size-3.5 text-primary" />
+              Score Trend
+            </CardTitle>
+            <CardDescription className="font-mono text-xs tabular-nums">
+              {groupRuns.length} {groupRuns.length === 1 ? "run" : "runs"} ·
+              oldest → newest
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-5">
+            {hasTrend ? (
+              <>
+                <ScoreTrendChart data={trend} />
+                <div className="flex flex-col gap-2">
+                  <span className={SECTION_LABEL}>Per-category</span>
+                  <ScoreSparklines data={trend} />
+                </div>
+              </>
+            ) : (
+              <div className="flex min-h-32 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border/60 px-4 py-10 text-center @sm:px-6">
+                <p className="text-sm font-medium text-foreground">
+                  Needs ≥2 runs to show a trend
+                </p>
+                <p className="max-w-sm text-sm text-pretty text-muted-foreground">
+                  This URL has a single audit. Run it again to chart how its
+                  scores move over time.
+                </p>
               </div>
-            </>
-          ) : (
-            <div className="flex min-h-32 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border/60 px-6 py-10 text-center">
-              <p className="text-sm font-medium text-foreground">
-                Needs ≥2 runs to show a trend
-              </p>
-              <p className="max-w-sm text-sm text-muted-foreground">
-                This URL has a single audit. Run it again to chart how its scores
-                move over time.
-              </p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Diff section ---------------------------------------------------- */}
-        <Card>
-        <CardHeader className="border-b">
-          <CardTitle className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.16em]">
-            <GitCompareArrows aria-hidden className="size-3.5 text-primary" />
-            Run Diff
-          </CardTitle>
-          <CardDescription>
-            Pick a baseline and comparison run to diff scores and Core Web Vitals.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-6">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <RunSelect
-              id={baselineId}
-              label="Baseline"
-              value={baseline.id}
-              runs={groupRuns}
-              onChange={setBaselineId}
-            />
-            <RunSelect
-              id={comparisonId}
-              label="Comparison"
-              value={comparison.id}
-              runs={groupRuns}
-              onChange={setComparisonId}
-            />
-          </div>
-
-          {baseline.id === comparison.id ? (
-            <div className="flex min-h-24 items-center justify-center rounded-md border border-dashed border-border/60 px-6 py-8 text-center">
-              <p className="max-w-sm text-sm text-muted-foreground">
-                Baseline and comparison are the same run — pick two different runs
-                to see deltas.
-              </p>
+        <Card className="@container">
+          <CardHeader className="border-b">
+            <CardTitle className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.16em]">
+              <GitCompareArrows aria-hidden className="size-3.5 text-primary" />
+              Run Diff
+            </CardTitle>
+            <CardDescription className="text-pretty">
+              Pick a baseline and comparison run to diff scores and Core Web
+              Vitals.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-6">
+            <div className="grid gap-4 @lg:grid-cols-2">
+              <RunSelect
+                id={baselineId}
+                label="Baseline"
+                value={baseline.id}
+                runs={groupRuns}
+                onChange={setBaselineId}
+              />
+              <RunSelect
+                id={comparisonId}
+                label="Comparison"
+                value={comparison.id}
+                runs={groupRuns}
+                onChange={setComparisonId}
+              />
             </div>
-          ) : (
-            <RunDiff baseline={baseline} comparison={comparison} />
-          )}
-        </CardContent>
+
+            {baseline.id === comparison.id ? (
+              <div className="flex min-h-24 items-center justify-center rounded-md border border-dashed border-border/60 px-4 py-8 text-center @sm:px-6">
+                <p className="max-w-sm text-sm text-pretty text-muted-foreground">
+                  Baseline and comparison are the same run — pick two different
+                  runs to see deltas.
+                </p>
+              </div>
+            ) : (
+              <RunDiff baseline={baseline} comparison={comparison} />
+            )}
+          </CardContent>
         </Card>
       </div>
     </div>

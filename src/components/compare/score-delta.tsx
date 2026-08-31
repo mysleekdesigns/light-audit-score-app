@@ -1,6 +1,7 @@
 import { ArrowDown, ArrowUp, Minus } from "lucide-react";
 
 import type { ScoreDirection } from "@/lib/compare/diff";
+import type { MetricValue } from "@/lib/lighthouse/types";
 import { cn } from "@/lib/utils";
 
 /**
@@ -29,6 +30,35 @@ export function formatDelta(delta: number | null, fractionDigits = 0): string {
   return `${rounded > 0 ? "+" : ""}${rounded}`;
 }
 
+/**
+ * Format a Core Web Vitals delta in the same unit the row's values are shown in.
+ *
+ * Metric deltas are raw `numericValue` differences — milliseconds for timings —
+ * so an LCP row used to read "3.4 s → 2.3 s, −1140", mixing two units inside one
+ * line. The unit is recovered from Lighthouse's own `displayValue` ("2.3 s",
+ * "120 ms") rather than assumed, so the delta always matches the numbers beside
+ * it; CLS has no unit and keeps three decimals.
+ */
+export function formatMetricDelta(
+  delta: number | null,
+  sample: MetricValue | null,
+): string {
+  if (delta === null) return "—";
+  const unit = sample?.displayValue?.match(/([a-z]+)\s*$/i)?.[1] ?? "";
+
+  if (unit.toLowerCase() === "s") {
+    const seconds = delta / 1000;
+    const rounded = Number(seconds.toFixed(Math.abs(seconds) < 1 ? 2 : 1));
+    return rounded === 0 ? "±0" : `${rounded > 0 ? "+" : ""}${rounded} s`;
+  }
+  if (unit) {
+    const rounded = Math.round(delta);
+    return rounded === 0 ? "±0" : `${rounded > 0 ? "+" : ""}${rounded} ${unit}`;
+  }
+  const rounded = Number(delta.toFixed(3));
+  return rounded === 0 ? "±0" : `${rounded > 0 ? "+" : ""}${rounded}`;
+}
+
 /** Colour class for a delta given improvement state. */
 export function deltaClass(improved: boolean | null): string {
   if (improved === null) return DELTA_NEUTRAL;
@@ -41,15 +71,27 @@ export function deltaSrLabel(improved: boolean | null, flat: boolean): string {
   return improved ? "improved" : "regressed";
 }
 
-/** A direction arrow paired with text — colour is never the sole signal. */
+/**
+ * A direction arrow paired with text — colour is never the sole signal.
+ *
+ * The arrow follows the *number* and the colour carries the *judgement*. For
+ * category scores those coincide (higher is better), so `points` can be left
+ * off. For Core Web Vitals they deliberately diverge: an improved LCP is a
+ * negative delta, and pairing "−1.1 s" with an up arrow read as a contradiction.
+ * Passing `points="down"` there gives a green down arrow — the value fell, and
+ * falling is good.
+ */
 export function DeltaArrow({
   improved,
   flat,
+  points,
   className,
 }: {
   improved: boolean | null;
   /** True when there is a real delta of exactly 0 (vs. a missing value). */
   flat: boolean;
+  /** Which way the arrow points; defaults to the improvement direction. */
+  points?: "up" | "down";
   className?: string;
 }) {
   if (improved === null) {
@@ -60,7 +102,7 @@ export function DeltaArrow({
       />
     ) : null;
   }
-  const Icon = improved ? ArrowUp : ArrowDown;
+  const Icon = (points ?? (improved ? "up" : "down")) === "up" ? ArrowUp : ArrowDown;
   return (
     <Icon
       aria-hidden

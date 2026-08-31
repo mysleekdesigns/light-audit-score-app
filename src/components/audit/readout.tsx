@@ -77,14 +77,20 @@ export function ReadoutCell({
   label,
   value,
   tone = "default",
+  className,
 }: {
   icon: ReactNode;
   label: string;
   value: string;
   tone?: ReadoutTone;
+  /**
+   * Optional per-cell layout — a caller laying its cells out as an even strip
+   * rather than a wrapping row uses this to hang a divider off each one.
+   */
+  className?: string;
 }) {
   return (
-    <div className="flex min-w-0 flex-col gap-0.5">
+    <div className={cn("flex min-w-0 flex-col gap-0.5", className)}>
       <span className="flex items-center gap-1.5 font-mono text-[0.6rem] font-medium uppercase tracking-[0.18em] text-muted-foreground">
         {icon}
         {label}

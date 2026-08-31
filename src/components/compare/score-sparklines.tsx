@@ -3,6 +3,7 @@
 import { Line, LineChart } from "recharts";
 
 import { ChartContainer, type ChartConfig } from "@/components/ui/chart";
+import { TREND_CONFIG } from "@/components/compare/score-trend-chart";
 import { LIGHTHOUSE_CATEGORIES, type LighthouseCategory } from "@/lib/lighthouse/types";
 import {
   CATEGORY_LABELS,
@@ -13,7 +14,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { ScoreTrendPoint } from "@/lib/compare/diff";
 
-/** Sparklines inherit the score colour via `currentColor`, so config is minimal. */
+/** Sparklines are drawn with an explicit series colour, so config is minimal. */
 const SPARK_CONFIG = {
   value: { label: "Score" },
 } satisfies ChartConfig;
@@ -36,35 +37,49 @@ function Sparkline({
     value: point[category],
   }));
   const latest = [...series].reverse().find((p) => p.value !== null)?.value ?? null;
-  const colorClass = scoreColorClass(latest);
+  const seriesColor = TREND_CONFIG[category].color;
 
   return (
     <div
+      // `role="img"` so the label is authoritative: on a bare <div>, aria-label
+      // is not reliably announced, and it collapses the recharts SVG's own nodes
+      // into one reading rather than leaving them as noise after it.
+      role="img"
       className="flex min-w-0 flex-col gap-1.5 rounded-md border border-border/60 bg-card/40 px-3 py-2.5"
       aria-label={`${CATEGORY_LABELS[category]} trend, latest score ${formatScore(latest)}`}
     >
       <div className="flex items-baseline justify-between gap-2">
-        <span className="font-mono text-[0.625rem] uppercase tracking-[0.18em] text-muted-foreground">
-          {CATEGORY_SHORT_LABELS[category]}
+        <span className="flex min-w-0 items-center gap-1.5 font-mono text-[0.625rem] uppercase tracking-[0.18em] text-muted-foreground">
+          {/* The same swatch the chart legend uses — this tile is a second
+              reading of that series, not an unrelated strip. */}
+          <span
+            aria-hidden
+            className="size-1.5 shrink-0 rounded-[2px]"
+            style={{ backgroundColor: seriesColor }}
+          />
+          <span className="truncate">{CATEGORY_SHORT_LABELS[category]}</span>
         </span>
         <span
-          className={cn("font-mono text-sm font-medium tabular-nums", colorClass)}
+          className={cn(
+            "font-mono text-sm font-medium tabular-nums",
+            scoreColorClass(latest),
+          )}
         >
           {formatScore(latest)}
         </span>
       </div>
-      <ChartContainer
-        config={SPARK_CONFIG}
-        className={cn("aspect-auto h-8 w-full", colorClass)}
-      >
+      <ChartContainer config={SPARK_CONFIG} className="aspect-auto h-10 w-full">
         <LineChart
           data={series}
-          margin={{ top: 2, right: 2, left: 2, bottom: 2 }}
+          margin={{ top: 3, right: 2, left: 2, bottom: 3 }}
         >
+          {/* Deliberately auto-scaled, unlike the chart above: that one carries
+              the absolute picture against its score bands, so these are free to
+              spend their 40px on the shape of the movement. */}
           <Line
             dataKey="value"
             type="monotone"
-            stroke="currentColor"
+            stroke={seriesColor}
             strokeWidth={1.5}
             dot={false}
             isAnimationActive={false}
@@ -77,13 +92,17 @@ function Sparkline({
 }
 
 /**
- * A row of four compact per-category sparklines (Perf / A11y / BP / SEO),
- * each labelled and showing its latest value coloured by score band. Satisfies
- * the PRD's "trend sparklines per URL over time".
+ * A row of four compact per-category sparklines (Perf / A11y / BP / SEO), each
+ * labelled with its chart-series swatch and showing its latest value coloured by
+ * score band. Satisfies the PRD's "trend sparklines per URL over time".
+ *
+ * Two columns while the card is narrow, four once it can give each tile a usable
+ * trace — sized off the card's container, since this row sits in a half-width
+ * column from `lg` up.
  */
 export function ScoreSparklines({ data }: ScoreSparklinesProps) {
   return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+    <div className="grid grid-cols-2 gap-2 @lg:grid-cols-4">
       {LIGHTHOUSE_CATEGORIES.map((category) => (
         <Sparkline key={category} category={category} data={data} />
       ))}
