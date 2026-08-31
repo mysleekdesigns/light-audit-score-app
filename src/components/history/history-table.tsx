@@ -124,14 +124,17 @@ type PairedDevice = "mobile" | "desktop";
 const HEAD_LABEL = "font-mono text-[0.7rem] uppercase tracking-[0.16em]";
 
 /**
- * Right padding for score column headers, matching the `ScoreCell` trend slot
- * (w-4 + gap-1) so each category label stays right-aligned over its numbers
- * rather than over the trailing trend arrow.
+ * Alignment for score column headers, kept in step with {@link ScoreCell} so a
+ * category label always sits directly over its numbers.
  *
- * That alignment is a nicety, and below `sm` it costs 20px per column — 80px of
- * a ~306px table — so it only applies where there is room for it.
+ * On a phone both are flush left, which needs no compensation: label and number
+ * start at the same content edge. From `sm` up both are flush right, and the
+ * header then has to clear everything between the cell's right border and the
+ * number's right edge — the cell's own `p-2` (8px), the `gap-1` before the trend
+ * slot (4px), and the `w-4` slot itself (16px) — 28px, which is `pr-7`.
+ * Measured, not assumed: at `pr-5` every label sat 8px right of its column.
  */
-const SCORE_HEAD = "pr-2 sm:pr-5";
+const SCORE_HEAD = "text-left sm:text-right sm:pr-7";
 
 /**
  * Compact cell padding for the densified archive — tighter vertical rhythm than
@@ -282,7 +285,7 @@ function SortHeader({
         onClick={() => onSort(sortKey)}
         className={cn(
           "group/sort inline-flex items-center gap-1 rounded-sm outline-none transition-colors hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50",
-          numeric && "flex-row-reverse",
+          numeric && "sm:flex-row-reverse",
           active ? "text-foreground" : "text-muted-foreground",
         )}
       >
@@ -337,8 +340,8 @@ function ScoreCell({
 }) {
   const value = score ?? null;
   return (
-    <TableCell className={cn(COMPACT_CELL, "text-right", className)}>
-      <span className="inline-flex items-baseline justify-end gap-1">
+    <TableCell className={cn(COMPACT_CELL, "text-left sm:text-right", className)}>
+      <span className="inline-flex items-baseline justify-start gap-1 sm:justify-end">
         <span className={cn("font-mono text-sm tabular-nums", scoreColorClass(value))}>
           {formatScore(value)}
         </span>
@@ -920,7 +923,7 @@ function HistoryDeviceHalf({
         {SCORE_COLUMNS.map(({ category }, i) => (
           <TableCell
             key={category}
-            className={cn(COMPACT_CELL, "text-right text-muted-foreground/50", i === 0 && edge, stow)}
+            className={cn(COMPACT_CELL, "text-left text-muted-foreground/50 sm:text-right", i === 0 && edge, stow)}
           >
             —
           </TableCell>
@@ -1061,7 +1064,7 @@ function PairedTableBody({
             {SCORE_COLUMNS.map(({ category }) => (
               <TableHead
                 key={`m-${category}`}
-                className={cn(HEAD_LABEL, "text-right", SCORE_HEAD, stowMobile && stow)}
+                className={cn(HEAD_LABEL, SCORE_HEAD, stowMobile && stow)}
               >
                 {CATEGORY_SHORT_LABELS[category]}
               </TableHead>
@@ -1074,7 +1077,6 @@ function PairedTableBody({
                 key={`d-${category}`}
                 className={cn(
                   HEAD_LABEL,
-                  "text-right",
                   SCORE_HEAD,
                   i === 0 && "border-l border-border/50",
                   stowDesktop && stow,
