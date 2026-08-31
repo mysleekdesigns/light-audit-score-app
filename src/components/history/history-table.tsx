@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useId, useMemo, useState } from "react";
+import { Fragment, useCallback, useId, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Archive,
@@ -201,6 +201,32 @@ function pathOf(raw: string): string {
   } catch {
     return raw;
   }
+}
+
+/**
+ * A path that wraps at its own segment boundaries.
+ *
+ * In a ~128px phone column an ellipsis lands mid-segment — `/docs/guides/adv…`,
+ * `/docs/getting-st…` — which cuts off the very part that tells two rows apart.
+ * A `<wbr>` after each slash gives the browser somewhere sensible to break, so
+ * the whole path survives across two short lines instead.
+ */
+function BreakablePath({ path }: { path: string }) {
+  const segments = path.split("/");
+  return (
+    <>
+      {segments.map((segment, i) => (
+        <Fragment key={i}>
+          {i > 0 ? (
+            <>
+              /<wbr />
+            </>
+          ) : null}
+          {segment}
+        </Fragment>
+      ))}
+    </>
+  );
 }
 
 /** Compare two URLs by the grouped ordering (host → section → path, numeric-aware). */
@@ -1111,7 +1137,7 @@ function PairedTableBody({
                       which page it was. Below `sm` the cap becomes a fixed 8rem
                       the scores cannot squeeze, and truncation still works. */}
                   <TableCell className={cn(COMPACT_CELL, "max-w-32 sm:max-w-0")}>
-                    <div className="flex min-w-32 flex-col gap-0.5 sm:min-w-0">
+                    <div className="flex min-w-32 flex-col gap-0.5 overflow-hidden sm:min-w-0">
                       <div className="flex items-center gap-1.5">
                         <Tooltip>
                           <TooltipTrigger asChild>
@@ -1119,9 +1145,11 @@ function PairedTableBody({
                               href={href}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="block min-w-0 flex-1 truncate font-mono text-xs text-foreground underline-offset-4 hover:text-primary hover:underline"
+                              className="block min-w-0 flex-1 wrap-anywhere whitespace-normal font-mono text-xs leading-snug text-foreground underline-offset-4 hover:text-primary hover:underline sm:truncate"
                             >
-                              <span className="sm:hidden">{pathOf(pair.url)}</span>
+                              <span className="sm:hidden">
+                                <BreakablePath path={pathOf(pair.url)} />
+                              </span>
                               <span className="hidden sm:inline">{pair.url}</span>
                             </a>
                           </TooltipTrigger>
