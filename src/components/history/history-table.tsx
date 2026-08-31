@@ -11,8 +11,10 @@ import {
   FileJson,
   Filter,
   Globe,
+  Monitor,
   Search,
   Sheet,
+  Smartphone,
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -58,6 +60,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  ToggleGroup,
+  ToggleGroupItem,
+} from "@/components/ui/toggle-group";
 import {
   Tooltip,
   TooltipContent,
@@ -107,6 +113,13 @@ const SCORE_COLUMNS = [
 type SortKey = "url" | LighthouseCategory | "createdAt";
 type SortDirection = "asc" | "desc";
 
+/**
+ * Which device's columns the paired table shows below `sm`. Held once for the
+ * whole archive rather than per website section, so switching to Desktop on one
+ * site doesn't leave the next section still showing Mobile as you scroll.
+ */
+type PairedDevice = "mobile" | "desktop";
+
 /** Shared header label styling — mono, uppercase, tracked, matching the house style. */
 const HEAD_LABEL = "font-mono text-[0.7rem] uppercase tracking-[0.16em]";
 
@@ -114,8 +127,12 @@ const HEAD_LABEL = "font-mono text-[0.7rem] uppercase tracking-[0.16em]";
  * Right padding for score column headers, matching the `ScoreCell` trend slot
  * (w-4 + gap-1) so each category label stays right-aligned over its numbers
  * rather than over the trailing trend arrow.
+ *
+ * That alignment is a nicety, and below `sm` it costs 20px per column — 80px of
+ * a ~306px table — which the URL column pays for by collapsing to unreadable.
+ * It only applies where there is room for it.
  */
-const SCORE_HEAD = "pr-5";
+const SCORE_HEAD = "pr-2 sm:pr-5";
 
 /**
  * Compact cell padding for the densified archive — tighter vertical rhythm than
@@ -167,6 +184,22 @@ function urlGroupKey(raw: string): { host: string; section: number; path: string
   } catch {
     const fallback = raw.toLowerCase();
     return { host: fallback, section: 1, path: fallback };
+  }
+}
+
+/**
+ * Path (plus query) of a URL — what actually distinguishes one row from another
+ * inside a website's section, since the host is already in the section header.
+ * At phone widths the URL column is ~128px, and a full URL truncates to
+ * "https://ww…" on every single row; the path spends those pixels on the part
+ * that differs. Falls back to the raw string for anything unparseable.
+ */
+function pathOf(raw: string): string {
+  try {
+    const u = new URL(raw);
+    return `${u.pathname}${u.search}` || "/";
+  } catch {
+    return raw;
   }
 }
 
@@ -881,11 +914,22 @@ function PairedCardsBody({ pairs }: { pairs: DevicePair<CollapsedRun>[] }) {
 function HistoryDeviceHalf({
   entry,
   borderless = false,
+  stowed = false,
 }: {
   entry: CollapsedRun | null;
   borderless?: boolean;
+  /**
+   * True when this half is the one the narrow-width device switch has put away.
+   * Both halves together are twelve columns — far past a phone — so below `sm`
+   * only the selected device's cells are displayed; from `sm` up every cell
+   * comes back and the paired two-device table reads as it always has.
+   */
+  stowed?: boolean;
 }) {
   const edge = borderless ? undefined : "border-l border-border/50";
+  // `table-cell`, not `block`: restoring a stowed <td> has to restore its
+  // *table* display or the row's column alignment collapses.
+  const stow = stowed ? "hidden sm:table-cell" : undefined;
   const latest = entry?.latest ?? null;
   if (!latest) {
     return (
@@ -893,12 +937,12 @@ function HistoryDeviceHalf({
         {SCORE_COLUMNS.map(({ category }, i) => (
           <TableCell
             key={category}
-            className={cn(COMPACT_CELL, "text-right text-muted-foreground/50", i === 0 && edge)}
+            className={cn(COMPACT_CELL, "text-right text-muted-foreground/50", i === 0 && edge, stow)}
           >
             —
           </TableCell>
         ))}
-        <TableCell className={cn(COMPACT_CELL, "text-right text-muted-foreground/50")}>
+        <TableCell className={cn(COMPACT_CELL, "text-right text-muted-foreground/50", stow)}>
           —
         </TableCell>
       </>
@@ -907,8 +951,8 @@ function HistoryDeviceHalf({
   if (latest.status === "error") {
     return (
       <>
-        <FailedCell message={latest.errorMessage} className={edge} />
-        <TableCell className={cn(COMPACT_CELL, "text-right")}>
+        <FailedCell message={latest.errorMessage} className={cn(edge, stow)} />
+        <TableCell className={cn(COMPACT_CELL, "text-right", stow)}>
           <RowActions row={latest} />
         </TableCell>
       </>
@@ -922,10 +966,10 @@ function HistoryDeviceHalf({
           key={category}
           score={latest.scores[category]}
           diff={diffs?.[category]}
-          className={i === 0 ? edge : undefined}
+          className={cn(i === 0 && edge, stow)}
         />
       ))}
-      <TableCell className={cn(COMPACT_CELL, "text-right")}>
+      <TableCell className={cn(COMPACT_CELL, "text-right", stow)}>
         <RowActions row={latest} />
       </TableCell>
     </>
@@ -940,51 +984,117 @@ function HistoryDeviceHalf({
  * score; a missing device shows em dashes. Rendered inside a website's accordion
  * section, so it never sees an empty set and needs no outer surface of its own.
  */
-function PairedTableBody({ pairs }: { pairs: DevicePair<CollapsedRun>[] }) {
+function PairedTableBody({
+  pairs,
+  device,
+  onDeviceChange,
+}: {
+  pairs: DevicePair<CollapsedRun>[];
+  device: PairedDevice;
+  onDeviceChange: (next: PairedDevice) => void;
+}) {
+  // Below `sm` only one device's columns are displayed; the switch picks which.
+  // From `sm` up both come back regardless, so the switch has no effect there —
+  // which is why it is hidden at those widths rather than left as a dead control.
+  const stowMobile = device === "desktop";
+  const stowDesktop = device === "mobile";
+  const stow = "hidden sm:table-cell";
+
   return (
-    <div className="overflow-hidden rounded-lg border border-border/60">
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-2 sm:hidden">
+        <span className={cn(HEAD_LABEL, "text-muted-foreground")}>Device</span>
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          size="sm"
+          value={device}
+          onValueChange={(next) => {
+            // Radix emits "" when the active item is re-pressed; a device is
+            // always shown, so ignore it.
+            if (next === "mobile" || next === "desktop") onDeviceChange(next);
+          }}
+          aria-label="Device columns"
+        >
+          <ToggleGroupItem
+            value="mobile"
+            className="font-mono text-[0.65rem] uppercase tracking-[0.16em]"
+          >
+            <Smartphone data-icon="inline-start" />
+            Mobile
+          </ToggleGroupItem>
+          <ToggleGroupItem
+            value="desktop"
+            className="font-mono text-[0.65rem] uppercase tracking-[0.16em]"
+          >
+            <Monitor data-icon="inline-start" />
+            Desktop
+          </ToggleGroupItem>
+        </ToggleGroup>
+      </div>
+
+      <div className="overflow-hidden rounded-lg border border-border/60">
       <Table>
         <TableHeader className="bg-card [&_th]:bg-card">
-          {/* Top header: device-spanning groups over the per-device sub-columns. */}
+          {/* Top header: device-spanning groups over the per-device sub-columns.
+              Stowing a whole group keeps the surviving one at colSpan 5 and
+              leaves URL / Run at on rowSpan 2, so the two-level header stays
+              structurally valid with either device alone. */}
           <TableRow className="hover:bg-transparent">
             <TableHead rowSpan={2} className={cn(HEAD_LABEL, "w-full align-bottom")}>
               URL
             </TableHead>
             <TableHead
               colSpan={SCORE_COLUMNS.length + 1}
-              className={cn(HEAD_LABEL, "text-center text-primary")}
+              className={cn(HEAD_LABEL, "text-center text-primary", stowMobile && stow)}
             >
               Mobile
             </TableHead>
             <TableHead
               colSpan={SCORE_COLUMNS.length + 1}
-              className={cn(HEAD_LABEL, "border-l border-border/50 text-center text-primary")}
+              className={cn(
+                HEAD_LABEL,
+                "border-l border-border/50 text-center text-primary",
+                stowDesktop && stow,
+              )}
             >
               Desktop
             </TableHead>
-            <TableHead rowSpan={2} className={cn(HEAD_LABEL, "align-bottom")}>
+            <TableHead
+              rowSpan={2}
+              className={cn(HEAD_LABEL, "hidden align-bottom sm:table-cell")}
+            >
               Run at
             </TableHead>
           </TableRow>
           {/* Sub-header: the four category short-labels + a report slot, per device. */}
           <TableRow className="hover:bg-transparent">
             {SCORE_COLUMNS.map(({ category }) => (
-              <TableHead key={`m-${category}`} className={cn(HEAD_LABEL, "text-right", SCORE_HEAD)}>
+              <TableHead
+                key={`m-${category}`}
+                className={cn(HEAD_LABEL, "text-right", SCORE_HEAD, stowMobile && stow)}
+              >
                 {CATEGORY_SHORT_LABELS[category]}
               </TableHead>
             ))}
-            <TableHead className={cn(HEAD_LABEL, "text-right")}>
+            <TableHead className={cn(HEAD_LABEL, "text-right", stowMobile && stow)}>
               <span className="sr-only">Mobile report</span>
             </TableHead>
             {SCORE_COLUMNS.map(({ category }, i) => (
               <TableHead
                 key={`d-${category}`}
-                className={cn(HEAD_LABEL, "text-right", SCORE_HEAD, i === 0 && "border-l border-border/50")}
+                className={cn(
+                  HEAD_LABEL,
+                  "text-right",
+                  SCORE_HEAD,
+                  i === 0 && "border-l border-border/50",
+                  stowDesktop && stow,
+                )}
               >
                 {CATEGORY_SHORT_LABELS[category]}
               </TableHead>
             ))}
-            <TableHead className={cn(HEAD_LABEL, "text-right")}>
+            <TableHead className={cn(HEAD_LABEL, "text-right", stowDesktop && stow)}>
               <span className="sr-only">Desktop report</span>
             </TableHead>
           </TableRow>
@@ -995,27 +1105,54 @@ function PairedTableBody({ pairs }: { pairs: DevicePair<CollapsedRun>[] }) {
             const href = primary.finalUrl ?? primary.url;
               return (
                 <TableRow key={primary.id} className="hover:bg-muted/40">
-                  <TableCell className={cn(COMPACT_CELL, "max-w-0")}>
-                    <div className="flex items-center gap-1.5">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <a
-                            href={href}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="block min-w-0 flex-1 truncate font-mono text-xs text-foreground underline-offset-4 hover:text-primary hover:underline"
-                          >
-                            {pair.url}
-                          </a>
-                        </TooltipTrigger>
-                        <TooltipContent className="font-mono">{href}</TooltipContent>
-                      </Tooltip>
-                      <SourceBadge source={primary.source} />
+                  {/* `max-w-0` is what lets the URL truncate inside a table
+                      cell, but it also let the column collapse to ~42px on a
+                      phone — the PSI badge and nothing else — so no row said
+                      which page it was. Below `sm` the cap becomes a fixed 8rem
+                      the scores cannot squeeze, and truncation still works. */}
+                  <TableCell className={cn(COMPACT_CELL, "max-w-32 sm:max-w-0")}>
+                    <div className="flex min-w-32 flex-col gap-0.5 sm:min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <a
+                              href={href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="block min-w-0 flex-1 truncate font-mono text-xs text-foreground underline-offset-4 hover:text-primary hover:underline"
+                            >
+                              <span className="sm:hidden">{pathOf(pair.url)}</span>
+                              <span className="hidden sm:inline">{pair.url}</span>
+                            </a>
+                          </TooltipTrigger>
+                          <TooltipContent className="font-mono">{href}</TooltipContent>
+                        </Tooltip>
+                        <span className="hidden sm:contents">
+                          <SourceBadge source={primary.source} />
+                        </span>
+                      </div>
+                      {/* On a phone the engine badge and the run time drop to a
+                          second line, so the first gets all ~128px for the path;
+                          from `sm` up the badge sits inline and the run time has
+                          its own column again. */}
+                      <div className="flex items-center gap-1.5 sm:hidden">
+                        <SourceBadge source={primary.source} />
+                        <span
+                          title={primary.createdAt}
+                          className="truncate font-mono text-[0.65rem] tabular-nums text-muted-foreground"
+                        >
+                          {formatRunAt(primary.createdAt)}
+                        </span>
+                      </div>
                     </div>
                   </TableCell>
-                  <HistoryDeviceHalf entry={pair.mobile} borderless />
-                  <HistoryDeviceHalf entry={pair.desktop} />
-                  <TableCell className={COMPACT_CELL}>
+                  <HistoryDeviceHalf
+                    entry={pair.mobile}
+                    borderless
+                    stowed={stowMobile}
+                  />
+                  <HistoryDeviceHalf entry={pair.desktop} stowed={stowDesktop} />
+                  <TableCell className={cn(COMPACT_CELL, "hidden sm:table-cell")}>
                     <span
                       title={primary.createdAt}
                       className="font-mono text-xs tabular-nums text-muted-foreground"
@@ -1028,6 +1165,7 @@ function PairedTableBody({ pairs }: { pairs: DevicePair<CollapsedRun>[] }) {
             })}
         </TableBody>
       </Table>
+      </div>
     </div>
   );
 }
@@ -1242,6 +1380,8 @@ export function HistoryTable({ rows }: HistoryTableProps) {
   const [query, setQuery] = useState("");
   // Hide URLs that passed every category at 90+, leaving only ones needing work.
   const [needsWorkOnly, setNeedsWorkOnly] = useState(false);
+  // Which device half the paired table shows on a phone (see PairedDevice).
+  const [pairedDevice, setPairedDevice] = useState<PairedDevice>("mobile");
   // Default order groups by URL (root → pages → blog) rather than by run time.
   const [sort, setSort] = useState<SortState>({
     key: "url",
@@ -1631,7 +1771,11 @@ export function HistoryTable({ rows }: HistoryTableProps) {
                 {view === "cards" ? (
                   <PairedCardsBody pairs={group.items} />
                 ) : (
-                  <PairedTableBody pairs={group.items} />
+                  <PairedTableBody
+                    pairs={group.items}
+                    device={pairedDevice}
+                    onDeviceChange={setPairedDevice}
+                  />
                 )}
               </HostSection>
             ))}
