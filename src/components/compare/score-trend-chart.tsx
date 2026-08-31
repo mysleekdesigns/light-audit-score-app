@@ -100,7 +100,12 @@ export function ScoreTrendChart({ data }: ScoreTrendChartProps) {
   return (
     <ChartContainer
       config={TREND_CONFIG}
-      className="aspect-auto h-52 w-full font-mono @lg:h-64"
+      // `flex-1` over a floor, not a fixed height: in the stacked layout the
+      // card has no spare height, so the plot settles on its minimum, and in
+      // the two-column layout it takes whatever the column has left over. The
+      // alternative — padding the card — puts the growth where nothing can use
+      // it, and the one thing on this card worth more pixels is the plot.
+      className="aspect-auto min-h-52 w-full flex-1 font-mono @lg:min-h-64"
     >
       {/* `left: 0`, not a negative inset: -8 pulled the Y axis under the SVG's
           own left edge, so every label was clipped to its last character and

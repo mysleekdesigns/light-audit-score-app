@@ -226,8 +226,13 @@ function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
        diff is the tallest section by far (two tables plus a footer), so
        pairing it with the two short ones balances the fold instead of leaving
        a half-empty row. DOM order is Target → Trend → Diff at every width, so
-       the stacked reading never changes. */
-    <div className="grid gap-6 xl:grid-cols-2 xl:items-start">
+       the stacked reading never changes.
+
+       The row is left to stretch and the diff pinned with `self-start`, so the
+       left column — not the diff — absorbs the row height and the two columns
+       end on the same line. Whichever column is shorter grows, so this still
+       holds for a URL whose diff is the short one. */
+    <div className="grid gap-6 xl:grid-cols-2">
       <div className="flex flex-col gap-6">
         {/* Target band ------------------------------------------------------
           One bezel, one row of cells, and the picker is the first of them —
@@ -349,8 +354,12 @@ function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
             Every card is an `@container`, so its contents size off its own
             column rather than the viewport: this one is 310px on a phone,
             944px stacked at 1024px and 588px in the left column of a 1280px
-            desktop, and each width needs a different answer. */}
-        <Card className="@container">
+            desktop, and each width needs a different answer.
+
+            `flex-1` from `xl` hands it whatever the Target band leaves of the
+            column, so its bottom edge meets the diff's. The height goes to the
+            chart rather than to padding — see `ScoreTrendChart`. */}
+        <Card className="@container xl:flex-1">
           <CardHeader className="border-b">
             <CardTitle className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.16em]">
               <LineChart aria-hidden className="size-3.5 text-primary" />
@@ -361,7 +370,7 @@ function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
               oldest → newest
             </CardDescription>
           </CardHeader>
-          <CardContent className="flex flex-col gap-5">
+          <CardContent className="flex flex-1 flex-col gap-5">
             {hasTrend ? (
               <>
                 <ScoreTrendChart data={trend} />
@@ -371,7 +380,7 @@ function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
                 </div>
               </>
             ) : (
-              <div className="flex min-h-32 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border/60 px-4 py-10 text-center @sm:px-6">
+              <div className="flex min-h-32 flex-1 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border/60 px-4 py-10 text-center @sm:px-6">
                 <p className="text-sm font-medium text-foreground">
                   Needs ≥2 runs to show a trend
                 </p>
@@ -386,8 +395,10 @@ function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
       </div>
 
       {/* Diff section ------------------------------------------------------
-          The right column from `xl`; the whole page's second section below it. */}
-      <Card className="@container">
+          The right column from `xl`; the whole page's second section below it.
+          `self-start` keeps it at its natural height — it is the section that
+          sets the row height, and stretching it would only pad its footer. */}
+      <Card className="@container xl:self-start">
         <CardHeader className="border-b">
           <CardTitle className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.16em]">
             <GitCompareArrows aria-hidden className="size-3.5 text-primary" />
