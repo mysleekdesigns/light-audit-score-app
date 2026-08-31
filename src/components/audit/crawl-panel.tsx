@@ -20,7 +20,15 @@
 
 import { useCallback, useId, useState } from "react";
 import { toast } from "sonner";
-import { CircleSlash, Network, Search, TriangleAlert } from "lucide-react";
+import {
+  CircleSlash,
+  Filter,
+  Info,
+  ListTree,
+  Network,
+  Search,
+  TriangleAlert,
+} from "lucide-react";
 
 import { discoverSite } from "@/lib/client/crawlClient";
 import {
@@ -45,9 +53,14 @@ import { ApiError } from "@/lib/client/auditClient";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
+  Readout,
+  ReadoutCell,
+  ReadoutCells,
+  ReadoutNote,
+} from "@/components/audit/readout";
+import {
   Field,
   FieldDescription,
-  FieldGroup,
   FieldLabel,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -211,12 +224,21 @@ export function CrawlPanel({
   }, [seed, useSitemap, useCrawl, depth, maxPages, excludeText, onDiscover]);
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* Discovery controls */}
-      <FieldGroup>
+    // Own container so every band below measures *this* panel, which is half the
+    // card at ≥1440px and all of it below. Bands mirror Run config: a hero input,
+    // an aligned dial row, a full-width list field, then an instrument readout.
+    <div className="@container flex flex-col gap-5">
+      {/* Band 1 — the seed. This is the one thing the tab exists to collect, so
+          it gets its own bezel instead of sitting at the same weight as the
+          knobs that merely bound it. */}
+      <Readout className="gap-2.5">
         <Field>
-          <FieldLabel htmlFor={seedId}>Domain or seed URL</FieldLabel>
-          <div className="flex items-center gap-2">
+          <FieldLabel htmlFor={seedId} className="text-foreground">
+            Domain or seed URL
+          </FieldLabel>
+          {/* Mobile-first: the trigger drops below the field on a phone-width
+              column rather than squeezing the URL input into a sliver. */}
+          <div className="flex flex-col gap-2 @xs:flex-row @xs:items-center">
             <Input
               id={seedId}
               value={seed}
@@ -240,6 +262,7 @@ export function CrawlPanel({
               variant={hasSeed ? "default" : "secondary"}
               onClick={() => void handleDiscover()}
               disabled={disabled || isDiscovering || !hasSeed}
+              className="@xs:shrink-0"
             >
               {isDiscovering ? (
                 <>
@@ -254,102 +277,95 @@ export function CrawlPanel({
               )}
             </Button>
           </div>
-          <FieldDescription>
-            Crawling stays same-origin. No scheme? We assume{" "}
-            <span className="font-mono">https://</span>.
-          </FieldDescription>
+        </Field>
+        <ReadoutNote>
+          No scheme? https:// is assumed. Discovery never leaves the origin.
+        </ReadoutNote>
+      </Readout>
+
+      {/* Band 2 — the four knobs that bound a crawl, on one baseline. Four
+          divides evenly at every tier (1 / 2 / 4), so the row never leaves the
+          orphan cell the old 3-up-plus-a-pair layout did. Per-field help moved
+          to the single caption below so the controls stay aligned. */}
+      <div className="grid grid-cols-1 gap-x-5 gap-y-4 @sm:grid-cols-2 @3xl:grid-cols-4">
+        <Field>
+          <FieldLabel htmlFor={depthId}>Crawl depth</FieldLabel>
+          <Select
+            value={String(depth)}
+            onValueChange={(value) => setDepth(Number(value))}
+            disabled={disabled || isDiscovering || !useCrawl}
+          >
+            <SelectTrigger id={depthId} className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {DEPTH_OPTIONS.map((n) => (
+                  <SelectItem key={n} value={String(n)}>
+                    Depth {n}
+                    {n === 0 ? " (seed only)" : ""}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
         </Field>
 
-        <div className="grid gap-4 sm:grid-cols-3">
-          <Field>
-            <FieldLabel htmlFor={depthId}>Crawl depth</FieldLabel>
-            <Select
-              value={String(depth)}
-              onValueChange={(value) => setDepth(Number(value))}
-              disabled={disabled || isDiscovering || !useCrawl}
-            >
-              <SelectTrigger id={depthId} className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {DEPTH_OPTIONS.map((n) => (
-                    <SelectItem key={n} value={String(n)}>
-                      Depth {n}
-                      {n === 0 ? " (seed only)" : ""}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <FieldDescription>
-              {useCrawl
-                ? "Links followed from the seed."
-                : "Enable “Crawl links” to follow pages."}
-            </FieldDescription>
-          </Field>
+        <Field>
+          <FieldLabel htmlFor={pagesId}>Max pages</FieldLabel>
+          <Input
+            id={pagesId}
+            type="number"
+            inputMode="numeric"
+            min={MIN_PAGES}
+            max={MAX_PAGES}
+            step={1}
+            value={maxPages}
+            onChange={(event) => {
+              // Track the typed value live; clamp on blur so typing isn't
+              // fought mid-keystroke. Empty/NaN falls back to the default.
+              const next = event.target.valueAsNumber;
+              setMaxPages(Number.isNaN(next) ? DEFAULT_PAGES : next);
+            }}
+            onBlur={() => setMaxPages((n) => clampPages(n))}
+            disabled={disabled || isDiscovering}
+            title={`Hard cap on discovered URLs (${MIN_PAGES}–${MAX_PAGES}).`}
+            className="font-mono text-sm tabular-nums"
+          />
+        </Field>
 
-          <Field>
-            <FieldLabel htmlFor={pagesId}>Max pages</FieldLabel>
-            <Input
-              id={pagesId}
-              type="number"
-              inputMode="numeric"
-              min={MIN_PAGES}
-              max={MAX_PAGES}
-              step={1}
-              value={maxPages}
-              onChange={(event) => {
-                // Track the typed value live; clamp on blur so typing isn't
-                // fought mid-keystroke. Empty/NaN falls back to the default.
-                const next = event.target.valueAsNumber;
-                setMaxPages(Number.isNaN(next) ? DEFAULT_PAGES : next);
-              }}
-              onBlur={() => setMaxPages((n) => clampPages(n))}
-              disabled={disabled || isDiscovering}
-              className="font-mono text-sm tabular-nums"
-            />
-            <FieldDescription>
-              Hard cap on discovered URLs ({MIN_PAGES}–{MAX_PAGES}).
-            </FieldDescription>
-          </Field>
-
-          <Field>
-            <FieldLabel htmlFor={templateId}>Pages / template</FieldLabel>
-            <Select
-              value={
-                pagesPerTemplate > 0 ? String(pagesPerTemplate) : PPT_ALL_VALUE
-              }
-              onValueChange={(value) =>
-                onPagesPerTemplateChange(
-                  value === PPT_ALL_VALUE ? PAGES_PER_TEMPLATE_ALL : Number(value),
-                )
-              }
-              disabled={disabled || isDiscovering}
+        <Field>
+          <FieldLabel htmlFor={templateId}>Pages / template</FieldLabel>
+          <Select
+            value={
+              pagesPerTemplate > 0 ? String(pagesPerTemplate) : PPT_ALL_VALUE
+            }
+            onValueChange={(value) =>
+              onPagesPerTemplateChange(
+                value === PPT_ALL_VALUE ? PAGES_PER_TEMPLATE_ALL : Number(value),
+              )
+            }
+            disabled={disabled || isDiscovering}
+          >
+            <SelectTrigger
+              id={templateId}
+              className="w-full"
+              title="Sample at most N representative pages per URL template (e.g. /products/*) from the discovered set — keeps big crawls fast and (for PageSpeed) within quota."
             >
-              <SelectTrigger
-                id={templateId}
-                className="w-full"
-                title="Sample at most N representative pages per URL template (e.g. /products/*) from the discovered set — keeps big crawls fast and (for PageSpeed) within quota."
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value={PPT_ALL_VALUE}>All pages</SelectItem>
-                  {PAGES_PER_TEMPLATE_OPTIONS.map((n) => (
-                    <SelectItem key={n} value={String(n)}>
-                      {n} per template
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <FieldDescription>
-              Auto-selects N pages per URL template.
-            </FieldDescription>
-          </Field>
-        </div>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value={PPT_ALL_VALUE}>All pages</SelectItem>
+                {PAGES_PER_TEMPLATE_OPTIONS.map((n) => (
+                  <SelectItem key={n} value={String(n)}>
+                    {n} per template
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </Field>
 
         <Field>
           <FieldLabel htmlFor={scopeId}>Discovery sources</FieldLabel>
@@ -357,9 +373,13 @@ export function CrawlPanel({
             id={scopeId}
             type="multiple"
             variant="outline"
+            spacing={0}
+            // A <label> can't name a role=group div — name the group itself.
+            aria-label="Discovery sources"
             value={scope}
             onValueChange={handleScopeChange}
             disabled={disabled || isDiscovering}
+            title="At least one source stays enabled."
             className="w-full"
           >
             <ToggleGroupItem value="sitemap" className="flex-1">
@@ -371,34 +391,41 @@ export function CrawlPanel({
               Crawl links
             </ToggleGroupItem>
           </ToggleGroup>
-          <FieldDescription>
-            At least one source stays enabled.
-          </FieldDescription>
         </Field>
+      </div>
 
-        <Field>
-          <FieldLabel htmlFor={excludeId}>Exclude paths</FieldLabel>
-          <Textarea
-            id={excludeId}
-            value={excludeText}
-            onChange={(event) => setExcludeText(event.target.value)}
-            disabled={disabled || isDiscovering}
-            spellCheck={false}
-            autoComplete="off"
-            autoCapitalize="off"
-            rows={3}
-            className="font-mono text-xs"
-            placeholder={"/admin/*, /drafts, *.pdf"}
-          />
-          <FieldDescription>
-            One path per line or comma-separated. Prefix (
-            <span className="font-mono">/blog</span>) or glob (
-            <span className="font-mono">/admin/*</span>,{" "}
-            <span className="font-mono">*.pdf</span>). Same-origin. Up to{" "}
-            {MAX_EXCLUDE_PATHS}.
-          </FieldDescription>
-        </Field>
-      </FieldGroup>
+      {/* One caption for the whole row, so four controls keep a single baseline
+          instead of four ragged help paragraphs — and it can say the thing no
+          individual label can: that depth is inert without link crawling. */}
+      <FieldDescription className="-mt-1">
+        {useCrawl
+          ? `Depth bounds how far links are followed from the seed. Max pages caps the result (${MIN_PAGES}–${MAX_PAGES}); pages / template then samples N per URL pattern.`
+          : `“Crawl links” is off — only the sitemap is read, so depth does not apply. Max pages still caps the result (${MIN_PAGES}–${MAX_PAGES}).`}
+      </FieldDescription>
+
+      {/* Band 3 — the exclude list. Full width: it is free text that benefits
+          from every column the panel has, and it has no partner to pair with. */}
+      <Field>
+        <FieldLabel htmlFor={excludeId}>Exclude paths</FieldLabel>
+        <Textarea
+          id={excludeId}
+          value={excludeText}
+          onChange={(event) => setExcludeText(event.target.value)}
+          disabled={disabled || isDiscovering}
+          spellCheck={false}
+          autoComplete="off"
+          autoCapitalize="off"
+          rows={2}
+          className="font-mono text-xs"
+          placeholder={"/admin/*, /drafts, *.pdf"}
+        />
+        <FieldDescription>
+          One per line or comma-separated · prefix (
+          <span className="font-mono">/blog</span>) or glob (
+          <span className="font-mono">/admin/*</span>) · up to{" "}
+          {MAX_EXCLUDE_PATHS}
+        </FieldDescription>
+      </Field>
 
       {/* Discovery summary + notices */}
       {result ? (
@@ -430,38 +457,41 @@ export function CrawlPanel({
             </Alert>
           ) : null}
 
-          {/* Discovery diagnostics — found / cap. The curation list + selection
-              count now live full-width in the workspace panel below the card. */}
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-            <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">
-              <span className="text-foreground tabular-nums">
-                {result.urls.length}
-              </span>{" "}
-              {result.urls.length === 1 ? "page" : "pages"} discovered
-            </p>
-            {truncated ? (
-              <p className="font-mono text-xs uppercase tracking-[0.18em] text-score-average">
-                Capped from {result.totalFound}
-              </p>
-            ) : null}
-          </div>
-
-          {result.urls.length > 0 ? (
-            <p className="font-mono text-[0.65rem] uppercase tracking-[0.18em] text-muted-foreground/80">
-              Curate &amp; run from the panel below ↓
-            </p>
-          ) : (
-            <div className="flex flex-col items-start gap-1 rounded-md border border-dashed border-border/70 bg-muted/20 p-6">
-              <CircleSlash className="size-5 text-muted-foreground" />
-              <p className="text-sm font-medium text-foreground">
-                No URLs to preview
-              </p>
-              <p className="text-sm text-muted-foreground">
-                Try a different seed, raise the depth, or enable both discovery
-                sources.
-              </p>
-            </div>
-          )}
+          {/* Band 4 — the discovery readout. Deliberately the same bezel and
+              cell grammar as Run config's calibration strip, so both halves of
+              the card land on a matching instrument face. The curation list and
+              selection count live full-width in the workspace panel below. */}
+          <Readout>
+            <ReadoutCells>
+              <ReadoutCell
+                icon={<ListTree className="size-3" aria-hidden />}
+                label="Discovered"
+                value={String(result.urls.length)}
+                tone={result.urls.length > 0 ? "good" : "warn"}
+              />
+              <ReadoutCell
+                icon={<Filter className="size-3" aria-hidden />}
+                label="Found"
+                value={String(result.totalFound)}
+                tone={truncated ? "warn" : "default"}
+              />
+              <ReadoutCell
+                icon={<Info className="size-3" aria-hidden />}
+                label="Notes"
+                value={
+                  result.warnings.length > 0
+                    ? String(result.warnings.length)
+                    : "—"
+                }
+                tone={result.warnings.length > 0 ? "warn" : "default"}
+              />
+            </ReadoutCells>
+            <ReadoutNote>
+              {result.urls.length > 0
+                ? `Same-origin scan of ${result.origin}${truncated ? ` — capped at ${result.urls.length} of ${result.totalFound}` : ""}. Curate & run from the panel below ↓`
+                : `Nothing matched on ${result.origin}. Try another seed, raise the depth, or enable both discovery sources.`}
+            </ReadoutNote>
+          </Readout>
         </>
       ) : null}
     </div>

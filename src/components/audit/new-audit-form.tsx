@@ -3,6 +3,7 @@
 import { useCallback, useId, useMemo, useState, type ReactNode } from "react";
 import {
   CalendarPlus,
+  CircleCheck,
   Crosshair,
   Gauge,
   ListPlus,
@@ -59,7 +60,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import {
   Field,
-  FieldContent,
   FieldLabel,
   FieldLegend,
   FieldSet,
@@ -146,8 +146,6 @@ export function NewAuditForm({
   const runsId = useId();
   const concurrencyId = useId();
   const cpuId = useId();
-  const accuracyId = useId();
-  const clearStorageId = useId();
   const userAgentId = useId();
 
   // Persisted run defaults (device / runs / concurrency / categories). The first
@@ -478,7 +476,7 @@ export function NewAuditForm({
                 own column width when it shares the row with Run config. */}
             <section
               aria-labelledby="audit-targets-heading"
-              className="@container flex flex-col gap-4 pb-6 min-[1440px]:pb-0 min-[1440px]:pr-6"
+              className="@container flex flex-col gap-5 pb-6 min-[1440px]:pb-0 min-[1440px]:pr-6"
             >
               <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                 <h2
@@ -487,11 +485,22 @@ export function NewAuditForm({
                 >
                   Target URLs
                 </h2>
+                {/* The caption describes the *active* input mode — "one URL per
+                    line" is meaningless once you're seeding a crawl. */}
                 <p className="font-mono text-[0.65rem] uppercase tracking-[0.18em] text-muted-foreground">
-                  One URL per line · audited independently
+                  {tab === "paste"
+                    ? "One URL per line · audited independently"
+                    : "Sitemap + link crawl · same-origin only"}
                 </p>
               </header>
-              <Tabs value={tab} onValueChange={handleTabChange} className="gap-4">
+              {/* The tab body grows to fill the column so the paste textarea
+                  absorbs whatever height Run config needs beside it, instead of
+                  leaving a void under a fixed 10-row box. */}
+              <Tabs
+                value={tab}
+                onValueChange={handleTabChange}
+                className="flex-1 gap-4"
+              >
                 <TabsList>
                   <TabsTrigger value="paste">
                     <ListPlus data-icon="inline-start" />
@@ -503,16 +512,15 @@ export function NewAuditForm({
                   </TabsTrigger>
                 </TabsList>
 
-                <TabsContent value="paste" className="flex flex-col gap-3">
+                <TabsContent value="paste" className="flex flex-1 flex-col gap-3">
                   <Textarea
-                    rows={10}
                     value={text}
                     onChange={(event) => setText(event.target.value)}
                     disabled={isRunning}
                     aria-label="Target URLs"
                     spellCheck={false}
                     autoComplete="off"
-                    className="resize-none font-mono text-sm"
+                    className="min-h-44 flex-1 resize-none font-mono text-sm"
                     placeholder={
                       "https://example.com\nhttps://example.com/pricing\nhttps://example.com/blog"
                     }
@@ -556,7 +564,7 @@ export function NewAuditForm({
                 section's *own* width, not the viewport. */}
             <section
               aria-labelledby="audit-runconfig-heading"
-              className="@container flex flex-col gap-4 border-t border-border/60 pt-6 min-[1440px]:border-t-0 min-[1440px]:border-l min-[1440px]:pl-6 min-[1440px]:pt-0"
+              className="@container flex flex-col gap-5 border-t border-border/60 pt-6 min-[1440px]:border-t-0 min-[1440px]:border-l min-[1440px]:pl-6 min-[1440px]:pt-0"
             >
               <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                 <h2
@@ -570,16 +578,23 @@ export function NewAuditForm({
                 </p>
               </header>
 
-              {/* 8 controls — a full row of 6 at @5xl then a trailing pair of
-                  toggles (Accuracy, Clear storage); clean at 2 & 3 cols too
-                  (3+3+2). Thresholds: @md=448px, @5xl=1024px. */}
-              <div className="grid grid-cols-2 gap-x-5 gap-y-4 @md:grid-cols-3 @5xl:grid-cols-6">
-                <Field>
+              {/* Dials. Six controls never read well in one 6-across row at
+                  these column widths, so the grid tops out at 3 (two even rows —
+                  which also gives the panel the height to sit beside Targets).
+                  The two segmented controls need more room than a select, so
+                  they span the full width while the grid is only 2 wide.
+                  Thresholds: @sm=384px, @3xl=768px. */}
+              <div className="grid grid-cols-1 gap-x-5 gap-y-4 @sm:grid-cols-2 @3xl:grid-cols-3">
+                <Field className="@sm:col-span-2 @lg:col-span-1">
                   <FieldLabel htmlFor={deviceId}>Device</FieldLabel>
                   <ToggleGroup
                     id={deviceId}
                     type="single"
                     variant="outline"
+                    spacing={0}
+                    // The FieldLabel is a <label>, which can't name a role=group
+                    // div — the group needs its own accessible name.
+                    aria-label="Device"
                     value={device}
                     onValueChange={handleDeviceChange}
                     disabled={isRunning}
@@ -601,12 +616,14 @@ export function NewAuditForm({
                   </ToggleGroup>
                 </Field>
 
-                <Field>
+                <Field className="@sm:col-span-2 @lg:col-span-1">
                   <FieldLabel htmlFor={throttlingId}>Throttling</FieldLabel>
                   <ToggleGroup
                     id={throttlingId}
                     type="single"
                     variant="outline"
+                    spacing={0}
+                    aria-label="Throttling"
                     value={throttling}
                     onValueChange={handleThrottlingChange}
                     disabled={isRunning}
@@ -716,50 +733,16 @@ export function NewAuditForm({
                   </Select>
                 </Field>
 
-                <Field orientation="horizontal" className="items-end">
-                  <FieldContent>
-                    <FieldLabel htmlFor={accuracyId}>Accuracy mode</FieldLabel>
-                  </FieldContent>
-                  <Toggle
-                    id={accuracyId}
-                    variant="outline"
-                    size="sm"
-                    pressed={accuracyMode}
-                    onPressedChange={handleAccuracyModeChange}
-                    disabled={isRunning}
-                    aria-label="Accuracy mode"
-                    className="shrink-0 font-mono text-[0.65rem] uppercase tracking-[0.18em] data-[state=on]:bg-score-good/15 data-[state=on]:text-score-good data-[state=on]:border-score-good/40"
-                  >
-                    {accuracyMode ? "On" : "Off"}
-                  </Toggle>
-                </Field>
-
-                <Field orientation="horizontal" className="items-end">
-                  <FieldContent>
-                    <FieldLabel htmlFor={clearStorageId}>Clear storage</FieldLabel>
-                  </FieldContent>
-                  <Toggle
-                    id={clearStorageId}
-                    variant="outline"
-                    size="sm"
-                    pressed={!warmCache}
-                    onPressedChange={handleClearStorageChange}
-                    disabled={isRunning}
-                    aria-label="Clear storage between runs (cold first visit)"
-                    title="On clears the HTTP cache between runs (cold first visit), matching the DevTools panel default. Off keeps a warm repeat-visit cache."
-                    className="shrink-0 font-mono text-[0.65rem] uppercase tracking-[0.18em] data-[state=on]:bg-score-good/15 data-[state=on]:text-score-good data-[state=on]:border-score-good/40"
-                  >
-                    {!warmCache ? "On" : "Off"}
-                  </Toggle>
-                </Field>
               </div>
 
               <Separator />
 
-              {/* Categories + parity readout flow horizontally once the section
-                  itself is wide enough (@4xl=896px). At narrow widths or inside
-                  the 2fr side-by-side column they stack. */}
-              <div className="flex flex-col gap-4 @4xl:flex-row @4xl:items-end @4xl:justify-between">
+              {/* Scope band — what each run measures (Categories) and how it
+                  measures it (the two boolean flags), side by side once the
+                  section can hold two readable columns. The flags used to trail
+                  the dial grid as two orphaned cells beside four empty ones; as
+                  full-width pills the whole row is the tap target. */}
+              <div className="grid gap-5 @3xl:grid-cols-2 @3xl:gap-x-8">
                 <FieldSet className="gap-2">
                   <FieldLegend variant="label">Categories</FieldLegend>
                   <ToggleGroup
@@ -778,65 +761,125 @@ export function NewAuditForm({
                   </ToggleGroup>
                 </FieldSet>
 
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
-                  <RunConfigCard
-                    throttling={throttling}
-                    cpuSlowdownMultiplier={cpuSlowdownMultiplier}
-                    calibration={calibration}
-                  />
-                  <div className="flex shrink-0 flex-col gap-2 sm:justify-center">
-                    <Button
-                      type="button"
+                <FieldSet className="gap-2">
+                  <FieldLegend variant="label">Run flags</FieldLegend>
+                  <div className="grid grid-cols-1 gap-2 @xs:grid-cols-2">
+                    <Toggle
                       variant="outline"
-                      size="sm"
-                      onClick={handleCalibrate}
-                      disabled={isRunning || !calibration}
-                      title={
-                        calibration
-                          ? `Apply the recommended ${calibration.recommendedMultiplier}× for this host`
-                          : "Run an audit first to read this host's benchmark"
-                      }
-                    >
-                      <Gauge data-icon="inline-start" />
-                      Calibrate
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={handleMatchDevTools}
+                      pressed={accuracyMode}
+                      onPressedChange={handleAccuracyModeChange}
                       disabled={isRunning}
-                      title="Mobile · simulated · 1 run · concurrency 1 · accuracy on"
+                      title="Serialises the queue and discards outlier runs for the steadiest possible numbers."
+                      className="w-full justify-between gap-3 px-3 font-normal data-[state=on]:border-score-good/40 data-[state=on]:bg-score-good/10 data-[state=on]:text-foreground"
                     >
-                      <Crosshair data-icon="inline-start" />
-                      Match DevTools
-                    </Button>
-                    <Button
-                      type="button"
+                      Accuracy mode
+                      <span
+                        aria-hidden
+                        className="font-mono text-[0.65rem] uppercase tracking-[0.18em] text-muted-foreground group-data-[state=on]/toggle:text-score-good"
+                      >
+                        {accuracyMode ? "On" : "Off"}
+                      </span>
+                    </Toggle>
+                    <Toggle
                       variant="outline"
-                      size="sm"
-                      onClick={() => setScheduleOpen(true)}
-                      disabled={!canSaveSchedule}
-                      title={
-                        canSaveSchedule
-                          ? "Save these targets + options as a daily schedule"
-                          : "Add at least one URL before saving as daily"
-                      }
+                      pressed={!warmCache}
+                      onPressedChange={handleClearStorageChange}
+                      disabled={isRunning}
+                      title="On clears the HTTP cache between runs (cold first visit), matching the DevTools panel default. Off keeps a warm repeat-visit cache."
+                      className="w-full justify-between gap-3 px-3 font-normal data-[state=on]:border-score-good/40 data-[state=on]:bg-score-good/10 data-[state=on]:text-foreground"
                     >
-                      <CalendarPlus data-icon="inline-start" />
-                      Save as daily
-                    </Button>
+                      Clear storage
+                      <span
+                        aria-hidden
+                        className="font-mono text-[0.65rem] uppercase tracking-[0.18em] text-muted-foreground group-data-[state=on]/toggle:text-score-good"
+                      >
+                        {!warmCache ? "On" : "Off"}
+                      </span>
+                    </Toggle>
                   </div>
-                </div>
+                </FieldSet>
               </div>
 
-              <Alert>
-                <TriangleAlert className="text-score-average" />
-                <AlertDescription>
-                  High concurrency causes CPU contention that distorts
-                  performance scores. Keep it low for trustworthy numbers.
-                </AlertDescription>
-              </Alert>
+              {/* Instrument footer, pinned to the bottom of the panel (`mt-auto`)
+                  so the section reads as a console with a status bar rather than
+                  trailing off into dead space beside the taller Targets column.
+                  The contention note reflects the *chosen* concurrency instead of
+                  warning unconditionally. */}
+              <div className="mt-auto flex flex-col gap-3 pt-2">
+                {/* The copy tracks the Concurrency dial, so the region announces
+                    politely rather than interrupting with role=alert's default
+                    assertiveness every time the user changes it. */}
+                {concurrency > 1 ? (
+                  <Alert aria-live="polite">
+                    <TriangleAlert className="text-score-average" />
+                    <AlertDescription>
+                      {concurrency}{" "}
+                      parallel runs contend for this machine&rsquo;s CPU, which
+                      depresses performance scores. Lower it for trustworthy
+                      numbers.
+                    </AlertDescription>
+                  </Alert>
+                ) : (
+                  <Alert aria-live="polite">
+                    <CircleCheck className="text-score-good" />
+                    <AlertDescription>
+                      Serial runs — no CPU contention. The most trustworthy
+                      numbers this machine can produce.
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                <RunConfigCard
+                  throttling={throttling}
+                  cpuSlowdownMultiplier={cpuSlowdownMultiplier}
+                  calibration={calibration}
+                  actions={
+                    <>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleCalibrate}
+                        disabled={isRunning || !calibration}
+                        title={
+                          calibration
+                            ? `Apply the recommended ${calibration.recommendedMultiplier}× for this host`
+                            : "Run an audit first to read this host's benchmark"
+                        }
+                      >
+                        <Gauge data-icon="inline-start" />
+                        Calibrate
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleMatchDevTools}
+                        disabled={isRunning}
+                        title="Mobile · simulated · 1 run · concurrency 1 · accuracy on"
+                      >
+                        <Crosshair data-icon="inline-start" />
+                        Match DevTools
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setScheduleOpen(true)}
+                        disabled={!canSaveSchedule}
+                        title={
+                          canSaveSchedule
+                            ? "Save these targets + options as a daily schedule"
+                            : "Add at least one URL before saving as daily"
+                        }
+                      >
+                        <CalendarPlus data-icon="inline-start" />
+                        Save as daily
+                      </Button>
+                    </>
+                  }
+                />
+              </div>
             </section>
           </div>
         </CardContent>
