@@ -31,6 +31,23 @@ import {
 
 const HEAD_LABEL = "font-mono text-[0.7rem] uppercase tracking-[0.16em]";
 
+/**
+ * Column header that abbreviates on a phone.
+ *
+ * Both diff tables were ~40–130px wider than a 390px viewport, and the column
+ * that got pushed off the edge was Δ — the entire point of a diff. The table
+ * still scrolls, but the delta should be readable without hunting for it, so the
+ * two long numeric headers shorten below `sm` and return in full above it.
+ */
+function DiffHead({ short, long }: { short: string; long: string }) {
+  return (
+    <>
+      <span className="sm:hidden">{short}</span>
+      <span className="hidden sm:inline">{long}</span>
+    </>
+  );
+}
+
 /** One category-score diff row. Higher score is better → up arrow = improvement. */
 function ScoreRow({ diff }: { diff: ScoreDiff }) {
   const improved =
@@ -74,7 +91,9 @@ function MetricRow({ diff }: { diff: MetricDiff }) {
           <span className="font-mono text-xs font-medium uppercase tracking-[0.12em] text-foreground">
             {meta.abbr}
           </span>
-          <span className="truncate text-xs text-muted-foreground">{meta.label}</span>
+          <span className="truncate text-xs text-muted-foreground sr-only sm:not-sr-only">
+            {meta.label}
+          </span>
         </div>
       </TableCell>
       <TableCell className="text-right">
@@ -141,8 +160,12 @@ export function RunDiff({ baseline, comparison }: RunDiffProps) {
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead className={HEAD_LABEL}>Category</TableHead>
-              <TableHead className={cn(HEAD_LABEL, "text-right")}>Baseline</TableHead>
-              <TableHead className={cn(HEAD_LABEL, "text-right")}>Comparison</TableHead>
+              <TableHead className={cn(HEAD_LABEL, "text-right")}>
+                  <DiffHead short="Base" long="Baseline" />
+                </TableHead>
+              <TableHead className={cn(HEAD_LABEL, "text-right")}>
+                  <DiffHead short="Comp" long="Comparison" />
+                </TableHead>
               <TableHead className={cn(HEAD_LABEL, "text-right")}>Δ</TableHead>
             </TableRow>
           </TableHeader>
@@ -168,8 +191,12 @@ export function RunDiff({ baseline, comparison }: RunDiffProps) {
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead className={HEAD_LABEL}>Metric</TableHead>
-                <TableHead className={cn(HEAD_LABEL, "text-right")}>Baseline</TableHead>
-                <TableHead className={cn(HEAD_LABEL, "text-right")}>Comparison</TableHead>
+                <TableHead className={cn(HEAD_LABEL, "text-right")}>
+                  <DiffHead short="Base" long="Baseline" />
+                </TableHead>
+                <TableHead className={cn(HEAD_LABEL, "text-right")}>
+                  <DiffHead short="Comp" long="Comparison" />
+                </TableHead>
                 <TableHead className={cn(HEAD_LABEL, "text-right")}>Δ</TableHead>
               </TableRow>
             </TableHeader>

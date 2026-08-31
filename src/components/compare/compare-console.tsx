@@ -1,8 +1,21 @@
 "use client";
 
 import { useId, useMemo, useState } from "react";
-import { GitCompareArrows, LineChart } from "lucide-react";
+import {
+  CalendarRange,
+  Cpu,
+  GitCompareArrows,
+  History,
+  LineChart,
+  Smartphone,
+} from "lucide-react";
 
+import {
+  Readout,
+  ReadoutCell,
+  ReadoutCells,
+  ReadoutNote,
+} from "@/components/audit/readout";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -53,6 +66,49 @@ function formatRunLabel(row: HistoryRow): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+/**
+ * Day-only label for the span readout ("Jun 11").
+ *
+ * Locale is pinned rather than left to the environment: unlike the run pickers
+ * (whose option labels only exist once Radix opens them on the client), this
+ * text is in the server-rendered HTML, so an ambient locale would differ between
+ * server and browser and fail hydration. The surrounding copy is English-only.
+ */
+function formatDay(row: HistoryRow): string {
+  const date = new Date(runTime(row));
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "2-digit",
+  }).format(date);
+}
+
+/** "Mobile", "Desktop", or "Mobile + desktop" for the devices present in a set. */
+function describeDevices(runs: HistoryRow[]): string {
+  const hasMobile = runs.some((r) => r.formFactor === "mobile");
+  const hasDesktop = runs.some((r) => r.formFactor === "desktop");
+  if (hasMobile && hasDesktop) return "Mobile + desktop";
+  if (hasDesktop) return "Desktop";
+  if (hasMobile) return "Mobile";
+  return "—";
+}
+
+/**
+ * Which engines produced these runs. Worth surfacing next to the picker: a local
+ * Lighthouse run and a PageSpeed run of the same URL are measured on different
+ * hardware, so a diff that straddles both is comparing more than the page.
+ */
+function describeEngines(runs: HistoryRow[]): {
+  label: string;
+  mixed: boolean;
+} {
+  const hasLocal = runs.some((r) => r.source !== "psi");
+  const hasPsi = runs.some((r) => r.source === "psi");
+  if (hasLocal && hasPsi) return { label: "Local + PSI", mixed: true };
+  if (hasPsi) return { label: "PageSpeed", mixed: false };
+  return { label: "Local", mixed: false };
 }
 
 interface CompareConsoleProps {
@@ -106,6 +162,18 @@ function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
 
   const trend = useMemo(() => buildScoreTrend(groupRuns), [groupRuns]);
 
+  // What the selected URL actually holds — the target band's readout. Runs are
+  // already ascending by time, so the span is simply first → last.
+  const span = useMemo(
+    () => ({
+      from: formatDay(groupRuns[0]),
+      to: formatDay(groupRuns[groupRuns.length - 1]),
+    }),
+    [groupRuns],
+  );
+  const devices = useMemo(() => describeDevices(groupRuns), [groupRuns]);
+  const engines = useMemo(() => describeEngines(groupRuns), [groupRuns]);
+
   // Diff run selection — defaults: baseline = oldest, comparison = newest.
   const [baselineId$, setBaselineId] = useState(() => groupRuns[0].id);
   const [comparisonId$, setComparisonId] = useState(
@@ -136,32 +204,96 @@ function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
 
   return (
     <div className="flex flex-col gap-6">
-      {/* URL selector ------------------------------------------------------ */}
-      <div className="flex flex-col gap-2 sm:max-w-md">
-        <label htmlFor={urlSelectId} className={SECTION_LABEL}>
-          URL
-        </label>
-        <Select value={selectedUrl} onValueChange={handleUrlChange}>
-          <SelectTrigger id={urlSelectId} className="w-full font-mono text-xs">
-            <SelectValue placeholder="Select a URL" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              {groups.map((g) => (
-                <SelectItem key={g.url} value={g.url} className="font-mono text-xs">
-                  <span className="truncate">{g.url}</span>
-                  <Badge
-                    variant="outline"
-                    className="ml-auto font-mono text-[0.6rem] tabular-nums text-muted-foreground"
-                  >
-                    {g.runs.length} {g.runs.length === 1 ? "run" : "runs"}
-                  </Badge>
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-      </div>
+      {/* Target band ------------------------------------------------------
+          The picker used to be a lone 350px select on the page background with
+          ~2000px of void beside it at desk widths. It is now an instrument band
+          matching the audit consoles: the primary input on the left, a readout
+          of what that selection actually contains trailing right once the card
+          is wide enough. Sizes off the card's own container query. */}
+      <Card>
+        <CardContent className="@container flex flex-col gap-4 px-4">
+          <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+            <h2 className="font-heading text-base font-medium leading-snug">
+              Target URL
+            </h2>
+            <p className="font-mono text-[0.65rem] uppercase tracking-[0.18em] text-muted-foreground">
+              {groups.length} {groups.length === 1 ? "URL" : "URLs"} with runs
+            </p>
+          </header>
+
+          <div className="flex flex-col gap-4 @3xl:flex-row @3xl:items-end @3xl:justify-between @3xl:gap-6">
+            {/* Grows with the card so long URLs stop truncating, but stops
+                short of a select stretched across an ultrawide display. */}
+            <div className="flex min-w-0 flex-1 flex-col gap-2 @3xl:max-w-2xl">
+              <label htmlFor={urlSelectId} className={SECTION_LABEL}>
+                URL
+              </label>
+              <Select value={selectedUrl} onValueChange={handleUrlChange}>
+                <SelectTrigger
+                  id={urlSelectId}
+                  className="w-full font-mono text-xs"
+                >
+                  <SelectValue placeholder="Select a URL" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {groups.map((g) => (
+                      <SelectItem
+                        key={g.url}
+                        value={g.url}
+                        className="font-mono text-xs"
+                      >
+                        <span className="truncate">{g.url}</span>
+                        <Badge
+                          variant="outline"
+                          className="ml-auto font-mono text-[0.6rem] tabular-nums text-muted-foreground"
+                        >
+                          {g.runs.length} {g.runs.length === 1 ? "run" : "runs"}
+                        </Badge>
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <Readout className="@3xl:w-auto @3xl:shrink-0">
+              <ReadoutCells>
+                <ReadoutCell
+                  icon={<History className="size-3" aria-hidden />}
+                  label="Runs"
+                  value={String(groupRuns.length)}
+                />
+                <ReadoutCell
+                  icon={<CalendarRange className="size-3" aria-hidden />}
+                  label="Span"
+                  value={
+                    span.from === span.to
+                      ? span.from
+                      : `${span.from} → ${span.to}`
+                  }
+                />
+                <ReadoutCell
+                  icon={<Smartphone className="size-3" aria-hidden />}
+                  label="Devices"
+                  value={devices}
+                />
+                <ReadoutCell
+                  icon={<Cpu className="size-3" aria-hidden />}
+                  label="Engine"
+                  value={engines.label}
+                  tone={engines.mixed ? "warn" : "default"}
+                />
+              </ReadoutCells>
+              <ReadoutNote>
+                {engines.mixed
+                  ? "This URL has both local and PageSpeed runs. They are measured on different hardware, so a diff across the two engines reflects more than the page."
+                  : "Pick two runs below to diff their scores and Core Web Vitals."}
+              </ReadoutNote>
+            </Readout>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Trend + Diff — stacked on narrow screens, side-by-side on very wide. */}
       <div className="grid gap-6 xl:grid-cols-2 xl:items-start">

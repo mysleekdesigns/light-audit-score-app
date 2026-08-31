@@ -19,6 +19,12 @@ import { toast } from "sonner";
 
 import { CoreWebVitalsStrip } from "@/components/audit/core-web-vitals";
 import { EnvironmentBadge } from "@/components/audit/environment-badge";
+import {
+  Readout,
+  ReadoutCell,
+  ReadoutCells,
+  ReadoutNote,
+} from "@/components/audit/readout";
 import { RerunBatchButton } from "@/components/audit/rerun-batch-button";
 import { ResultsViewToggle } from "@/components/audit/results-view-toggle";
 import { ScoreRings } from "@/components/audit/score-rings";
@@ -1339,6 +1345,13 @@ export function HistoryTable({ rows }: HistoryTableProps) {
 
   const isFiltering = query.trim().length > 0 || needsWorkOnly;
 
+  // What the control band's readout reports: the sites and pages actually on
+  // screen under the current filter, from whichever layout layer is populated.
+  const visibleSiteCount = paired
+    ? pairedHostGroups.length
+    : flatHostGroups.length;
+  const visiblePageCount = paired ? pairs.length : flatRows.length;
+
   // The latest runs actually shown — and therefore exported / bulk-opened: the
   // flat list in single-device mode, or both present sides of every visible pair.
   const exportRows = useMemo<HistoryRow[]>(
@@ -1385,32 +1398,50 @@ export function HistoryTable({ rows }: HistoryTableProps) {
 
   return (
     <TooltipProvider delayDuration={150}>
-      <div className="flex flex-col gap-4">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-          <div className="flex flex-col gap-2 sm:max-w-xs sm:flex-1">
-            <label
-              htmlFor={filterId}
-              className={cn(HEAD_LABEL, "text-muted-foreground")}
-            >
-              Filter by URL
-            </label>
-            <div className="relative">
-              <Search
-                aria-hidden
-                className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
-              />
-              <Input
-                id={filterId}
-                type="search"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="example.com"
-                className="pl-8 font-mono text-xs"
-              />
-            </div>
-          </div>
+      <div className="flex flex-col gap-6">
+        {/* Control band. These were a bare row on the page background: a small
+            search box at the far left and seven buttons pinned to the far
+            right, with ~1500px of nothing between them at desk widths and
+            three ragged wrapped rows on a phone. They are now one instrument
+            panel — a filter band over a footer whose readout says exactly what
+            the actions in its bezel will act on. Container query so it reflows
+            to the card, not the viewport. */}
+        <Card>
+          <CardContent className="@container flex flex-col gap-5 px-4">
+            <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+              <h2 className="font-heading text-base font-medium leading-snug">
+                Archive
+              </h2>
+              <p className="font-mono text-[0.65rem] uppercase tracking-[0.18em] text-muted-foreground">
+                Grouped by website · latest run per URL · trend vs previous
+              </p>
+            </header>
 
-          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+            <div className="flex flex-col gap-4 @2xl:flex-row @2xl:items-end @2xl:justify-between @2xl:gap-6">
+              <div className="flex min-w-0 flex-1 flex-col gap-2 @2xl:max-w-sm">
+                <label
+                  htmlFor={filterId}
+                  className={cn(HEAD_LABEL, "text-muted-foreground")}
+                >
+                  Filter by URL
+                </label>
+                <div className="relative">
+                  <Search
+                    aria-hidden
+                    className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+                  />
+                  <Input
+                    id={filterId}
+                    type="search"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="example.com"
+                    className="pl-8 font-mono text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3">
             {/* Hide everything already scoring 90+; keep only URLs needing work. */}
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1442,13 +1473,51 @@ export function HistoryTable({ rows }: HistoryTableProps) {
               value={view}
               onChange={(next) => update({ resultsView: next })}
             />
+              </div>
+            </div>
 
-            {/* Export / bulk-open the currently visible (filtered + sorted) rows. */}
-            <div
-              className="flex items-center gap-1"
-              role="group"
-              aria-label="Export and open visible runs"
-            >
+            {/* Instrument footer: the numbers the actions operate on, and the
+                actions themselves, in one bezel — so "Export 39 runs" is
+                answerable without counting rows, and the destructive Clear sits
+                with its siblings instead of orphaned on its own wrapped line. */}
+            <Readout className="@3xl:flex-row @3xl:items-center @3xl:justify-between @3xl:gap-6">
+              <div className="flex min-w-0 flex-col gap-2">
+                <ReadoutCells>
+                  <ReadoutCell
+                    icon={<Globe className="size-3" aria-hidden />}
+                    label="Sites"
+                    value={String(visibleSiteCount)}
+                  />
+                  <ReadoutCell
+                    icon={<Archive className="size-3" aria-hidden />}
+                    label="In view"
+                    value={`${visiblePageCount} ${visiblePageCount === 1 ? "page" : "pages"}`}
+                  />
+                  <ReadoutCell
+                    icon={<FileJson className="size-3" aria-hidden />}
+                    label="Exports"
+                    value={`${exportRows.length} ${exportRows.length === 1 ? "run" : "runs"}`}
+                  />
+                  <ReadoutCell
+                    icon={<ExternalLink className="size-3" aria-hidden />}
+                    label="Reports"
+                    value={String(openableCount)}
+                    tone={openableCount > 0 ? "good" : "default"}
+                  />
+                </ReadoutCells>
+                <ReadoutNote>
+                  {isFiltering
+                    ? "Export and Open all act on the filtered set above. Clear history still removes every persisted run, filtered or not."
+                    : "Export and Open all act on every run shown. Clear history removes them all permanently."}
+                </ReadoutNote>
+              </div>
+
+              <div className="flex shrink-0 flex-wrap items-center gap-2 @3xl:justify-end">
+                <div
+                  className="flex items-center gap-1"
+                  role="group"
+                  aria-label="Export and open visible runs"
+                >
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -1505,18 +1574,14 @@ export function HistoryTable({ rows }: HistoryTableProps) {
                   : `Open all ${openableCount} report${openableCount === 1 ? "" : "s"}`}
               </TooltipContent>
             </Tooltip>
-            </div>
+                </div>
 
-            {/* Clear all persisted history (every run, regardless of filter). */}
-            <ClearHistoryButton count={rows.length} />
-          </div>
-        </div>
-
-        {rows.length > 0 ? (
-          <p className="font-mono text-[0.7rem] uppercase tracking-[0.14em] text-muted-foreground/70">
-            Grouped by website · latest run per URL · trend vs the previous run
-          </p>
-        ) : null}
+                {/* Clear all persisted history (every run, regardless of filter). */}
+                <ClearHistoryButton count={rows.length} />
+              </div>
+            </Readout>
+          </CardContent>
+        </Card>
 
         {!hasRows ? (
           <Card className="overflow-hidden">
