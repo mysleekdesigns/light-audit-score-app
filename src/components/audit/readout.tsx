@@ -47,9 +47,27 @@ export function Readout({
 }
 
 /** Row of metric cells. Wraps rather than shrinking any cell below its value. */
-export function ReadoutCells({ children }: { children: ReactNode }) {
+export function ReadoutCells({
+  className,
+  children,
+}: {
+  /**
+   * Optional layout override. Wrapping packs cells at their natural width, which
+   * leaves a ragged gap on a narrow strip — a caller with enough cells to fill a
+   * phone can swap in a grid here for the widths where that reads better.
+   */
+  className?: string;
+  children: ReactNode;
+}) {
   return (
-    <div className="flex flex-wrap items-center gap-x-6 gap-y-2">{children}</div>
+    <div
+      className={cn(
+        "flex flex-wrap items-center gap-x-6 gap-y-2",
+        className,
+      )}
+    >
+      {children}
+    </div>
   );
 }
 

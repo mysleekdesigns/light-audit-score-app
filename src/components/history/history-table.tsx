@@ -494,7 +494,13 @@ function DeleteRunButton({ row }: { row: HistoryRow }) {
  * Toolbar "Clear history" action: wipes every persisted run + batch and all
  * stored reports, behind a confirm dialog. Disabled when there's nothing to clear.
  */
-function ClearHistoryButton({ count }: { count: number }) {
+function ClearHistoryButton({
+  count,
+  className,
+}: {
+  count: number;
+  className?: string;
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -524,6 +530,7 @@ function ClearHistoryButton({ count }: { count: number }) {
           size="sm"
           disabled={count === 0}
           aria-label="Clear all history"
+          className={className}
         >
           <Trash2 data-icon="inline-start" />
           Clear history
@@ -1441,7 +1448,9 @@ export function HistoryTable({ rows }: HistoryTableProps) {
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+              {/* Below @sm the panel is only ~310px wide, so these stack to the
+                  full width instead of packing left and leaving a ragged gap. */}
+              <div className="flex flex-col gap-2 @sm:flex-row @sm:flex-wrap @sm:items-center @sm:gap-3">
             {/* Hide everything already scoring 90+; keep only URLs needing work. */}
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1452,6 +1461,7 @@ export function HistoryTable({ rows }: HistoryTableProps) {
                   aria-pressed={needsWorkOnly}
                   disabled={rows.length === 0}
                   onClick={() => setNeedsWorkOnly((prev) => !prev)}
+                  className="w-full justify-start @sm:w-auto @sm:justify-center"
                 >
                   <Filter data-icon="inline-start" />
                   Needs work
@@ -1469,9 +1479,13 @@ export function HistoryTable({ rows }: HistoryTableProps) {
               </TooltipContent>
             </Tooltip>
 
+            {/* `*:flex-1` splits Table / Cards evenly across the full width
+                while the control is stretched; it reverts to natural width
+                alongside the filter once the panel can hold a row. */}
             <ResultsViewToggle
               value={view}
               onChange={(next) => update({ resultsView: next })}
+              className="w-full *:flex-1 @sm:w-auto @sm:*:flex-none"
             />
               </div>
             </div>
@@ -1482,7 +1496,9 @@ export function HistoryTable({ rows }: HistoryTableProps) {
                 with its siblings instead of orphaned on its own wrapped line. */}
             <Readout className="@3xl:flex-row @3xl:items-center @3xl:justify-between @3xl:gap-6">
               <div className="flex min-w-0 flex-col gap-2">
-                <ReadoutCells>
+                {/* Four cells wrap 3-then-1 on a phone, stranding a whole row
+                    for "Reports". A 2×2 grid fills the strip evenly instead. */}
+                <ReadoutCells className="grid grid-cols-2 items-start gap-y-3 @sm:flex">
                   <ReadoutCell
                     icon={<Globe className="size-3" aria-hidden />}
                     label="Sites"
@@ -1512,9 +1528,12 @@ export function HistoryTable({ rows }: HistoryTableProps) {
                 </ReadoutNote>
               </div>
 
-              <div className="flex shrink-0 flex-wrap items-center gap-2 @3xl:justify-end">
+              <div className="flex w-full shrink-0 flex-col gap-2 @sm:w-auto @sm:flex-row @sm:flex-wrap @sm:items-center @3xl:justify-end">
+                {/* The three export actions share one full-width row on a
+                    phone; Clear history keeps its own row below rather than
+                    sitting a thumb's width from "Open all". */}
                 <div
-                  className="flex items-center gap-1"
+                  className="grid grid-cols-3 gap-1 @sm:flex @sm:items-center"
                   role="group"
                   aria-label="Export and open visible runs"
                 >
@@ -1527,6 +1546,7 @@ export function HistoryTable({ rows }: HistoryTableProps) {
                   onClick={exportJson}
                   disabled={!hasRows}
                   aria-label="Export visible runs as JSON"
+                  className="w-full @sm:w-auto"
                 >
                   <FileJson data-icon="inline-start" />
                   JSON
@@ -1545,6 +1565,7 @@ export function HistoryTable({ rows }: HistoryTableProps) {
                   onClick={exportCsv}
                   disabled={!hasRows}
                   aria-label="Export visible runs as CSV"
+                  className="w-full @sm:w-auto"
                 >
                   <Sheet data-icon="inline-start" />
                   CSV
@@ -1563,6 +1584,7 @@ export function HistoryTable({ rows }: HistoryTableProps) {
                   onClick={openAll}
                   disabled={openableCount === 0}
                   aria-label={`Open all ${openableCount} visible reports`}
+                  className="w-full @sm:w-auto"
                 >
                   <ExternalLink data-icon="inline-start" />
                   Open all
@@ -1577,7 +1599,10 @@ export function HistoryTable({ rows }: HistoryTableProps) {
                 </div>
 
                 {/* Clear all persisted history (every run, regardless of filter). */}
-                <ClearHistoryButton count={rows.length} />
+                <ClearHistoryButton
+                  count={rows.length}
+                  className="w-full @sm:w-auto"
+                />
               </div>
             </Readout>
           </CardContent>
