@@ -114,7 +114,7 @@ type SortKey = "url" | LighthouseCategory | "createdAt";
 type SortDirection = "asc" | "desc";
 
 /**
- * Which device's columns the paired table shows below `sm`. Held once for the
+ * Which device's columns the paired table shows below `xl`. Held once for the
  * whole archive rather than per website section, so switching to Desktop on one
  * site doesn't leave the next section still showing Mobile as you scroll.
  */
@@ -127,14 +127,14 @@ const HEAD_LABEL = "font-mono text-[0.7rem] uppercase tracking-[0.16em]";
  * Alignment for score column headers, kept in step with {@link ScoreCell} so a
  * category label always sits directly over its numbers.
  *
- * On a phone both are flush left, which needs no compensation: label and number
- * start at the same content edge. From `sm` up both are flush right, and the
+ * Below `xl` both are flush left, which needs no compensation: label and number
+ * start at the same content edge. From `xl` up both are flush right, and the
  * header then has to clear everything between the cell's right border and the
  * number's right edge — the cell's own `p-2` (8px), the `gap-1` before the trend
  * slot (4px), and the `w-4` slot itself (16px) — 28px, which is `pr-7`.
  * Measured, not assumed: at `pr-5` every label sat 8px right of its column.
  */
-const SCORE_HEAD = "text-left sm:text-right sm:pr-7";
+const SCORE_HEAD = "text-left xl:text-right xl:pr-7";
 
 /**
  * Compact cell padding for the densified archive — tighter vertical rhythm than
@@ -285,7 +285,7 @@ function SortHeader({
         onClick={() => onSort(sortKey)}
         className={cn(
           "group/sort inline-flex items-center gap-1 rounded-sm outline-none transition-colors hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50",
-          numeric && "sm:flex-row-reverse",
+          numeric && "xl:flex-row-reverse",
           active ? "text-foreground" : "text-muted-foreground",
         )}
       >
@@ -340,8 +340,8 @@ function ScoreCell({
 }) {
   const value = score ?? null;
   return (
-    <TableCell className={cn(COMPACT_CELL, "text-left sm:text-right", className)}>
-      <span className="inline-flex items-baseline justify-start gap-1 sm:justify-end">
+    <TableCell className={cn(COMPACT_CELL, "text-left xl:text-right", className)}>
+      <span className="inline-flex items-baseline justify-start gap-1 xl:justify-end">
         <span className={cn("font-mono text-sm tabular-nums", scoreColorClass(value))}>
           {formatScore(value)}
         </span>
@@ -906,16 +906,16 @@ function HistoryDeviceHalf({
   borderless?: boolean;
   /**
    * True when this half is the one the narrow-width device switch has put away.
-   * Both halves together are twelve columns — far past a phone — so below `sm`
-   * only the selected device's cells are displayed; from `sm` up every cell
-   * comes back and the paired two-device table reads as it always has.
+   * Both halves together are twelve columns, which only stop overflowing at
+   * ~1180px, so below `xl` only the selected device's cells are displayed; from
+   * `xl` up every cell comes back and the paired table reads as it always has.
    */
   stowed?: boolean;
 }) {
   const edge = borderless ? undefined : "border-l border-border/50";
   // `table-cell`, not `block`: restoring a stowed <td> has to restore its
   // *table* display or the row's column alignment collapses.
-  const stow = stowed ? "hidden sm:table-cell" : undefined;
+  const stow = stowed ? "hidden xl:table-cell" : undefined;
   const latest = entry?.latest ?? null;
   if (!latest) {
     return (
@@ -923,12 +923,12 @@ function HistoryDeviceHalf({
         {SCORE_COLUMNS.map(({ category }, i) => (
           <TableCell
             key={category}
-            className={cn(COMPACT_CELL, "text-left text-muted-foreground/50 sm:text-right", i === 0 && edge, stow)}
+            className={cn(COMPACT_CELL, "text-left text-muted-foreground/50 xl:text-right", i === 0 && edge, stow)}
           >
             —
           </TableCell>
         ))}
-        <TableCell className={cn(COMPACT_CELL, "text-right text-muted-foreground/50", stow)}>
+        <TableCell className={cn(COMPACT_CELL, "w-full text-right text-muted-foreground/50 xl:w-auto", stow)}>
           —
         </TableCell>
       </>
@@ -938,7 +938,7 @@ function HistoryDeviceHalf({
     return (
       <>
         <FailedCell message={latest.errorMessage} className={cn(edge, stow)} />
-        <TableCell className={cn(COMPACT_CELL, "text-right", stow)}>
+        <TableCell className={cn(COMPACT_CELL, "w-full text-right xl:w-auto", stow)}>
           <RowActions row={latest} />
         </TableCell>
       </>
@@ -955,7 +955,7 @@ function HistoryDeviceHalf({
           className={cn(i === 0 && edge, stow)}
         />
       ))}
-      <TableCell className={cn(COMPACT_CELL, "text-right", stow)}>
+      <TableCell className={cn(COMPACT_CELL, "w-full text-right xl:w-auto", stow)}>
         <RowActions row={latest} />
       </TableCell>
     </>
@@ -979,16 +979,16 @@ function PairedTableBody({
   device: PairedDevice;
   onDeviceChange: (next: PairedDevice) => void;
 }) {
-  // Below `sm` only one device's columns are displayed; the switch picks which.
-  // From `sm` up both come back regardless, so the switch has no effect there —
+  // Below `xl` only one device's columns are displayed; the switch picks which.
+  // From `xl` up both come back regardless, so the switch has no effect there —
   // which is why it is hidden at those widths rather than left as a dead control.
   const stowMobile = device === "desktop";
   const stowDesktop = device === "mobile";
-  const stow = "hidden sm:table-cell";
+  const stow = "hidden xl:table-cell";
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-2 sm:hidden">
+      <div className="flex items-center justify-between gap-2 xl:hidden">
         <span className={cn(HEAD_LABEL, "text-muted-foreground")}>Device</span>
         <ToggleGroup
           type="single"
@@ -1029,11 +1029,11 @@ function PairedTableBody({
           <TableRow className="hover:bg-transparent">
             <TableHead
               rowSpan={2}
-              className={cn(HEAD_LABEL, "p-0 align-bottom sm:w-full sm:px-2")}
+              className={cn(HEAD_LABEL, "p-0 align-bottom xl:w-full xl:px-2")}
             >
-              <span className="sr-only sm:not-sr-only">URL</span>
+              <span className="sr-only xl:not-sr-only">URL</span>
             </TableHead>
-            {/* Both device captions are stowed on a phone, not just the
+            {/* Both device captions are stowed below `xl`, not just the
                 unselected one: the switch above the table already says which
                 device is showing, so the band would only repeat it. */}
             <TableHead
@@ -1054,7 +1054,7 @@ function PairedTableBody({
             </TableHead>
             <TableHead
               rowSpan={2}
-              className={cn(HEAD_LABEL, "hidden align-bottom sm:table-cell")}
+              className={cn(HEAD_LABEL, "hidden align-bottom xl:table-cell")}
             >
               Run at
             </TableHead>
@@ -1101,16 +1101,16 @@ function PairedTableBody({
                       phone — the PSI badge and nothing else — so no row said
                       which page it was. Below `sm` the cap becomes a fixed 8rem
                       the scores cannot squeeze, and truncation still works. */}
-                  {/* No phone column is wide enough for a path without either
-                      clipping it or wrapping it over three lines, so below `sm`
-                      the URL, the engine badge and the run time all leave the
-                      visual layout and the table is scores only. The cell stays
+                  {/* Below `xl` the URL, the engine badge and the run time all
+                      leave the visual layout and the table is scores only — no
+                      column narrower than that shows a path without either
+                      clipping it or wrapping it over three lines. The cell stays
                       in the DOM as `sr-only` rather than `hidden`, so each row
                       still announces which page it is to assistive tech, and
                       drops its padding so it costs no width. Everything returns
-                      from `sm` up. */}
-                  <TableCell className={cn(COMPACT_CELL, "p-0 sm:p-2 sm:max-w-0")}>
-                    <div className="sr-only items-center gap-1.5 sm:not-sr-only sm:flex">
+                      from `xl` up. */}
+                  <TableCell className={cn(COMPACT_CELL, "p-0 xl:p-2 xl:max-w-0")}>
+                    <div className="sr-only items-center gap-1.5 xl:not-sr-only xl:flex">
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <a
@@ -1133,7 +1133,7 @@ function PairedTableBody({
                     stowed={stowMobile}
                   />
                   <HistoryDeviceHalf entry={pair.desktop} stowed={stowDesktop} />
-                  <TableCell className={cn(COMPACT_CELL, "hidden sm:table-cell")}>
+                  <TableCell className={cn(COMPACT_CELL, "hidden xl:table-cell")}>
                     <span
                       title={primary.createdAt}
                       className="font-mono text-xs tabular-nums text-muted-foreground"
