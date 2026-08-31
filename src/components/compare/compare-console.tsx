@@ -219,8 +219,17 @@ function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
   const hasTrend = groupRuns.length >= 2;
 
   return (
-    <div className="flex flex-col gap-6">
-      {/* Target band ------------------------------------------------------
+    /* Page grid --------------------------------------------------------
+       One column of full-width sections to `xl` — 1024–1279px reads exactly
+       as 1023px does. From `xl` the page becomes two columns: Target URL over
+       Score Trend on the left, Run Diff filling the right beside both. The
+       diff is the tallest section by far (two tables plus a footer), so
+       pairing it with the two short ones balances the fold instead of leaving
+       a half-empty row. DOM order is Target → Trend → Diff at every width, so
+       the stacked reading never changes. */
+    <div className="grid gap-6 xl:grid-cols-2 xl:items-start">
+      <div className="flex flex-col gap-6">
+        {/* Target band ------------------------------------------------------
           One bezel, one row of cells, and the picker is the first of them —
           its "URL" micro-cap sits exactly where every other cell's label does,
           with the select standing in for the value.
@@ -233,118 +242,114 @@ function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
           always spoken for: the URL takes whatever the four facts leave, and
           below `@4xl` it simply takes the whole row with the facts spread
           evenly underneath. */}
-      <Card>
-        <CardContent className="@container flex flex-col gap-4 px-4">
-          <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-            <h2 className="font-heading text-base font-medium leading-snug">
-              Target URL
-            </h2>
-            <p className="font-mono text-[0.65rem] uppercase tracking-[0.18em] text-muted-foreground">
-              {groups.length} {groups.length === 1 ? "URL" : "URLs"} with runs
-            </p>
-          </header>
+        <Card>
+          <CardContent className="@container flex flex-col gap-4 px-4">
+            <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+              <h2 className="font-heading text-base font-medium leading-snug">
+                Target URL
+              </h2>
+              <p className="font-mono text-[0.65rem] uppercase tracking-[0.18em] text-muted-foreground">
+                {groups.length} {groups.length === 1 ? "URL" : "URLs"} with runs
+              </p>
+            </header>
 
-          <Readout>
-            <div className="grid gap-x-6 gap-y-4 @4xl:grid-cols-[minmax(0,1fr)_auto] @4xl:items-end">
-              <div className="flex min-w-0 flex-col gap-1.5">
-                <label htmlFor={urlSelectId} className={CELL_LABEL}>
-                  <Link2 className="size-3" aria-hidden />
-                  URL
-                </label>
-                <Select value={selectedUrl} onValueChange={handleUrlChange}>
-                {/* The trigger wraps rather than truncates. A single-line trigger
+            <Readout>
+              <div className="grid gap-x-6 gap-y-4 @4xl:grid-cols-[minmax(0,1fr)_auto] @4xl:items-end">
+                <div className="flex min-w-0 flex-col gap-1.5">
+                  <label htmlFor={urlSelectId} className={CELL_LABEL}>
+                    <Link2 className="size-3" aria-hidden />
+                    URL
+                  </label>
+                  <Select value={selectedUrl} onValueChange={handleUrlChange}>
+                    {/* The trigger wraps rather than truncates. A single-line trigger
                     clipped 223px of the URL on a phone — and still 123px at
                     1024px — so the one thing the whole page is about was
                     unreadable. Height goes auto and the value's line clamp is
                     lifted; the run-count badge the option carries is dropped
                     here, since the Runs cell in the readout already states it. */}
-                <SelectTrigger
-                  id={urlSelectId}
-                  className="w-full whitespace-normal py-1.5 text-left font-mono text-xs data-[size=default]:h-auto data-[size=default]:min-h-8 *:data-[slot=select-value]:line-clamp-none"
-                >
-                  <SelectValue placeholder="Select a URL">
-                    {/* `text-left` lives on the trigger, not here: this span is
+                    <SelectTrigger
+                      id={urlSelectId}
+                      className="w-full whitespace-normal py-1.5 text-left font-mono text-xs data-[size=default]:h-auto data-[size=default]:min-h-8 *:data-[slot=select-value]:line-clamp-none"
+                    >
+                      <SelectValue placeholder="Select a URL">
+                        {/* `text-left` lives on the trigger, not here: this span is
                         inline, and `text-align` only applies to a block box —
                         so a wrapped URL inherited the button's UA centring and
                         its second line sat in the middle of the field. */}
-                    <span className="min-w-0 wrap-anywhere">{selectedUrl}</span>
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {groups.map((g) => (
-                      <SelectItem
-                        key={g.url}
-                        value={g.url}
-                        className="font-mono text-xs"
-                      >
-                        <span className="truncate">{g.url}</span>
-                        <Badge
-                          variant="outline"
-                          className="ml-auto font-mono text-[0.6rem] tabular-nums text-muted-foreground"
-                        >
-                          {g.runs.length} {g.runs.length === 1 ? "run" : "runs"}
-                        </Badge>
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-                </Select>
-              </div>
+                        <span className="min-w-0 wrap-anywhere">
+                          {selectedUrl}
+                        </span>
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {groups.map((g) => (
+                          <SelectItem
+                            key={g.url}
+                            value={g.url}
+                            className="font-mono text-xs"
+                          >
+                            <span className="truncate">{g.url}</span>
+                            <Badge
+                              variant="outline"
+                              className="ml-auto font-mono text-[0.6rem] tabular-nums text-muted-foreground"
+                            >
+                              {g.runs.length}{" "}
+                              {g.runs.length === 1 ? "run" : "runs"}
+                            </Badge>
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </div>
 
-              {/* Facts. Two rows of two while the bezel is narrow, an even
+                {/* Facts. Two rows of two while the bezel is narrow, an even
                   four-column strip once it can hold one — never a wrapping row
                   that packs left and leaves a quarter of the bezel blank. From
                   `@2xl` each cell after the first hangs a hairline off its own
                   left edge, so the strip reads as one ruled instrument face. */}
-              <ReadoutCells className="grid grid-cols-2 items-end gap-x-6 gap-y-3 @2xl:grid-cols-4 @2xl:gap-x-0 @4xl:flex">
-                <ReadoutCell
-                  icon={<History className="size-3" aria-hidden />}
-                  label="Runs"
-                  value={String(groupRuns.length)}
-                />
-                <ReadoutCell
-                  className={FACT_DIVIDER}
-                  icon={<CalendarRange className="size-3" aria-hidden />}
-                  label="Span"
-                  value={span}
-                />
-                <ReadoutCell
-                  className={FACT_DIVIDER}
-                  icon={<Smartphone className="size-3" aria-hidden />}
-                  label="Devices"
-                  value={devices}
-                />
-                <ReadoutCell
-                  className={FACT_DIVIDER}
-                  icon={<Cpu className="size-3" aria-hidden />}
-                  label="Engine"
-                  value={engines.label}
-                  tone={engines.mixed ? "warn" : "default"}
-                />
-              </ReadoutCells>
-            </div>
-            <ReadoutNote>
-              {engines.mixed
-                ? "This URL has both local and PageSpeed runs. They are measured on different hardware, so a diff across the two engines reflects more than the page."
-                : "Pick two runs below to diff their scores and Core Web Vitals."}
-            </ReadoutNote>
-          </Readout>
-        </CardContent>
-      </Card>
+                <ReadoutCells className="grid grid-cols-2 items-end gap-x-6 gap-y-3 @2xl:grid-cols-4 @2xl:gap-x-0 @4xl:flex">
+                  <ReadoutCell
+                    icon={<History className="size-3" aria-hidden />}
+                    label="Runs"
+                    value={String(groupRuns.length)}
+                  />
+                  <ReadoutCell
+                    className={FACT_DIVIDER}
+                    icon={<CalendarRange className="size-3" aria-hidden />}
+                    label="Span"
+                    value={span}
+                  />
+                  <ReadoutCell
+                    className={FACT_DIVIDER}
+                    icon={<Smartphone className="size-3" aria-hidden />}
+                    label="Devices"
+                    value={devices}
+                  />
+                  <ReadoutCell
+                    className={FACT_DIVIDER}
+                    icon={<Cpu className="size-3" aria-hidden />}
+                    label="Engine"
+                    value={engines.label}
+                    tone={engines.mixed ? "warn" : "default"}
+                  />
+                </ReadoutCells>
+              </div>
+              <ReadoutNote>
+                {engines.mixed
+                  ? "This URL has both local and PageSpeed runs. They are measured on different hardware, so a diff across the two engines reflects more than the page."
+                  : "Pick two runs below to diff their scores and Core Web Vitals."}
+              </ReadoutNote>
+            </Readout>
+          </CardContent>
+        </Card>
 
-      {/* Trend + Diff -----------------------------------------------------
-          Stacked all the way to `xl`, so 1024–1279px reads as one column of
-          full-width sections like every narrower width does. That range can
-          carry the split — it was tried at `lg` — but a 944px card holding a
-          four-column table only works because the diff tables give their label
-          column the slack (`LABEL_COL` in run-diff.tsx), which keeps Baseline /
-          Comparison / Δ packed together on the right instead of stranded across
-          the row. Both cards are `@container`s, so everything inside sizes off
-          its own column — the same card is 310px on a phone, 944px stacked at
-          1024px and 588px in half a 1280px desktop. */}
-      <div className="grid gap-6 xl:grid-cols-2 xl:items-start">
-        {/* Trend section --------------------------------------------------- */}
+        {/* Trend section ---------------------------------------------------
+            Every card is an `@container`, so its contents size off its own
+            column rather than the viewport: this one is 310px on a phone,
+            944px stacked at 1024px and 588px in the left column of a 1280px
+            desktop, and each width needs a different answer. */}
         <Card className="@container">
           <CardHeader className="border-b">
             <CardTitle className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.16em]">
@@ -378,50 +383,51 @@ function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
             )}
           </CardContent>
         </Card>
-
-        {/* Diff section ---------------------------------------------------- */}
-        <Card className="@container">
-          <CardHeader className="border-b">
-            <CardTitle className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.16em]">
-              <GitCompareArrows aria-hidden className="size-3.5 text-primary" />
-              Run Diff
-            </CardTitle>
-            <CardDescription className="text-pretty">
-              Pick a baseline and comparison run to diff scores and Core Web
-              Vitals.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-6">
-            <div className="grid gap-4 @lg:grid-cols-2">
-              <RunSelect
-                id={baselineId}
-                label="Baseline"
-                value={baseline.id}
-                runs={groupRuns}
-                onChange={setBaselineId}
-              />
-              <RunSelect
-                id={comparisonId}
-                label="Comparison"
-                value={comparison.id}
-                runs={groupRuns}
-                onChange={setComparisonId}
-              />
-            </div>
-
-            {baseline.id === comparison.id ? (
-              <div className="flex min-h-24 items-center justify-center rounded-md border border-dashed border-border/60 px-4 py-8 text-center @sm:px-6">
-                <p className="max-w-sm text-sm text-pretty text-muted-foreground">
-                  Baseline and comparison are the same run — pick two different
-                  runs to see deltas.
-                </p>
-              </div>
-            ) : (
-              <RunDiff baseline={baseline} comparison={comparison} />
-            )}
-          </CardContent>
-        </Card>
       </div>
+
+      {/* Diff section ------------------------------------------------------
+          The right column from `xl`; the whole page's second section below it. */}
+      <Card className="@container">
+        <CardHeader className="border-b">
+          <CardTitle className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.16em]">
+            <GitCompareArrows aria-hidden className="size-3.5 text-primary" />
+            Run Diff
+          </CardTitle>
+          <CardDescription className="text-pretty">
+            Pick a baseline and comparison run to diff scores and Core Web
+            Vitals.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-6">
+          <div className="grid gap-4 @lg:grid-cols-2">
+            <RunSelect
+              id={baselineId}
+              label="Baseline"
+              value={baseline.id}
+              runs={groupRuns}
+              onChange={setBaselineId}
+            />
+            <RunSelect
+              id={comparisonId}
+              label="Comparison"
+              value={comparison.id}
+              runs={groupRuns}
+              onChange={setComparisonId}
+            />
+          </div>
+
+          {baseline.id === comparison.id ? (
+            <div className="flex min-h-24 items-center justify-center rounded-md border border-dashed border-border/60 px-4 py-8 text-center @sm:px-6">
+              <p className="max-w-sm text-sm text-pretty text-muted-foreground">
+                Baseline and comparison are the same run — pick two different
+                runs to see deltas.
+              </p>
+            </div>
+          ) : (
+            <RunDiff baseline={baseline} comparison={comparison} />
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -454,7 +460,11 @@ function RunSelect({
         <SelectContent>
           <SelectGroup>
             {ordered.map((run) => (
-              <SelectItem key={run.id} value={run.id} className="font-mono text-xs">
+              <SelectItem
+                key={run.id}
+                value={run.id}
+                className="font-mono text-xs"
+              >
                 <span className="tabular-nums">{formatRunLabel(run)}</span>
                 <Badge
                   variant="outline"
