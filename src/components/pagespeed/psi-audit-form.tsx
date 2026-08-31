@@ -13,15 +13,31 @@
  * / warm-cache are intentionally absent — PSI's lab conditions are fixed
  * Google-side and its API accepts no such parameter, so a control would be a no-op.
  *
+ * Layout mirrors {@link NewAuditForm}'s instrument bands: Targets grows to fill
+ * its column (so the two halves end level), and the config panel is a 1/2/4-wide
+ * dial grid, a full-width Categories band, and an `mt-auto` instrument footer
+ * holding the quota readout ({@link PsiConfigCard}) and Save as daily in one
+ * bezel. Because PSI's lab conditions are fixed, the footer reports what the
+ * batch *costs* rather than how accurate it is — see {@link psiRequestCost}.
+ *
  * Submits the exact same {@link CreateBatchRequest} the local form does, tagged
  * with `source: "psi"`, so it flows through the one queue / SSE / results
  * pipeline. The parent ({@link PageSpeedConsole}) renders the live results slot.
  */
 
 import { useCallback, useId, useMemo, useState, type ReactNode } from "react";
-import { CalendarPlus, Info, ListPlus, Play, Radar } from "lucide-react";
+import {
+  CalendarPlus,
+  CircleCheck,
+  Info,
+  ListPlus,
+  Play,
+  Radar,
+  TriangleAlert,
+} from "lucide-react";
 
 import { CrawlPanel } from "@/components/audit/crawl-panel";
+import { PsiConfigCard } from "@/components/pagespeed/psi-config-card";
 import {
   WorkspacePanel,
   type WorkspaceView,
@@ -58,6 +74,11 @@ import {
   type LighthouseCategory,
 } from "@/lib/lighthouse/types";
 import { parseUrls } from "@/lib/parseUrls";
+import {
+  PSI_REQUESTS_PER_DAY,
+  PSI_REQUESTS_PER_MINUTE,
+  psiRequestCost,
+} from "@/lib/pagespeed/quota";
 import {
   DEFAULT_CONCURRENCY,
   MAX_CONCURRENCY,
@@ -156,6 +177,14 @@ export function PsiAuditForm({
   const urls = tab === "paste" ? pastedUrls : crawlUrls;
   const canSubmit = urls.length > 0 && !isRunning;
   const canSaveSchedule = urls.length > 0 && !isRunning;
+
+  // What this batch costs against Google's quota (`runs × strategies × targets`).
+  // The instrument footer reads it twice — once as readout cells, once as the
+  // state-aware quota alert — so it is derived here and shared.
+  const cost = useMemo(
+    () => psiRequestCost(device, runs, urls.length),
+    [device, runs, urls.length],
+  );
 
   // Resolved options for both submit and "Save as daily". `runs` drives the
   // client-side median-of-N (N PSI API calls); throttling / warmCache are nominal
@@ -290,10 +319,11 @@ export function PsiAuditForm({
       <Card>
         <CardContent className="px-4">
           <div className="grid gap-0 min-[1440px]:grid-cols-2">
-            {/* Targets */}
+            {/* Targets — left/top. Container query so the section adapts to its
+                own column width when it shares the row with PageSpeed config. */}
             <section
               aria-labelledby="psi-targets-heading"
-              className="@container flex flex-col gap-4 pb-6 min-[1440px]:pb-0 min-[1440px]:pr-6"
+              className="@container flex flex-col gap-5 pb-6 min-[1440px]:pb-0 min-[1440px]:pr-6"
             >
               <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                 <h2
@@ -302,11 +332,22 @@ export function PsiAuditForm({
                 >
                   Target URLs
                 </h2>
+                {/* The caption describes the *active* input mode — "one URL per
+                    line" is meaningless once you're seeding a crawl. */}
                 <p className="font-mono text-[0.65rem] uppercase tracking-[0.18em] text-muted-foreground">
-                  Audited by Google · one URL per line
+                  {tab === "paste"
+                    ? "One URL per line · analysed by Google"
+                    : "Sitemap + link crawl · same-origin only"}
                 </p>
               </header>
-              <Tabs value={tab} onValueChange={handleTabChange} className="gap-4">
+              {/* The tab body grows to fill the column so the paste textarea
+                  absorbs whatever height the config panel needs beside it,
+                  instead of leaving a void under a fixed 10-row box. */}
+              <Tabs
+                value={tab}
+                onValueChange={handleTabChange}
+                className="flex-1 gap-4"
+              >
                 <TabsList>
                   <TabsTrigger value="paste">
                     <ListPlus data-icon="inline-start" />
@@ -318,16 +359,15 @@ export function PsiAuditForm({
                   </TabsTrigger>
                 </TabsList>
 
-                <TabsContent value="paste" className="flex flex-col gap-3">
+                <TabsContent value="paste" className="flex flex-1 flex-col gap-3">
                   <Textarea
-                    rows={10}
                     value={text}
                     onChange={(event) => setText(event.target.value)}
                     disabled={isRunning}
                     aria-label="Target URLs"
                     spellCheck={false}
                     autoComplete="off"
-                    className="resize-none font-mono text-sm"
+                    className="min-h-44 flex-1 resize-none font-mono text-sm"
                     placeholder={
                       "https://example.com\nhttps://example.com/pricing\nhttps://example.com/blog"
                     }
@@ -365,10 +405,13 @@ export function PsiAuditForm({
               </Tabs>
             </section>
 
-            {/* Config */}
+            {/* PageSpeed config — right/bottom. Rotating hairline: border-t at
+                narrow (under Targets), border-l at ≥1440px (beside Targets).
+                Container query so the dials and the categories band re-flow to
+                this section's *own* width, not the viewport. */}
             <section
               aria-labelledby="psi-config-heading"
-              className="@container flex flex-col gap-4 border-t border-border/60 pt-6 min-[1440px]:border-t-0 min-[1440px]:border-l min-[1440px]:pl-6 min-[1440px]:pt-0"
+              className="@container flex flex-col gap-5 border-t border-border/60 pt-6 min-[1440px]:border-t-0 min-[1440px]:border-l min-[1440px]:pl-6 min-[1440px]:pt-0"
             >
               <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                 <h2
@@ -382,13 +425,22 @@ export function PsiAuditForm({
                 </p>
               </header>
 
-              <div className="grid grid-cols-1 gap-x-5 gap-y-4 @md:grid-cols-2">
+              {/* Dials. Four controls that divide evenly at every step: one
+                  column on a phone, 2×2 once a half-cell can still hold the
+                  Device segments (@lg = 512px), and a single 4-across
+                  instrument row when the section is wide enough that 2-across
+                  would stretch each dial past 400px (@5xl = 1024px). */}
+              <div className="grid grid-cols-1 gap-x-5 gap-y-4 @lg:grid-cols-2 @5xl:grid-cols-4">
                 <Field>
                   <FieldLabel htmlFor={deviceId}>Device</FieldLabel>
                   <ToggleGroup
                     id={deviceId}
                     type="single"
                     variant="outline"
+                    spacing={0}
+                    // The FieldLabel is a <label>, which can't name a role=group
+                    // div — the group needs its own accessible name.
+                    aria-label="Device"
                     value={device}
                     onValueChange={handleDeviceChange}
                     disabled={isRunning}
@@ -487,57 +539,108 @@ export function PsiAuditForm({
 
               <Separator />
 
-              <div className="flex flex-col gap-4 @2xl:flex-row @2xl:items-end @2xl:justify-between">
-                <FieldSet className="gap-2">
-                  <FieldLegend variant="label">Categories</FieldLegend>
-                  <ToggleGroup
-                    type="multiple"
-                    variant="outline"
-                    value={categories}
-                    onValueChange={handleCategoriesChange}
-                    disabled={isRunning}
-                    className="flex-wrap"
-                  >
-                    {LIGHTHOUSE_CATEGORIES.map((category) => (
-                      <ToggleGroupItem key={category} value={category} size="sm">
-                        {CATEGORY_LABELS[category]}
-                      </ToggleGroupItem>
-                    ))}
-                  </ToggleGroup>
-                </FieldSet>
-
-                <Button
-                  type="button"
+              {/* Scope band — what each run measures. The four categories used
+                  to wrap as small chips beside a far-right orphaned action; as
+                  full-width pills the whole cell is the tap target (2×2 on a
+                  phone) and the band fills the section instead of trailing off. */}
+              <FieldSet className="gap-2">
+                <FieldLegend variant="label">Categories</FieldLegend>
+                <ToggleGroup
+                  type="multiple"
                   variant="outline"
-                  size="sm"
-                  onClick={() => setScheduleOpen(true)}
-                  disabled={!canSaveSchedule}
-                  className="shrink-0"
-                  title={
-                    canSaveSchedule
-                      ? "Save these URLs + options as a daily PageSpeed schedule"
-                      : "Add at least one URL before saving as daily"
-                  }
+                  aria-label="Categories"
+                  value={categories}
+                  onValueChange={handleCategoriesChange}
+                  disabled={isRunning}
+                  className="grid w-full grid-cols-1 gap-2 @2xs:grid-cols-2 @lg:grid-cols-4"
                 >
-                  <CalendarPlus data-icon="inline-start" />
-                  Save as daily
-                </Button>
-              </div>
+                  {LIGHTHOUSE_CATEGORIES.map((category) => (
+                    <ToggleGroupItem
+                      key={category}
+                      value={category}
+                      className="w-full font-normal data-[state=on]:text-foreground"
+                    >
+                      {CATEGORY_LABELS[category]}
+                    </ToggleGroupItem>
+                  ))}
+                </ToggleGroup>
+              </FieldSet>
 
-              <Alert>
-                <Info />
-                <AlertDescription>
-                  PageSpeed Insights runs Lighthouse on Google&apos;s servers with
-                  fixed lab settings (mobile emulates a mid-tier phone on slow 4G),
-                  so CPU slowdown and throttling aren&apos;t configurable here — use
-                  a local Lighthouse audit to tune those. Runs-per-URL takes the
-                  median of N API calls, so a batch makes runs × URLs requests
-                  against Google&apos;s quota (~240/min, 25k/day; set{" "}
-                  <code className="font-mono text-[0.8em]">PAGESPEED_API_KEY</code>{" "}
-                  for headroom). Real-world Core Web Vitals from the Chrome UX
-                  Report are included when a URL has enough traffic.
-                </AlertDescription>
-              </Alert>
+              {/* Instrument footer, pinned to the bottom of the panel (`mt-auto`)
+                  so the section reads as a console with a status bar rather than
+                  trailing off into dead space beside the taller Targets column.
+                  PSI's lab conditions are fixed, so what the footer reports is
+                  what the batch *costs*: the quota alert tracks the live figure
+                  instead of restating the same paragraph every time. */}
+              <div className="mt-auto flex flex-col gap-3 pt-2">
+                {/* ONE <Alert> whose contents change, not three that swap: a
+                    live region has to already be in the DOM when its text
+                    changes for a screen reader to announce it. `polite` also
+                    overrides the component's role=alert assertiveness, since
+                    this only ever tracks a dial the user just turned. */}
+                <Alert aria-live="polite">
+                  {urls.length === 0 ? (
+                    <Info />
+                  ) : cost.overBurst ? (
+                    <TriangleAlert className="text-score-average" />
+                  ) : (
+                    <CircleCheck className="text-score-good" />
+                  )}
+                  <AlertDescription>
+                    {urls.length === 0 ? (
+                      <>
+                        Each URL costs {cost.perUrl} API{" "}
+                        {cost.perUrl === 1 ? "call" : "calls"}{" "}
+                        &mdash; runs × strategies &mdash; against Google&rsquo;s
+                        quota (~{PSI_REQUESTS_PER_MINUTE}/min,{" "}
+                        {PSI_REQUESTS_PER_DAY.toLocaleString("en-US")}/day). Set{" "}
+                        <code className="font-mono text-[0.8em]" translate="no">
+                          PAGESPEED_API_KEY
+                        </code>{" "}
+                        for headroom.
+                      </>
+                    ) : cost.overBurst ? (
+                      <>
+                        {cost.total}{" "}
+                        requests exceeds PageSpeed&rsquo;s ~
+                        {PSI_REQUESTS_PER_MINUTE}/min burst, so Google will
+                        throttle this batch. Lower runs per URL, or split the
+                        targets.
+                      </>
+                    ) : (
+                      <>
+                        {cost.total}{" "}
+                        requests &mdash; inside PageSpeed&rsquo;s ~
+                        {PSI_REQUESTS_PER_MINUTE}/min burst and{" "}
+                        {PSI_REQUESTS_PER_DAY.toLocaleString("en-US")}/day quota.
+                      </>
+                    )}
+                  </AlertDescription>
+                </Alert>
+
+                <PsiConfigCard
+                  device={device}
+                  runs={runs}
+                  targetCount={urls.length}
+                  actions={
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setScheduleOpen(true)}
+                      disabled={!canSaveSchedule}
+                      title={
+                        canSaveSchedule
+                          ? "Save these URLs + options as a daily PageSpeed schedule"
+                          : "Add at least one URL before saving as daily"
+                      }
+                    >
+                      <CalendarPlus data-icon="inline-start" />
+                      Save as daily
+                    </Button>
+                  }
+                />
+              </div>
             </section>
           </div>
         </CardContent>
