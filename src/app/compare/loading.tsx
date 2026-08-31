@@ -1,9 +1,9 @@
 import { Skeleton } from "@/components/ui/skeleton";
 
 // Skeleton mirroring the Compare page: PageHeader + the Target URL band + the
-// Score Trend / Run Diff pair, which sit side by side from `lg` exactly as the
-// real console does — a full-width stand-in would reflow the whole page the
-// moment data landed.
+// Score Trend / Run Diff pair, which stack to `xl` and split there exactly as
+// the real console does — a stand-in on the wrong breakpoint would reflow the
+// whole page the moment data landed.
 export default function CompareLoading() {
   return (
     <div
@@ -38,7 +38,7 @@ export default function CompareLoading() {
           </div>
         </div>
 
-        <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
+        <div className="grid gap-6 xl:grid-cols-2 xl:items-start">
           {/* Score Trend card stand-in */}
           <div className="flex flex-col gap-4 rounded-xl bg-card/40 px-4 py-4">
             <Skeleton className="h-4 w-32 bg-muted/60" />

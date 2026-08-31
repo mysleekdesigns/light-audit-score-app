@@ -70,6 +70,13 @@ const CELL = "px-1 @sm:px-2";
 const LABEL_COL = "w-full";
 
 /**
+ * Hairline between footer tally cells, once they sit in an even row rather than
+ * a 2×2 grid — the same rule the Target URL band uses, so the two bezels read as
+ * the same instrument.
+ */
+const TALLY_DIVIDER = "@2xl:border-l @2xl:border-border/60 @2xl:pl-6";
+
+/**
  * Column header that abbreviates while the card is narrow.
  *
  * Sized off the card's own container rather than the viewport: this table sits
@@ -307,7 +314,10 @@ export function RunDiff({ baseline, comparison }: RunDiffProps) {
       </div>
 
       <Readout className="mt-auto">
-        <ReadoutCells className="grid grid-cols-2 items-start gap-y-3 @sm:flex">
+        {/* Two rows of two while the card is narrow, an even ruled strip from
+            `@2xl` — a wrapping row packed the four cells into the left third of
+            a 1200px card and left the rest blank. */}
+        <ReadoutCells className="grid grid-cols-2 items-end gap-x-6 gap-y-3 @2xl:grid-cols-4 @2xl:gap-x-0">
           <ReadoutCell
             icon={<ArrowUp className="size-3" aria-hidden />}
             label="Improved"
@@ -315,28 +325,35 @@ export function RunDiff({ baseline, comparison }: RunDiffProps) {
             tone={improved > 0 ? "good" : "default"}
           />
           <ReadoutCell
+            className={TALLY_DIVIDER}
             icon={<ArrowDown className="size-3" aria-hidden />}
             label="Regressed"
             value={String(regressed)}
             tone={regressed > 0 ? "warn" : "default"}
           />
           <ReadoutCell
+            className={TALLY_DIVIDER}
             icon={<Minus className="size-3" aria-hidden />}
             label="Unchanged"
             value={String(unchanged)}
           />
           <ReadoutCell
+            className={TALLY_DIVIDER}
             icon={<Hourglass className="size-3" aria-hidden />}
             label="Apart"
             value={formatGap(baseline, comparison)}
           />
         </ReadoutCells>
-        <ReadoutNote>
-          {`Across ${scoreDiffs.length} category scores and ${metricDiffs.length} Core Web Vitals.`}
-        </ReadoutNote>
-        <div className="grid grid-cols-1 gap-2 @sm:flex @sm:flex-wrap @sm:items-center">
-          <ReportLink run={baseline} side="Baseline" />
-          <ReportLink run={comparison} side="Comparison" />
+        {/* The note and the links share a line once the bezel can hold both,
+            so a wide card does not stack two mostly-empty rows. */}
+        <div className="flex flex-col gap-3 @xl:flex-row @xl:items-center @xl:justify-between">
+          <ReadoutNote>
+            {`Across ${scoreDiffs.length} category scores and ${metricDiffs.length} Core Web Vitals.`}
+          </ReadoutNote>
+          <div className="grid grid-cols-1 gap-2 @sm:flex @sm:flex-wrap @sm:items-center @xl:shrink-0">
+            <ReportLink run={baseline} side="Baseline" />
+            <ReportLink run={comparison} side="Comparison" />
+          </div>
         </div>
       </Readout>
     </div>

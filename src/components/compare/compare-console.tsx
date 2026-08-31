@@ -334,14 +334,16 @@ function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
       </Card>
 
       {/* Trend + Diff -----------------------------------------------------
-          Stacked while the page is one column, side by side from `lg`. The
-          split used to wait for `xl`, which left 1024–1279px rendering two
-          944px-wide cards whose widest content was a four-column table: the
-          numbers ended up hundreds of pixels apart with nothing between them.
-          Both cards are `@container`s, so everything inside sizes off its own
-          column — the same card is 310px on a phone, 688px on a tablet and
-          588px in half a desktop, and each needs a different answer. */}
-      <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
+          Stacked all the way to `xl`, so 1024–1279px reads as one column of
+          full-width sections like every narrower width does. That range can
+          carry the split — it was tried at `lg` — but a 944px card holding a
+          four-column table only works because the diff tables give their label
+          column the slack (`LABEL_COL` in run-diff.tsx), which keeps Baseline /
+          Comparison / Δ packed together on the right instead of stranded across
+          the row. Both cards are `@container`s, so everything inside sizes off
+          its own column — the same card is 310px on a phone, 944px stacked at
+          1024px and 588px in half a 1280px desktop. */}
+      <div className="grid gap-6 xl:grid-cols-2 xl:items-start">
         {/* Trend section --------------------------------------------------- */}
         <Card className="@container">
           <CardHeader className="border-b">
