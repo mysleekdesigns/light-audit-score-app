@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useId, useMemo, useState } from "react";
+import { useCallback, useId, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Archive,
@@ -129,8 +129,7 @@ const HEAD_LABEL = "font-mono text-[0.7rem] uppercase tracking-[0.16em]";
  * rather than over the trailing trend arrow.
  *
  * That alignment is a nicety, and below `sm` it costs 20px per column — 80px of
- * a ~306px table — which the URL column pays for by collapsing to unreadable.
- * It only applies where there is room for it.
+ * a ~306px table — so it only applies where there is room for it.
  */
 const SCORE_HEAD = "pr-2 sm:pr-5";
 
@@ -185,48 +184,6 @@ function urlGroupKey(raw: string): { host: string; section: number; path: string
     const fallback = raw.toLowerCase();
     return { host: fallback, section: 1, path: fallback };
   }
-}
-
-/**
- * Path (plus query) of a URL — what actually distinguishes one row from another
- * inside a website's section, since the host is already in the section header.
- * At phone widths the URL column is ~128px, and a full URL truncates to
- * "https://ww…" on every single row; the path spends those pixels on the part
- * that differs. Falls back to the raw string for anything unparseable.
- */
-function pathOf(raw: string): string {
-  try {
-    const u = new URL(raw);
-    return `${u.pathname}${u.search}` || "/";
-  } catch {
-    return raw;
-  }
-}
-
-/**
- * A path that wraps at its own segment boundaries.
- *
- * In a ~128px phone column an ellipsis lands mid-segment — `/docs/guides/adv…`,
- * `/docs/getting-st…` — which cuts off the very part that tells two rows apart.
- * A `<wbr>` after each slash gives the browser somewhere sensible to break, so
- * the whole path survives across two short lines instead.
- */
-function BreakablePath({ path }: { path: string }) {
-  const segments = path.split("/");
-  return (
-    <>
-      {segments.map((segment, i) => (
-        <Fragment key={i}>
-          {i > 0 ? (
-            <>
-              /<wbr />
-            </>
-          ) : null}
-          {segment}
-        </Fragment>
-      ))}
-    </>
-  );
 }
 
 /** Compare two URLs by the grouped ordering (host → section → path, numeric-aware). */
@@ -1067,12 +1024,18 @@ function PairedTableBody({
               leaves URL / Run at on rowSpan 2, so the two-level header stays
               structurally valid with either device alone. */}
           <TableRow className="hover:bg-transparent">
-            <TableHead rowSpan={2} className={cn(HEAD_LABEL, "w-full align-bottom")}>
-              URL
+            <TableHead
+              rowSpan={2}
+              className={cn(HEAD_LABEL, "p-0 align-bottom sm:w-full sm:px-2")}
+            >
+              <span className="sr-only sm:not-sr-only">URL</span>
             </TableHead>
+            {/* Both device captions are stowed on a phone, not just the
+                unselected one: the switch above the table already says which
+                device is showing, so the band would only repeat it. */}
             <TableHead
               colSpan={SCORE_COLUMNS.length + 1}
-              className={cn(HEAD_LABEL, "text-center text-primary", stowMobile && stow)}
+              className={cn(HEAD_LABEL, "text-center text-primary", stow)}
             >
               Mobile
             </TableHead>
@@ -1081,7 +1044,7 @@ function PairedTableBody({
               className={cn(
                 HEAD_LABEL,
                 "border-l border-border/50 text-center text-primary",
-                stowDesktop && stow,
+                stow,
               )}
             >
               Desktop
@@ -1136,42 +1099,30 @@ function PairedTableBody({
                       phone — the PSI badge and nothing else — so no row said
                       which page it was. Below `sm` the cap becomes a fixed 8rem
                       the scores cannot squeeze, and truncation still works. */}
-                  <TableCell className={cn(COMPACT_CELL, "max-w-32 sm:max-w-0")}>
-                    <div className="flex min-w-32 flex-col gap-0.5 overflow-hidden sm:min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <a
-                              href={href}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="block min-w-0 flex-1 wrap-anywhere whitespace-normal font-mono text-xs leading-snug text-foreground underline-offset-4 hover:text-primary hover:underline sm:truncate"
-                            >
-                              <span className="sm:hidden">
-                                <BreakablePath path={pathOf(pair.url)} />
-                              </span>
-                              <span className="hidden sm:inline">{pair.url}</span>
-                            </a>
-                          </TooltipTrigger>
-                          <TooltipContent className="font-mono">{href}</TooltipContent>
-                        </Tooltip>
-                        <span className="hidden sm:contents">
-                          <SourceBadge source={primary.source} />
-                        </span>
-                      </div>
-                      {/* On a phone the engine badge and the run time drop to a
-                          second line, so the first gets all ~128px for the path;
-                          from `sm` up the badge sits inline and the run time has
-                          its own column again. */}
-                      <div className="flex items-center gap-1.5 sm:hidden">
-                        <SourceBadge source={primary.source} />
-                        <span
-                          title={primary.createdAt}
-                          className="truncate font-mono text-[0.65rem] tabular-nums text-muted-foreground"
-                        >
-                          {formatRunAt(primary.createdAt)}
-                        </span>
-                      </div>
+                  {/* No phone column is wide enough for a path without either
+                      clipping it or wrapping it over three lines, so below `sm`
+                      the URL, the engine badge and the run time all leave the
+                      visual layout and the table is scores only. The cell stays
+                      in the DOM as `sr-only` rather than `hidden`, so each row
+                      still announces which page it is to assistive tech, and
+                      drops its padding so it costs no width. Everything returns
+                      from `sm` up. */}
+                  <TableCell className={cn(COMPACT_CELL, "p-0 sm:p-2 sm:max-w-0")}>
+                    <div className="sr-only items-center gap-1.5 sm:not-sr-only sm:flex">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <a
+                            href={href}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="block min-w-0 flex-1 truncate font-mono text-xs text-foreground underline-offset-4 hover:text-primary hover:underline"
+                          >
+                            {pair.url}
+                          </a>
+                        </TooltipTrigger>
+                        <TooltipContent className="font-mono">{href}</TooltipContent>
+                      </Tooltip>
+                      <SourceBadge source={primary.source} />
                     </div>
                   </TableCell>
                   <HistoryDeviceHalf
