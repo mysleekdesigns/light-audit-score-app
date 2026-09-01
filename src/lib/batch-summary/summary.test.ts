@@ -8,6 +8,7 @@ import {
   bestWorstPages,
   groupRunsByBatch,
   overallScore,
+  pagesClearingThresholds,
   passFail,
 } from "@/lib/batch-summary/summary";
 
@@ -242,5 +243,72 @@ describe("passFail", () => {
     ];
     const result = passFail(rows, {}); // no thresholds → 90 everywhere
     expect(result.seo).toEqual({ pass: 1, fail: 1, total: 2 });
+  });
+});
+
+describe("pagesClearingThresholds", () => {
+  const allBars = {
+    performance: 90,
+    accessibility: 90,
+    "best-practices": 90,
+    seo: 90,
+  };
+
+  it("counts a page only when every scored category meets its bar", () => {
+    const rows = [
+      makeRow({ id: "clear", scores: allFour(95, 95, 95, 95) }),
+      makeRow({ id: "one-short", scores: allFour(95, 95, 89, 95) }),
+    ];
+    expect(pagesClearingThresholds(rows, allBars)).toEqual({
+      clearing: 1,
+      total: 2,
+    });
+  });
+
+  it("ignores categories the batch never scored rather than failing them", () => {
+    // A Performance-only batch would read 0/1 if missing scores counted as fails.
+    const rows = [makeRow({ id: "perf-only", scores: allFour(95, null, null, null) })];
+    expect(pagesClearingThresholds(rows, allBars)).toEqual({
+      clearing: 1,
+      total: 1,
+    });
+  });
+
+  it("leaves unscored and failed runs out of the total entirely", () => {
+    const rows = [
+      makeRow({ id: "ok", scores: allFour(95, 95, 95, 95) }),
+      makeRow({ id: "errored", status: "error" }),
+      makeRow({ id: "no-scores", scores: {} }),
+    ];
+    expect(pagesClearingThresholds(rows, allBars)).toEqual({
+      clearing: 1,
+      total: 1,
+    });
+  });
+
+  it("applies each category's own bar", () => {
+    const rows = [makeRow({ id: "r1", scores: allFour(60, 95, 95, 95) })];
+    expect(pagesClearingThresholds(rows, { ...allBars, performance: 50 })).toEqual(
+      { clearing: 1, total: 1 },
+    );
+    expect(pagesClearingThresholds(rows, allBars)).toEqual({
+      clearing: 0,
+      total: 1,
+    });
+  });
+
+  it("falls back to the 90 bar when a category has none configured", () => {
+    const rows = [
+      makeRow({ id: "high", scores: allFour(91, 91, 91, 91) }),
+      makeRow({ id: "low", scores: allFour(89, 89, 89, 89) }),
+    ];
+    expect(pagesClearingThresholds(rows, {})).toEqual({ clearing: 1, total: 2 });
+  });
+
+  it("reports an empty batch as 0 of 0", () => {
+    expect(pagesClearingThresholds([], allBars)).toEqual({
+      clearing: 0,
+      total: 0,
+    });
   });
 });

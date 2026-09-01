@@ -176,5 +176,50 @@ export function passFail(
   return result;
 }
 
+/** How many scored pages clear every one of their thresholds at once. */
+export interface ClearingTally {
+  /** Pages whose every present category score met that category's threshold. */
+  clearing: number;
+  /** Pages carrying at least one category score (i.e. the pages that could clear). */
+  total: number;
+}
+
+/**
+ * Cross-category counterpart to {@link passFail}: rather than "how many pages met
+ * the SEO bar", it answers "how many pages met *all* of their bars at once" — the
+ * single number a summary readout can carry without repeating the per-category grid.
+ *
+ * A page clears when every category it actually scored sits at or above that
+ * category's threshold. Categories the batch never ran are ignored rather than
+ * failed (a Performance-only batch would otherwise always read 0 clearing), and
+ * pages with no scores at all — errors, cancelled runs — stay out of `total`
+ * entirely, so the ratio is "of the pages we measured".
+ */
+export function pagesClearingThresholds(
+  rows: HistoryRow[],
+  thresholds: Partial<Record<LighthouseCategory, number>>,
+): ClearingTally {
+  let clearing = 0;
+  let total = 0;
+
+  for (const row of rows) {
+    if (!isDone(row)) continue;
+
+    const scored = LIGHTHOUSE_CATEGORIES.filter((category) =>
+      isPresent(row.scores[category]),
+    );
+    if (scored.length === 0) continue;
+
+    total += 1;
+    const clears = scored.every((category) => {
+      const score = row.scores[category] as number;
+      return score >= (thresholds[category] ?? GOOD_THRESHOLD_FALLBACK);
+    });
+    if (clears) clearing += 1;
+  }
+
+  return { clearing, total };
+}
+
 /** Fallback pass threshold (mirrors `@/lib/scores` GOOD_THRESHOLD) when none is set. */
 export const GOOD_THRESHOLD_FALLBACK = 90;

@@ -9,6 +9,14 @@
  * {@link useAuditDefaults} (shared with the New Audit form) and all summaries
  * are derived with `useMemo` from the runs handed down by the server page. Each
  * card can also export its own runs (JSON/CSV) and bulk-open their reports.
+ *
+ * Layout is mobile-first and built from the house **instrument bands** (see
+ * `readout.tsx`): a header, a dial grid, comparison bands, and an `mt-auto`
+ * instrument footer whose bezel carries derived readings *and* the card's
+ * actions. Both the threshold console and every batch card are `@container`s,
+ * so each sizes off its own width — a batch card is the whole page on a phone,
+ * half of it at `xl` and a third at `2xl`, and viewport breakpoints would read
+ * the wrong number at two of those three.
  */
 
 import { useCallback, useId, useMemo } from "react";
@@ -18,24 +26,30 @@ import {
   Clock,
   ExternalLink,
   FileJson,
+  Gauge,
+  Layers,
   Loader2,
+  RotateCcw,
   RotateCw,
   Sheet,
+  Target,
   TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { DriftWarning } from "@/components/audit/drift-warning";
 import { EnvironmentBadge } from "@/components/audit/environment-badge";
+import {
+  Readout,
+  ReadoutCell,
+  ReadoutCells,
+  ReadoutNote,
+} from "@/components/audit/readout";
 import { RerunBatchButton } from "@/components/audit/rerun-batch-button";
 import { ScoreRing } from "@/components/audit/score-ring";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
@@ -62,7 +76,10 @@ import {
   type DeviceSelection,
 } from "@/lib/lighthouse/types";
 import { hasBothDevices } from "@/lib/pairing/devicePairs";
-import type { CategoryThresholds } from "@/lib/settings/defaults";
+import {
+  DEFAULT_THRESHOLDS,
+  type CategoryThresholds,
+} from "@/lib/settings/defaults";
 import {
   CATEGORY_SHORT_LABELS,
   formatScore,
@@ -74,6 +91,7 @@ import {
   bestWorstPages,
   groupRunsByBatch,
   overallScore,
+  pagesClearingThresholds,
   passFail,
   type PassFailByCategory,
 } from "@/lib/batch-summary/summary";
@@ -81,6 +99,10 @@ import {
 /** Mono uppercase tracked section label — the house "telemetry" label style. */
 const SECTION_LABEL =
   "font-mono text-[0.625rem] uppercase tracking-[0.18em] text-muted-foreground";
+
+/** The mono micro-caption that trails a band's heading. */
+const BAND_CAPTION =
+  "font-mono text-[0.65rem] uppercase tracking-[0.18em] text-muted-foreground";
 
 /** Lifecycle label + Badge variant + leading icon for each batch status. */
 const STATUS_META: Record<
@@ -114,11 +136,17 @@ const STATUS_META: Record<
   },
 };
 
-/** Format an ISO timestamp into a readable local datetime; falls back to the raw string. */
+/**
+ * Format an ISO timestamp into a readable datetime; falls back to the raw string.
+ *
+ * The locale is pinned: this console is server-rendered, and an ambient locale
+ * formats differently on the server than in a non-`en-US` browser, which fails
+ * hydration.
+ */
 function formatBatchAt(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-US", {
     year: "numeric",
     month: "short",
     day: "2-digit",
@@ -130,6 +158,11 @@ function formatBatchAt(iso: string): string {
 /** Strip the scheme for a compact, scannable URL label (full URL stays in the title/tooltip). */
 function shortUrl(url: string): string {
   return url.replace(/^https?:\/\//, "");
+}
+
+/** `1 page` / `3 pages`. */
+function pages(count: number): string {
+  return `${count} ${count === 1 ? "page" : "pages"}`;
 }
 
 interface BatchSummaryConsoleProps {
@@ -155,14 +188,47 @@ export function BatchSummaryConsole({ batches, runs }: BatchSummaryConsoleProps)
   // Group once; each batch card slices its own runs out of the map.
   const runsByBatch = useMemo(() => groupRunsByBatch(runs), [runs]);
 
+  // What the current bars actually cost, across the whole archive — the derived
+  // reading the threshold console's footer reports back. A batch clears when
+  // every page it measured cleared.
+  const reach = useMemo(() => {
+    let clearingPages = 0;
+    let scoredPages = 0;
+    let clearingBatches = 0;
+    let scoredBatches = 0;
+
+    for (const batch of batches) {
+      const tally = pagesClearingThresholds(
+        runsByBatch.get(batch.id) ?? [],
+        thresholds,
+      );
+      if (tally.total === 0) continue;
+      scoredBatches += 1;
+      scoredPages += tally.total;
+      clearingPages += tally.clearing;
+      if (tally.clearing === tally.total) clearingBatches += 1;
+    }
+
+    return { clearingPages, scoredPages, clearingBatches, scoredBatches };
+  }, [batches, runsByBatch, thresholds]);
+
   return (
     <TooltipProvider delayDuration={150}>
       <div className="flex flex-col gap-6">
-        <ThresholdControls thresholds={thresholds} onChange={setThresholds} />
+        <ThresholdControls
+          thresholds={thresholds}
+          onChange={setThresholds}
+          reach={reach}
+        />
 
-        <ul className="grid list-none grid-cols-1 gap-5 p-0 xl:grid-cols-2 2xl:grid-cols-3">
+        <ul
+          className="grid list-none grid-cols-1 gap-5 p-0 xl:grid-cols-2 2xl:grid-cols-3"
+          aria-label="Batch summaries"
+        >
           {batches.map((batch) => (
-            <li key={batch.id}>
+            // `flex` so the card stretches to the row's height and its footer
+            // bezel can pin to the bottom — action bars line up across a row.
+            <li key={batch.id} className="flex">
               <BatchCard
                 batch={batch}
                 rows={runsByBatch.get(batch.id) ?? []}
@@ -179,55 +245,136 @@ export function BatchSummaryConsole({ batches, runs }: BatchSummaryConsoleProps)
 interface ThresholdControlsProps {
   thresholds: CategoryThresholds;
   onChange: (next: CategoryThresholds) => void;
+  reach: {
+    clearingPages: number;
+    scoredPages: number;
+    clearingBatches: number;
+    scoredBatches: number;
+  };
 }
 
-/** The configurable per-category pass-threshold row (defaults to 90 / GOOD_THRESHOLD). */
-function ThresholdControls({ thresholds, onChange }: ThresholdControlsProps) {
+/**
+ * The configurable per-category pass-threshold console (defaults to 90 /
+ * GOOD_THRESHOLD).
+ *
+ * An instrument band: heading + state-aware caption, a dial grid of the four
+ * bars, and a footer bezel reporting what those bars cost across the whole
+ * archive — a derived number, not an echo of the dials — with the reset action
+ * inside the same bezel. The dials cap at 24rem from `@3xl` so the readout
+ * takes the slack instead of four number inputs stretching to a desk width.
+ */
+function ThresholdControls({
+  thresholds,
+  onChange,
+  reach,
+}: ThresholdControlsProps) {
   const groupId = useId();
 
+  const bars = LIGHTHOUSE_CATEGORIES.map((category) => thresholds[category]);
+  const lowest = Math.min(...bars);
+  const highest = Math.max(...bars);
+  const isDefault = LIGHTHOUSE_CATEGORIES.every(
+    (category) => thresholds[category] === DEFAULT_THRESHOLDS[category],
+  );
+
+  const caption = isDefault
+    ? `Default bar · ${highest}`
+    : lowest === highest
+      ? `Custom bar · ${lowest}`
+      : `Custom bars · ${lowest}–${highest}`;
+
+  const allClear =
+    reach.scoredPages > 0 && reach.clearingPages === reach.scoredPages;
+
   return (
-    <section
-      aria-labelledby={`${groupId}-legend`}
-      className="flex flex-col gap-3 rounded-lg border border-border/60 bg-card/40 p-4"
-    >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span id={`${groupId}-legend`} className={SECTION_LABEL}>
-          Pass thresholds
-        </span>
-        <span className="font-mono text-[0.65rem] text-muted-foreground tabular-nums">
-          score ≥ threshold passes
-        </span>
-      </div>
-      <FieldGroup className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {LIGHTHOUSE_CATEGORIES.map((category) => {
-          const inputId = `${groupId}-${category}`;
-          return (
-            <Field key={category}>
-              <FieldLabel htmlFor={inputId} className={SECTION_LABEL}>
-                {CATEGORY_SHORT_LABELS[category]}
-              </FieldLabel>
-              <Input
-                id={inputId}
-                type="number"
-                inputMode="numeric"
-                min={0}
-                max={100}
-                value={thresholds[category]}
-                onChange={(event) => {
-                  // Ignore transient empty/invalid input so the field doesn't
-                  // snap to 0 mid-edit; clamp committed values to 0–100.
-                  const raw = event.target.valueAsNumber;
-                  if (Number.isNaN(raw)) return;
-                  const next = Math.min(100, Math.max(0, Math.round(raw)));
-                  onChange({ ...thresholds, [category]: next });
-                }}
-                className="font-mono text-sm tabular-nums"
-              />
-            </Field>
-          );
-        })}
-      </FieldGroup>
-    </section>
+    <Card className="@container">
+      <CardContent className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+          <h2
+            id={`${groupId}-legend`}
+            className="font-heading text-base font-medium"
+          >
+            Pass thresholds
+          </h2>
+          <span className={BAND_CAPTION}>{caption}</span>
+        </div>
+
+        {/* Dial grid beside the readout from `@3xl`; stacked below it, where the
+            four bars pair off 2×2 rather than shrinking to four 70px inputs. */}
+        <div className="grid gap-4 @3xl:grid-cols-[minmax(0,24rem)_minmax(0,1fr)] @3xl:items-start @3xl:gap-6">
+          <FieldGroup className="grid grid-cols-2 gap-3 @sm:grid-cols-4">
+            {LIGHTHOUSE_CATEGORIES.map((category) => {
+              const inputId = `${groupId}-${category}`;
+              return (
+                <Field key={category}>
+                  <FieldLabel htmlFor={inputId} className={SECTION_LABEL}>
+                    {CATEGORY_SHORT_LABELS[category]}
+                  </FieldLabel>
+                  <Input
+                    id={inputId}
+                    type="number"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    min={0}
+                    max={100}
+                    value={thresholds[category]}
+                    onChange={(event) => {
+                      // Ignore transient empty/invalid input so the field doesn't
+                      // snap to 0 mid-edit; clamp committed values to 0–100.
+                      const raw = event.target.valueAsNumber;
+                      if (Number.isNaN(raw)) return;
+                      const next = Math.min(100, Math.max(0, Math.round(raw)));
+                      onChange({ ...thresholds, [category]: next });
+                    }}
+                    className="font-mono text-sm tabular-nums"
+                  />
+                </Field>
+              );
+            })}
+          </FieldGroup>
+
+          <Readout className="@5xl:flex-row @5xl:items-center @5xl:justify-between @5xl:gap-6">
+            <div className="flex min-w-0 flex-col gap-2">
+              <ReadoutCells className="grid grid-cols-2 items-start gap-y-3 @sm:flex">
+                <ReadoutCell
+                  icon={<Target className="size-3" aria-hidden />}
+                  label="Pages clear"
+                  value={`${reach.clearingPages}/${reach.scoredPages}`}
+                  tone={allClear ? "good" : "default"}
+                />
+                <ReadoutCell
+                  icon={<Layers className="size-3" aria-hidden />}
+                  label="Batches clear"
+                  value={`${reach.clearingBatches}/${reach.scoredBatches}`}
+                  tone={
+                    reach.scoredBatches > 0 &&
+                    reach.clearingBatches === reach.scoredBatches
+                      ? "good"
+                      : "default"
+                  }
+                />
+              </ReadoutCells>
+              <ReadoutNote>
+                A page clears when every category it scored sits at or above that
+                category&rsquo;s bar, and a batch clears when all of its measured
+                pages do. These bars are shared with the New Audit defaults.
+              </ReadoutNote>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => onChange({ ...DEFAULT_THRESHOLDS })}
+              disabled={isDefault}
+              className="w-full shrink-0 @sm:w-fit"
+            >
+              <RotateCcw data-icon="inline-start" />
+              Reset to {DEFAULT_THRESHOLDS.performance}
+            </Button>
+          </Readout>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -243,6 +390,7 @@ function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
       averages: averageScores(rows),
       pages: bestWorstPages(rows),
       passFail: passFail(rows, thresholds),
+      clearing: pagesClearingThresholds(rows, thresholds),
     }),
     [rows, thresholds],
   );
@@ -308,58 +456,57 @@ function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
   );
 
   return (
-    <Card>
+    // `@container` so every band below sizes off this card, which is the whole
+    // page on a phone, half of it at `xl` and a third at `2xl`.
+    <Card className="@container w-full">
       <CardHeader className="gap-3 border-b border-border/60 pb-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="font-mono text-sm text-foreground tabular-nums">
-              {shortId}
-            </span>
-            <Badge
-              variant={status.variant}
-              className={cn(
-                "gap-1.5 font-mono text-[0.625rem] uppercase tracking-[0.18em]",
-                status.className,
-              )}
-            >
-              <StatusIcon
-                data-icon="inline-start"
-                className={batch.status === "running" ? "animate-spin" : undefined}
-              />
-              {status.label}
-            </Badge>
-            {batch.priorBatchId ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Badge
-                    variant="outline"
-                    className="gap-1 border-border/60 font-mono text-[0.625rem] uppercase tracking-[0.14em] text-muted-foreground tabular-nums"
-                  >
-                    <RotateCw aria-hidden className="size-2.5" />
-                    re-run of {batch.priorBatchId.slice(0, 8)}
-                  </Badge>
-                </TooltipTrigger>
-                <TooltipContent className="font-mono">
-                  Re-run of batch {batch.priorBatchId}
-                </TooltipContent>
-              </Tooltip>
-            ) : null}
-          </div>
-          <div className="flex items-center gap-3">
-            <BatchActions
-              rows={rows}
-              shortId={shortId}
-              rerunUrls={rerunUrls}
-              device={deviceLabel}
-              options={batch.options}
-              source={batch.source}
-              concurrency={batch.concurrency}
-              priorBatchId={batch.id}
+        {/* Identity: id + lifecycle + lineage, with the timestamp trailing right
+            once there is room and dropping to its own line before that. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <h2
+            className="font-mono text-sm text-foreground tabular-nums"
+            translate="no"
+          >
+            <span className="sr-only">Batch{" "}</span>
+            {shortId}
+          </h2>
+          <Badge
+            variant={status.variant}
+            className={cn(
+              "gap-1.5 font-mono text-[0.625rem] uppercase tracking-[0.18em]",
+              status.className,
+            )}
+          >
+            <StatusIcon
+              data-icon="inline-start"
+              className={
+                batch.status === "running"
+                  ? "animate-spin motion-reduce:animate-none"
+                  : undefined
+              }
             />
-            <span className="font-mono text-xs text-muted-foreground tabular-nums">
-              {formatBatchAt(batch.createdAt)}
-            </span>
-          </div>
+            {status.label}
+          </Badge>
+          {batch.priorBatchId ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Badge
+                  variant="outline"
+                  className="gap-1 border-border/60 font-mono text-[0.625rem] uppercase tracking-[0.14em] text-muted-foreground tabular-nums"
+                >
+                  <RotateCw aria-hidden className="size-2.5" />
+                  re-run of{" "}
+                  <span translate="no">{batch.priorBatchId.slice(0, 8)}</span>
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent className="font-mono">
+                Re-run of batch {batch.priorBatchId}
+              </TooltipContent>
+            </Tooltip>
+          ) : null}
+          <span className="font-mono text-xs text-muted-foreground tabular-nums @sm:ml-auto">
+            {formatBatchAt(batch.createdAt)}
+          </span>
         </div>
 
         {/* Telemetry strip: device · runs · pages · done/error tallies. */}
@@ -397,15 +544,17 @@ function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
         <DriftWarning assessment={env.assessment} calibrateHref="/" />
       </CardHeader>
 
-      <CardContent className="flex flex-col gap-6">
+      <CardContent className="flex flex-1 flex-col gap-5">
         {doneCount === 0 ? (
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm text-pretty text-muted-foreground">
             No completed runs in this batch
             {errorCount > 0 ? ` — all ${errorCount} failed.` : "."}
           </p>
         ) : (
           <>
-            {/* Averages — one score ring per category present across done runs. */}
+            {/* Dial grid — one gauge per category, spread evenly across the card
+                rather than packed left. Four rings pair off 2×2 on the narrowest
+                card and go four-across as soon as they each clear ~80px. */}
             <section className="flex flex-col gap-3" aria-label="Average scores">
               <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                 <span className={SECTION_LABEL}>Average scores</span>
@@ -420,7 +569,7 @@ function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
                   </span>
                 ) : null}
               </div>
-              <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
+              <div className="grid grid-cols-2 items-start gap-x-2 gap-y-4 @xs:grid-cols-4">
                 {LIGHTHOUSE_CATEGORIES.map((category) => (
                   <ScoreRing
                     key={category}
@@ -436,7 +585,7 @@ function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
 
             {/* Best / worst page by overall score. */}
             <section
-              className="grid gap-4 sm:grid-cols-2"
+              className="grid gap-3 @lg:grid-cols-2"
               aria-label="Best and worst pages"
             >
               <PageHighlight
@@ -460,12 +609,26 @@ function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
             />
           </>
         )}
+
+        <BatchFooter
+          rows={rows}
+          shortId={shortId}
+          rerunUrls={rerunUrls}
+          device={deviceLabel}
+          options={batch.options}
+          source={batch.source}
+          concurrency={batch.concurrency}
+          priorBatchId={batch.id}
+          overall={overallScore(summary.averages)}
+          clearing={summary.clearing}
+          errorCount={errorCount}
+        />
       </CardContent>
     </Card>
   );
 }
 
-interface BatchActionsProps {
+interface BatchFooterProps {
   rows: HistoryRow[];
   shortId: string;
   /** Unique URLs across the batch's runs (order-preserving), for the re-run. */
@@ -480,16 +643,28 @@ interface BatchActionsProps {
   concurrency: number;
   /** This batch's id — recorded as lineage on the re-run. */
   priorBatchId: string;
+  /** Mean of the batch's category averages, or null when nothing scored. */
+  overall: number | null;
+  /** Pages clearing every bar they were scored against. */
+  clearing: { clearing: number; total: number };
+  /** Runs in the batch that failed. */
+  errorCount: number;
 }
 
 /**
- * Per-batch re-run + export + bulk-open toolbar. Re-submits the batch's exact
- * URLs + options through `POST /api/audits` (recording lineage) and deep-links
- * to the live stream; serializes this batch's runs to a file (in the click
- * handler, never on render); and opens every run that has a stored HTML report
- * in a new tab — warning via toast if the popup blocker stopped any.
+ * The card's instrument footer: one bezel holding what the batch is worth
+ * (overall average, pages clearing every bar, what the exports and Open all
+ * would act on) *and* the actions themselves — so "export 74 runs" is
+ * answerable without counting rows, and the toolbar can no longer crowd the
+ * batch id off the header on a phone.
+ *
+ * Re-submits the batch's exact URLs + options through `POST /api/audits`
+ * (recording lineage) and deep-links to the live stream; serializes this
+ * batch's runs to a file (in the click handler, never on render); and opens
+ * every run that has a stored HTML report in a new tab — warning via toast if
+ * the popup blocker stopped any.
  */
-function BatchActions({
+function BatchFooter({
   rows,
   shortId,
   rerunUrls,
@@ -498,7 +673,10 @@ function BatchActions({
   source,
   concurrency,
   priorBatchId,
-}: BatchActionsProps) {
+  overall,
+  clearing,
+  errorCount,
+}: BatchFooterProps) {
   // Runs in this batch that actually have an HTML report to open.
   const openableHrefs = useMemo(
     () =>
@@ -535,69 +713,121 @@ function BatchActions({
     }
   }, [openableHrefs]);
 
+  const allClear = clearing.total > 0 && clearing.clearing === clearing.total;
+
   return (
-    <div className="flex items-center gap-1">
-      <RerunBatchButton
-        urls={rerunUrls}
-        device={device}
-        options={options}
-        source={source}
-        concurrency={concurrency}
-        priorBatchId={priorBatchId}
-      />
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={exportJson}
-            disabled={!hasRows}
-            aria-label={`Export batch ${shortId} as JSON`}
-          >
-            <FileJson data-icon="inline-start" />
-            JSON
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent className="font-mono">{baseName}.json</TooltipContent>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={exportCsv}
-            disabled={!hasRows}
-            aria-label={`Export batch ${shortId} as CSV`}
-          >
-            <Sheet data-icon="inline-start" />
-            CSV
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent className="font-mono">{baseName}.csv</TooltipContent>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={openAll}
-            disabled={openableCount === 0}
-            aria-label={`Open all ${openableCount} reports in this batch`}
-          >
-            <ExternalLink data-icon="inline-start" />
-            Open all
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>
-          {openableCount === 0
-            ? "No reports to open"
-            : `Open all ${openableCount} report${openableCount === 1 ? "" : "s"}`}
-        </TooltipContent>
-      </Tooltip>
-    </div>
+    <Readout className="mt-auto @3xl:flex-row @3xl:items-center @3xl:justify-between @3xl:gap-6">
+      <div className="flex min-w-0 flex-col gap-2">
+        {/* Four cells wrap 3-then-1 on a phone, stranding a whole row for the
+            last one. A 2×2 grid fills the strip evenly instead. */}
+        <ReadoutCells className="grid grid-cols-2 items-start gap-y-3 @sm:flex">
+          <ReadoutCell
+            icon={<Gauge className="size-3" aria-hidden />}
+            label="Overall"
+            value={formatScore(overall)}
+          />
+          <ReadoutCell
+            icon={<Target className="size-3" aria-hidden />}
+            label="Clear"
+            value={`${clearing.clearing}/${clearing.total}`}
+            tone={allClear ? "good" : "default"}
+          />
+          <ReadoutCell
+            icon={<FileJson className="size-3" aria-hidden />}
+            label="Exports"
+            value={`${rows.length} ${rows.length === 1 ? "run" : "runs"}`}
+          />
+          <ReadoutCell
+            icon={<ExternalLink className="size-3" aria-hidden />}
+            label="Reports"
+            value={String(openableCount)}
+            tone={openableCount > 0 ? "good" : "default"}
+          />
+        </ReadoutCells>
+        <ReadoutNote>
+          Re-run repeats {pages(rerunUrls.length)}{" "}
+          with this batch&rsquo;s exact options and records the lineage.
+          {errorCount > 0
+            ? ` The exports carry all ${rows.length} runs, failures included.`
+            : null}
+          {openableCount === 0 ? " No stored reports left to open." : null}
+        </ReadoutNote>
+      </div>
+
+      {/* Four actions: 2×2 on a phone so each is a full-width tap target, one
+          row from `@sm`, trailing right once the bezel itself is a row. Both
+          steps divide evenly — no orphan stranded on a line of its own. */}
+      <div
+        className="grid shrink-0 grid-cols-2 gap-2 @sm:flex @sm:flex-wrap @sm:items-center @sm:gap-1.5 @3xl:justify-end"
+        role="group"
+        aria-label={`Actions for batch ${shortId}`}
+      >
+        <RerunBatchButton
+          urls={rerunUrls}
+          device={device}
+          options={options}
+          source={source}
+          concurrency={concurrency}
+          priorBatchId={priorBatchId}
+          className="w-full @sm:w-auto"
+        />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={openAll}
+              disabled={openableCount === 0}
+              aria-label={`Open all ${openableCount} reports in this batch`}
+              className="w-full @sm:w-auto"
+            >
+              <ExternalLink data-icon="inline-start" />
+              Open all
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {openableCount === 0
+              ? "No reports to open"
+              : `Open all ${openableCount} report${openableCount === 1 ? "" : "s"}`}
+          </TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={exportJson}
+              disabled={!hasRows}
+              aria-label={`Export batch ${shortId} as JSON`}
+              className="w-full @sm:w-auto"
+            >
+              <FileJson data-icon="inline-start" />
+              JSON
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent className="font-mono">{baseName}.json</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={exportCsv}
+              disabled={!hasRows}
+              aria-label={`Export batch ${shortId} as CSV`}
+              className="w-full @sm:w-auto"
+            >
+              <Sheet data-icon="inline-start" />
+              CSV
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent className="font-mono">{baseName}.csv</TooltipContent>
+        </Tooltip>
+      </div>
+    </Readout>
   );
 }
 
@@ -607,13 +837,21 @@ interface PageHighlightProps {
   accent: "good" | "poor";
 }
 
-/** Best/worst page tile: label, overall score (colour-banded), linked URL. */
+/**
+ * Best/worst page tile: label, overall score (colour-banded), linked URL.
+ *
+ * `min-w-0` is what lets the URL be clipped at all — without it the tile's
+ * automatic minimum size is the full unbroken URL, which blew the tile (and,
+ * through the grid, the whole card) past the card's edge at every width. The
+ * URL then wraps to two lines rather than truncating: on a 240px card an
+ * ellipsis after `contextforge.dev/b…` says nothing the tooltip doesn't.
+ */
 function PageHighlight({ label, row, accent }: PageHighlightProps) {
   const overall = row ? overallScore(row.scores) : null;
   const accentClass = accent === "good" ? "text-score-good" : "text-score-poor";
 
   return (
-    <div className="flex flex-col gap-2 rounded-md border border-border/60 bg-card/30 p-3">
+    <div className="flex min-w-0 flex-col gap-2 rounded-md border border-border/60 bg-card/30 p-3">
       <div className="flex items-center justify-between gap-2">
         <span className={cn(SECTION_LABEL, accentClass)}>{label}</span>
         {overall !== null ? (
@@ -634,7 +872,8 @@ function PageHighlight({ label, row, accent }: PageHighlightProps) {
               href={reportHtmlUrl(row.id)}
               target="_blank"
               rel="noopener noreferrer"
-              className="block truncate font-mono text-xs text-foreground underline-offset-4 hover:text-primary hover:underline"
+              className="line-clamp-2 min-w-0 font-mono text-xs wrap-anywhere text-foreground underline-offset-4 hover:text-primary hover:underline"
+              translate="no"
             >
               {shortUrl(row.finalUrl ?? row.url)}
             </a>
@@ -660,7 +899,7 @@ function PassFailGrid({ passFail, thresholds }: PassFailGridProps) {
   return (
     <section className="flex flex-col gap-3" aria-label="Pass / fail vs thresholds">
       <span className={SECTION_LABEL}>Pass / fail vs thresholds</span>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 @lg:grid-cols-4">
         {LIGHTHOUSE_CATEGORIES.map((category) => {
           const { pass, fail, total } = passFail[category];
           const allPass = total > 0 && fail === 0;
@@ -674,7 +913,7 @@ function PassFailGrid({ passFail, thresholds }: PassFailGridProps) {
           return (
             <div
               key={category}
-              className="flex flex-col gap-1 rounded-md border border-border/60 bg-card/30 p-3"
+              className="flex min-w-0 flex-col gap-1 rounded-md border border-border/60 bg-card/30 p-3"
             >
               <div className="flex items-baseline justify-between gap-1">
                 <span className={SECTION_LABEL}>
@@ -684,7 +923,15 @@ function PassFailGrid({ passFail, thresholds }: PassFailGridProps) {
                   ≥{thresholds[category]}
                 </span>
               </div>
-              <p className={cn("font-mono text-sm tabular-nums", tally)}>
+              <p
+                className={cn(
+                  // No whitespace separates "3/74" from "pass", so as one text
+                  // run it has nowhere to break and spilled the tile at 320px.
+                  // Flex items wrap where a text run could not.
+                  "flex flex-wrap items-baseline font-mono text-sm tabular-nums",
+                  tally,
+                )}
+              >
                 <span className="font-medium">{pass}</span>
                 <span className="text-muted-foreground">/{total}</span>
                 <span className="ml-1 text-[0.7rem] uppercase tracking-[0.12em] text-muted-foreground">
