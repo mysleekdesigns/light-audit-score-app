@@ -1471,6 +1471,21 @@ export function HistoryTable({ rows }: HistoryTableProps) {
     [paired, pairs],
   );
 
+  // Seed the accordion open on the site you audited most recently, so landing on
+  // the archive shows that run instead of a wall of closed sections. Derived from
+  // the full dataset rather than the filtered view so it can't shift mid-filter —
+  // and it only seeds the *initial* open set (`defaultValue`), leaving the user's
+  // own expand/collapse choices untouched from then on.
+  const defaultOpenHosts = useMemo(() => {
+    let newest: HistoryRow | null = null;
+    for (const row of rows) {
+      if (!newest || row.createdAt.localeCompare(newest.createdAt) > 0) {
+        newest = row;
+      }
+    }
+    return newest ? [hostOf(newest.url)] : [];
+  }, [rows]);
+
   const isFiltering = query.trim().length > 0 || needsWorkOnly;
 
   // What the control band's readout reports: the sites and pages actually on
@@ -1734,12 +1749,13 @@ export function HistoryTable({ rows }: HistoryTableProps) {
             <HistoryEmptyState isFiltering={isFiltering} />
           </Card>
         ) : paired ? (
-          // One collapsible section per website, all closed by default; the user
-          // expands the sites they care about. Uncontrolled so an opened section
-          // stays open across filtering (Radix keeps its own open-state).
+          // One collapsible section per website, the most recently audited site
+          // open and the rest closed; the user expands the others they care
+          // about. Uncontrolled so an opened section stays open across filtering
+          // (Radix keeps its own open-state).
           <Accordion
             type="multiple"
-            defaultValue={[]}
+            defaultValue={defaultOpenHosts}
             className="flex flex-col gap-3"
           >
             {pairedHostGroups.map((group) => (
@@ -1764,7 +1780,7 @@ export function HistoryTable({ rows }: HistoryTableProps) {
         ) : (
           <Accordion
             type="multiple"
-            defaultValue={[]}
+            defaultValue={defaultOpenHosts}
             className="flex flex-col gap-3"
           >
             {flatHostGroups.map((group) => (
