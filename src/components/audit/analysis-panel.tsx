@@ -4,20 +4,36 @@
  * Orchestrates one category's AI analysis inside the detail sheet.
  *
  * On `(runId, category)` change it fetches any persisted analysis (shown
- * instantly, no token spend); otherwise it offers an "Analyze with Claude"
+ * instantly, no token spend); otherwise it offers an "Analyze with <provider>"
  * affordance that opens the live SSE stream (`useAnalysisStream`). It renders the
  * right surface for the current state — empty / loading / live (status + research
  * log + streaming diagnosis + incremental fixes) / result (diagnosis + fixes +
- * sources) / error (with a friendly "log in to Claude Code" path) — and exposes
+ * sources) / error (with friendly setup + retry paths) — and exposes
  * Analyze / Re-analyze / Stop actions. Keyed by `${runId}:${category}` so it
  * remounts cleanly when the user switches device or category.
+ *
+ * It reads the resolved AI provider purely to be HONEST about it: to name the
+ * provider on the button, to say up front when it can't do web research, and to
+ * turn "no AI configured" into an explanation instead of an error. The stream
+ * itself is provider-agnostic — every driver emits the same events.
  */
 
 import { useEffect, useState } from "react";
-import { Ban, ExternalLink, Info, RotateCw, Sparkles, TriangleAlert } from "lucide-react";
+import Link from "next/link";
+import {
+  Ban,
+  Cpu,
+  ExternalLink,
+  Info,
+  RotateCw,
+  Settings2,
+  Sparkles,
+  TriangleAlert,
+} from "lucide-react";
 
 import { AnalysisDiagnosis } from "@/components/audit/analysis-diagnosis";
 import { AnalysisFixes } from "@/components/audit/analysis-fixes";
+import { AnalysisProviderBadge } from "@/components/audit/analysis-provider-badge";
 import { AnalysisStatus } from "@/components/audit/analysis-status";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -32,7 +48,9 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAnalysisStream } from "@/hooks/useAnalysisStream";
+import { getAiProviderStatus } from "@/lib/client/aiProvider";
 import { getAnalysis } from "@/lib/client/auditClient";
+import type { AiProviderStatus } from "@/lib/analysis/providerStatus";
 import { CATEGORY_LABELS, formatScore, scoreColorClass } from "@/lib/scores";
 import { cn } from "@/lib/utils";
 import type { AnalysisCategory, AnalysisResult, Fix } from "@/lib/analysis/types";
@@ -46,7 +64,10 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Compact "model · time · cost" provenance line under a finished analysis. */
+/**
+ * Provenance footer for a finished analysis: which AI produced it, whether it
+ * was grounded in fetched sources, and when (plus cost, when the driver knows).
+ */
 function AnalysisMeta({ result }: { result: AnalysisResult }) {
   const when = (() => {
     const ms = Date.parse(result.createdAt);
@@ -54,13 +75,42 @@ function AnalysisMeta({ result }: { result: AnalysisResult }) {
   })();
   const cost =
     result.costUsd !== undefined ? `$${result.costUsd.toFixed(2)}` : null;
-  const parts = [result.model, when, cost].filter(Boolean) as string[];
+  const parts = [when, cost].filter(Boolean) as string[];
   return (
-    <p className="font-mono text-[0.6rem] uppercase tracking-[0.12em] text-muted-foreground/70">
-      {parts.join(" · ")}
-    </p>
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+      <AnalysisProviderBadge
+        model={result.model}
+        grounded={result.sources.length > 0}
+      />
+      {parts.length > 0 ? (
+        <span className="font-mono text-[0.6rem] uppercase tracking-[0.12em] text-muted-foreground/70">
+          {parts.join(" · ")}
+        </span>
+      ) : null}
+    </div>
   );
 }
+
+/**
+ * Titles for the terminal error codes worth naming. Everything else falls back
+ * to "Analysis failed" — and the three setup/retry states below are NOT styled
+ * destructively, because "Ollama isn't running" or "you hit your own plan limit"
+ * is a thing to fix, not a thing that broke.
+ */
+const ERROR_TITLES: Record<string, string> = {
+  claude_auth_required: "Claude Code not logged in",
+  provider_not_configured: "AI provider needs setup",
+  provider_unavailable: "AI provider unreachable",
+  rate_limited: "Rate limit reached",
+};
+
+/** Codes that describe a fixable setup / retry state rather than a failure. */
+const SOFT_ERROR_CODES = new Set([
+  "claude_auth_required",
+  "provider_not_configured",
+  "provider_unavailable",
+  "rate_limited",
+]);
 
 function WarningsAlert({ warnings }: { warnings: string[] }) {
   return (
@@ -113,6 +163,7 @@ export function AnalysisPanel({
 }) {
   const [savedResult, setSavedResult] = useState<AnalysisResult | null>(null);
   const [loadingSaved, setLoadingSaved] = useState(true);
+  const [providerStatus, setProviderStatus] = useState<AiProviderStatus | null>(null);
 
   const analysis = useAnalysisStream(runId, category);
 
@@ -146,6 +197,18 @@ export function AnalysisPanel({
     };
   }, [runId, category]);
 
+  // Which AI is configured, so the empty state names it honestly. `probe: false`
+  // skips Ollama detection — the panel only needs the resolved provider, and the
+  // sheet shouldn't wait on a localhost round-trip to render. Failure is fine:
+  // `null` just means generic copy.
+  useEffect(() => {
+    const ac = new AbortController();
+    void getAiProviderStatus({ probe: false, signal: ac.signal }).then((value) => {
+      if (!ac.signal.aborted && value) setProviderStatus(value);
+    });
+    return () => ac.abort();
+  }, []);
+
   const streaming = analysis.isStreaming;
   const errored = analysis.status === "error";
   const cancelled = analysis.status === "cancelled";
@@ -172,14 +235,13 @@ export function AnalysisPanel({
 
   let body: React.ReactNode;
   if (errored) {
-    const isAuth = analysis.error?.code === "claude_auth_required";
+    const code = analysis.error?.code ?? "";
+    const soft = SOFT_ERROR_CODES.has(code);
     body = (
       <div className="flex flex-col gap-4">
-        <Alert variant="destructive">
-          <TriangleAlert />
-          <AlertTitle>
-            {isAuth ? "Claude Code not logged in" : "Analysis failed"}
-          </AlertTitle>
+        <Alert variant={soft ? "default" : "destructive"}>
+          {soft ? <Info /> : <TriangleAlert />}
+          <AlertTitle>{ERROR_TITLES[code] ?? "Analysis failed"}</AlertTitle>
           <AlertDescription>
             {analysis.error?.message ?? "Something went wrong running the analysis."}
           </AlertDescription>
@@ -256,22 +318,49 @@ export function AnalysisPanel({
         <Skeleton className="h-24 w-full" />
       </div>
     );
+  } else if (providerStatus?.missing) {
+    // Not an error: no AI configured yet is a normal state, so explain the
+    // options rather than showing a red banner for something nobody broke.
+    body = (
+      <Empty className="border border-dashed border-border/60 py-10">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <Cpu />
+          </EmptyMedia>
+          <EmptyTitle>Bring your own AI</EmptyTitle>
+          <EmptyDescription>
+            Analysis runs on your own AI — the Claude you&apos;re already signed in
+            to, a model running locally under Ollama, or any OpenAI-compatible
+            endpoint you have a key for. {providerStatus.missing}
+          </EmptyDescription>
+        </EmptyHeader>
+        <Button asChild variant="outline">
+          <Link href="/settings">
+            <Settings2 data-icon="inline-start" />
+            Set up a provider
+          </Link>
+        </Button>
+      </Empty>
+    );
   } else {
+    const label = providerStatus?.label ?? "AI";
+    const grounded = providerStatus ? providerStatus.canWebResearch : true;
     body = (
       <Empty className="border border-dashed border-border/60 py-10">
         <EmptyHeader>
           <EmptyMedia variant="icon">
             <Sparkles />
           </EmptyMedia>
-          <EmptyTitle>Ask Claude why this score is low</EmptyTitle>
+          <EmptyTitle>Ask {label} why this score is low</EmptyTitle>
           <EmptyDescription>
-            Claude reads the audit data, researches fixes on the web,
-            and returns prioritized, source-cited recommendations.
+            {grounded
+              ? `${label} reads the audit data, researches fixes on the web, and returns prioritized, source-cited recommendations.`
+              : `${label} reads the audit data and returns prioritized fixes. It can't browse, so this diagnosis is ungrounded — no web research and no citations.`}
           </EmptyDescription>
         </EmptyHeader>
         <Button onClick={() => analysis.start()}>
           <Sparkles data-icon="inline-start" />
-          Analyze with Claude
+          Analyze with {label}
         </Button>
       </Empty>
     );

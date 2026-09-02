@@ -27,11 +27,6 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-// Detect whether we are running inside a packaged Electron app.
-// In the packaged build the Next standalone server is spawned from Electron's
-// main process which sets this env var to signal the packaged context.
-const IS_PACKAGED = process.env.LH_PACKAGED === "1";
-
 import type { AuditOptions, AuditResult } from "@/lib/lighthouse/types";
 
 /**
@@ -50,10 +45,8 @@ const MAX_STDERR = 4_000;
  * clear, preflight-style error (PRD §8) if the file is missing rather than
  * failing cryptically deep inside `fork`.
  *
- * In the packaged Electron app this function is only called for paths that are
- * genuinely needed — the alias-hooks path is skipped via the LH_ALIAS_HOOKS_PATH
- * seam (null in packaged mode), and the worker script path is overridden via
- * LH_AUDIT_WORKER_SCRIPT before this function is reached.
+ * `LH_ALIAS_HOOKS_PATH` and `LH_AUDIT_WORKER_SCRIPT` override the two resolved
+ * paths when a caller (or a test) needs to point elsewhere.
  */
 function resolveScript(relPath: string): string {
   const abs = path.resolve(process.cwd(), relPath);
@@ -70,19 +63,10 @@ function resolveScript(relPath: string): string {
  * Resolve the alias-hooks ESM loader path.
  *
  * Priority:
- *   1. LH_ALIAS_HOOKS_PATH env var (set by Electron main process — null/empty
- *      in packaged builds where the compiled JS worker needs no alias hook).
- *   2. Fallback: resolve from CWD (dev / next start mode).
- *
- * Returns null when running inside a packaged Electron build (the worker is
- * pre-compiled JS; alias resolution is baked in at build time).
+ *   1. `LH_ALIAS_HOOKS_PATH` env var (an explicit override, also used by tests).
+ *   2. Fallback: resolve `scripts/alias-hooks.mjs` from the CWD.
  */
 function resolveAliasHooks(): string | null {
-  // Packaged mode: main.js does NOT set LH_ALIAS_HOOKS_PATH (or sets it empty).
-  // The compiled audit-worker.js does not need the runtime alias hook.
-  if (IS_PACKAGED) return null;
-
-  // Env override (set by Electron main.js in dev mode, or by tests).
   const envPath = process.env.LH_ALIAS_HOOKS_PATH;
   if (envPath) {
     if (!existsSync(envPath)) {
@@ -102,11 +86,8 @@ function resolveAliasHooks(): string | null {
  *
  * Node enables TypeScript type-stripping by default in v23.6.0. Below that the
  * `.ts` worker fork dies with `ERR_UNKNOWN_FILE_EXTENSION` unless the flag is
- * passed (the flag itself landed in v22.6.0). This is the dev-mode path only —
- * Electron embeds its own Node (e.g. Electron 36 → Node 22.15, where stripping
- * is off by default), so `electron:dev` audits need the flag even when the
- * developer's system Node is new enough. The packaged build forks compiled JS
- * (alias-hooks null), so this never applies there.
+ * passed (the flag itself landed in v22.6.0). Users run this app on whatever Node
+ * they have, so Node 22.6–23.5 must still work.
  *
  * Returns false for Node < 22.6 (flag unsupported — nothing we can do) and for
  * Node ≥ 23.6 (stripping is already the default).
@@ -196,9 +177,9 @@ export async function runAuditInWorker(
     "--disable-warning=ExperimentalWarning",
   ];
   if (aliasHooks) {
-    // The worker is the `.ts` source; on Node < 23.6 (e.g. Electron's embedded
-    // Node 22) type-stripping is off by default and the fork would otherwise
-    // fail with ERR_UNKNOWN_FILE_EXTENSION. The ExperimentalWarning it emits is
+    // The worker is the `.ts` source; on Node < 23.6 type-stripping is off by
+    // default and the fork would otherwise fail with
+    // ERR_UNKNOWN_FILE_EXTENSION. The ExperimentalWarning it emits is
     // already silenced by the --disable-warning above.
     if (needsExperimentalStripTypes()) {
       execArgv.push("--experimental-strip-types");
@@ -206,17 +187,10 @@ export async function runAuditInWorker(
     execArgv.push("--import", pathToFileURL(aliasHooks).href);
   }
 
-  // In a packaged Electron app the Next server runs under the Electron binary
-  // (process.execPath IS the Electron binary). To fork a plain Node child we
-  // must set ELECTRON_RUN_AS_NODE=1 so the Electron binary behaves as Node.
-  // In dev (next dev / next start) process.execPath is already plain Node, so
-  // this env var is harmless but included for safety when IS_PACKAGED is true.
   const forkEnv: NodeJS.ProcessEnv = {
     ...process.env,
     LH_AUDIT_INPUT: JSON.stringify({ url, options }),
     LH_AUDIT_OUTPUT: outFile,
-    // Signal the packaged context to child (in case it needs to know)
-    ...(IS_PACKAGED ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
   };
 
   return await new Promise<AuditResult>((resolve, reject) => {

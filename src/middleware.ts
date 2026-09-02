@@ -1,23 +1,22 @@
 /**
- * Next.js middleware — per-session auth token validation (SAAS_PLAN.md Phase A).
+ * Next.js middleware — optional per-session auth token validation.
  *
  * Security requirement: the local server binds 127.0.0.1 ONLY. Any other local
  * process (e.g. a web page open in the user's browser) could reach the audit API
  * via fetch to 127.0.0.1:<port> WITHOUT this gate. The per-session token prevents
- * that: only the Electron BrowserWindow (which loaded the URL with ?token=...)
- * and its resulting fetch calls (which include the token via cookie or header)
- * can access protected routes.
+ * that: only a client that presented the token (and so holds the cookie) can
+ * reach protected routes.
  *
- * Token flow:
- *   1. Electron main.js generates a 64-hex-char random token at launch.
- *   2. The BrowserWindow loads http://127.0.0.1:<port>/?token=<token>.
- *   3. This middleware reads the token on the first load, stores it in a cookie
- *      (HttpOnly, SameSite=Strict, Secure=false since we're on http://127.0.0.1).
- *   4. Subsequent requests (navigation, API calls) carry the cookie and pass.
- *   5. Non-Electron requests (no cookie, wrong token) get 401.
+ * Token flow (opt-in):
+ *   1. Set LH_SESSION_TOKEN to a long random string before starting the server.
+ *   2. Open the app once at http://127.0.0.1:<port>/?token=<token>.
+ *   3. This middleware validates it and stores it in a cookie (HttpOnly,
+ *      SameSite=Strict; Secure=false since we're on plain http://127.0.0.1).
+ *   4. Subsequent requests carry the cookie and pass; everything else gets 401.
  *
- * When LH_SESSION_TOKEN is not set (dev mode: `next dev` / `next start`),
- * the middleware is a no-op and all requests pass through.
+ * When LH_SESSION_TOKEN is not set — the default for a local `npm start` — the
+ * middleware is a no-op and all requests pass through. Binding to 127.0.0.1 is
+ * then the only boundary, which is why the start script defaults to loopback.
  *
  * Matching: applies to all routes EXCEPT Next.js internals (_next/*).
  */

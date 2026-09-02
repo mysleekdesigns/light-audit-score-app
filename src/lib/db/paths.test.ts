@@ -1,5 +1,5 @@
 /**
- * Unit tests for src/lib/db/paths.ts — covering the packaged Electron seams
+ * Unit tests for src/lib/db/paths.ts — covering the data-dir relocation seams
  * added in SAAS_PLAN.md Phase A.
  *
  * The key invariant: all functions read from env vars so the calling context
@@ -61,11 +61,10 @@ describe("getDataDir", () => {
     expect(getDataDir()).toBe(dir);
   });
 
-  it("uses LH_DATA_DIR when set (packaged Electron mode: app.getPath('userData'))", () => {
-    // Simulate what Electron main.js sets: ~/Library/Application Support/LightAudit
-    const electronUserData = path.join(os.homedir(), "Library", "Application Support", "LightAudit");
-    process.env.LH_DATA_DIR = electronUserData;
-    expect(getDataDir()).toBe(electronUserData);
+  it("uses LH_DATA_DIR when set (data kept outside the project dir)", () => {
+    const userDataDir = path.join(os.homedir(), "Library", "Application Support", "LightAudit");
+    process.env.LH_DATA_DIR = userDataDir;
+    expect(getDataDir()).toBe(userDataDir);
   });
 });
 
@@ -82,7 +81,7 @@ describe("getDbPath", () => {
   });
 
   it("respects LH_DATA_DIR for the default DB path", () => {
-    const userData = path.join(os.tmpdir(), "electron-userData");
+    const userData = path.join(os.tmpdir(), "lightaudit-userData");
     process.env.LH_DATA_DIR = userData;
     expect(getDbPath()).toBe(path.join(userData, "lighthouse.db"));
   });
@@ -94,7 +93,7 @@ describe("getReportsDir", () => {
   });
 
   it("resolves under LH_DATA_DIR", () => {
-    const userData = path.join(os.tmpdir(), "electron-userData");
+    const userData = path.join(os.tmpdir(), "lightaudit-userData");
     process.env.LH_DATA_DIR = userData;
     expect(getReportsDir()).toBe(path.join(userData, "reports"));
   });
@@ -105,7 +104,7 @@ describe("getMigrationsDir", () => {
     expect(getMigrationsDir()).toBe(path.join(process.cwd(), "drizzle"));
   });
 
-  it("uses LH_MIGRATIONS_DIR when set (packaged Electron seam)", () => {
+  it("uses LH_MIGRATIONS_DIR when set (explicit override)", () => {
     // In packaged mode, main.js sets this to the drizzle/ folder inside app.asar.
     // We simulate it with a temp path here; the function just returns the string.
     const packaged = "/Applications/LightAudit.app/Contents/Resources/app.asar/drizzle";

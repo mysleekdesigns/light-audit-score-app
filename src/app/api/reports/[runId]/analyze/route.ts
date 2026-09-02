@@ -5,11 +5,13 @@
  *    spending no tokens — the client uses this to show a saved analysis instantly
  *    on reopen. A cache miss is `{ analysis: null }` with a `200` (not a `404`):
  *    "not analyzed yet" is a normal state, and a `200` keeps the dev console clean.
- *  - `POST { category, force? }` runs the Claude Agent SDK (`runAnalysis`) and
- *    streams progress as SSE: `status` → `tool-use`/`tool-result` → `text-delta`
- *    → `fix` → `done` (or a terminal `error`). On a clean `done` the result is
- *    persisted. Without `force`, a POST replays a saved analysis as a single
- *    `done` frame (no agent spawn).
+ *  - `POST { category, force?, provider?, model? }` runs `runAnalysis` on the
+ *    configured AI provider and streams progress as SSE: `status` →
+ *    `tool-use`/`tool-result` → `text-delta` → `fix` → `done` (or a terminal
+ *    `error`). On a clean `done` the result is persisted. Without `force`, a POST
+ *    replays a saved analysis as a single `done` frame (no model call).
+ *    `provider`/`model` override the environment's selection for this one
+ *    analysis; both are optional and validated before anything is spawned.
  *
  * SSE framing + teardown mirror `app/api/audits/[id]/stream/route.ts`. POST is
  * consumed by the browser via fetch + a ReadableStream reader (it carries a body,
@@ -28,8 +30,13 @@ import {
   type LighthouseResult,
 } from "@/lib/lighthouse/types";
 import { getAuditQueue } from "@/lib/queue/AuditQueue";
+import { normalizeProviderId } from "@/lib/analysis/providers/select";
 import { AnalysisError, runAnalysis } from "@/lib/analysis/runAnalysis";
-import type { AnalysisCategory, AnalysisStreamEvent } from "@/lib/analysis/types";
+import {
+  ANALYSIS_PROVIDER_IDS,
+  type AnalysisCategory,
+  type AnalysisStreamEvent,
+} from "@/lib/analysis/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -53,6 +60,9 @@ const inFlight = (globalForAnalysis.__lhAnalysisInflight ??= new Map<
   string,
   AbortController
 >());
+
+/** Longest model id we'll accept from a request body. */
+const MAX_MODEL_ID_LENGTH = 200;
 
 /** Narrow an arbitrary value to a valid analysis category. */
 function asCategory(value: unknown): AnalysisCategory | null {
@@ -109,7 +119,12 @@ export async function POST(
 ): Promise<Response> {
   const { runId } = await params;
 
-  let body: { category?: unknown; force?: unknown };
+  let body: {
+    category?: unknown;
+    force?: unknown;
+    provider?: unknown;
+    model?: unknown;
+  };
   try {
     body = (await request.json()) as typeof body;
   } catch {
@@ -123,6 +138,33 @@ export async function POST(
     );
   }
   const force = body.force === true;
+
+  // Per-analysis provider/model override. Both are optional: with neither, the
+  // engine uses whatever the environment selects (Claude by default).
+  let provider: string | undefined;
+  if (body.provider !== undefined && body.provider !== null) {
+    const normalized = normalizeProviderId(body.provider);
+    if (!normalized) {
+      return badRequest(
+        "invalid_provider",
+        `"provider" must be one of: ${ANALYSIS_PROVIDER_IDS.join(", ")}.`,
+      );
+    }
+    provider = normalized;
+  }
+  let model: string | undefined;
+  if (body.model !== undefined && body.model !== null) {
+    if (typeof body.model !== "string" || body.model.trim().length === 0) {
+      return badRequest("invalid_model", '"model" must be a non-empty string.');
+    }
+    if (body.model.length > MAX_MODEL_ID_LENGTH) {
+      return badRequest(
+        "invalid_model",
+        `"model" must be at most ${MAX_MODEL_ID_LENGTH} characters.`,
+      );
+    }
+    model = body.model.trim();
+  }
 
   const key = `${runId}:${category}`;
   if (inFlight.has(key)) {
@@ -247,6 +289,8 @@ export async function POST(
         lhr: lhrToAnalyze as LighthouseResult,
         formFactor,
         field,
+        provider,
+        model,
         signal: analysisAbort.signal,
         onEvent: send,
       })

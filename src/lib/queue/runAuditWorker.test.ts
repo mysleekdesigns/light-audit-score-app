@@ -135,8 +135,8 @@ describe("runAuditInWorker failure surfacing (forked fixtures)", () => {
 
     // A `.ts` worker carrying real type syntax: must be forkable in dev mode.
     // Before the --experimental-strip-types gate in runAuditWorker this threw
-    // ERR_UNKNOWN_FILE_EXTENSION on Node < 23.6 (e.g. Electron 36's Node 22),
-    // which is exactly how electron:dev audits failed. Regression guard for
+    // ERR_UNKNOWN_FILE_EXTENSION on Node < 23.6, which users may well be on.
+    // Regression guard for
     // that fix — passes on both flagged (22.6–23.5) and default-on (≥23.6) Node.
     fixtures.tsSuccess = writeFixture(
       "success.ts",
@@ -178,7 +178,7 @@ describe("runAuditInWorker failure surfacing (forked fixtures)", () => {
     expect(result.requestedUrl).toBe("ok");
   });
 
-  it("forks a .ts worker with type syntax (electron:dev strip-types guard)", async () => {
+  it("forks a .ts worker with type syntax (strip-types guard)", async () => {
     const result = (await runWith(fixtures.tsSuccess)) as { requestedUrl?: string };
     expect(result.requestedUrl).toBe("ts-ok");
   });

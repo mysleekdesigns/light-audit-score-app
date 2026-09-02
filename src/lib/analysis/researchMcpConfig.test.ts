@@ -15,7 +15,7 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { loadResearchMcpConfig } from "@/lib/analysis/runAnalysis";
+import { loadResearchMcpConfig } from "@/lib/analysis/providers/researchMcp";
 
 /** Env vars this module reads — saved and restored around every test. */
 const ENV_KEYS = [

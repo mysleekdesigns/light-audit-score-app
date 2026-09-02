@@ -12,15 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
-    // Electron main-process files are plain CJS Node.js (not TypeScript / ESM).
-    // They intentionally use require() and are excluded from the TS/ESM lint rules.
-    "electron/**/*.js",
-    // Compiled worker output (generated artifact, not source)
-    "scripts/audit-worker.js",
-    // CI release workflow is YAML, not linted here
+    // CI workflows are YAML, not linted here
     ".github/**",
-    // electron-builder output directory — never lint build artifacts
-    "dist/**",
     // The license cloud (SAAS_PLAN.md Phase B) is a self-contained app with its
     // own tooling under cloud/ — it is linted/typechecked/built by its own gate.
     "cloud/**",

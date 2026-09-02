@@ -38,11 +38,11 @@ the commit** — those are yours so the phase is judged by one consistent standa
   each spawn prompt (built-in Explore/Plan agents don't read `CLAUDE.md`):
   - UI work → `frontend-design` + `vercel-react-best-practices` + `shadcn`, review with `web-design-guidelines`.
   - Component APIs / contract seams → `vercel-composition-patterns`.
-  - Phase A/E packaging → `electron-packaging`; Phase B/C/E-licensing → `licensing`;
+  - Phase B/C/E-licensing (dormant, cloud/ only) → `licensing`;
     Phase D → `byo-ai-providers`.
 - **Prefer the specialist sub-agents** in `.claude/agents/` over generic ones:
-  `electron-packager` (A/E), `license-cloud-engineer` (B/C), `ai-provider-engineer` (D).
-  After any phase touching licensing, auth, secrets, Electron config, or the local server,
+  `license-cloud-engineer` (dormant, cloud/ only), `ai-provider-engineer` (D).
+  After any phase touching auth, secrets, or the local server,
   run the read-only `security-reviewer` agent over the diff before the gate is called green.
 - **Don't fake completion.** If the gate fails, fix it or report the failure honestly —
   never check off a plan item or commit on red.
@@ -73,7 +73,7 @@ the commit** — those are yours so the phase is judged by one consistent standa
   contracts/types are written **first by you** (or one agent) so parallel agents can code
   against a stable seam.
 - Keep tightly-coupled or ordering-sensitive bootstrap steps for yourself, done directly and
-  first (e.g. adding the electron/ scaffold and build config, creating a new cloud app's
+  first (e.g. creating a new cloud app's
   schema, installing deps others import). Do the phase's flagged risk prototype before
   fanning out. Parallelize only what's safe — correctness beats fan-out.
 - Sketch the ownership map (agent → files → checklist items it satisfies) before spawning.

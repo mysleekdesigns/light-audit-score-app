@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
 
 import { PageHeader } from "@/components/page-header";
+import { AiProviderSettings } from "@/components/settings/ai-provider-settings";
 import { ResearchServerSettings } from "@/components/settings/research-server-settings";
 import { PsiKeySettings } from "@/components/settings/psi-key-settings";
 
 export const metadata: Metadata = {
   title: "Settings — LightAudit Score",
-  description: "Manage API keys and credentials for LightAudit Score's audit engines.",
+  description: "API keys and integrations for LightAudit Score's audit engines.",
 };
 
 export default function SettingsPage() {
@@ -15,9 +16,10 @@ export default function SettingsPage() {
       <PageHeader
         kicker="06 — Settings"
         title="Settings"
-        description="Credentials and integrations for the audit engines. Keys are stored in your operating system's keychain — encrypted at rest and never written to disk in plain text."
+        description="Credentials and integrations for the audit engines. LightAudit reads these from your environment — normally a gitignored .env file in the project root."
       />
       <PsiKeySettings />
+      <AiProviderSettings />
       <ResearchServerSettings />
     </div>
   );

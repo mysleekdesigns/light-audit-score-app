@@ -10,7 +10,7 @@ shows a live dashboard. Stack: Next.js (App Router, TS, Node runtime) + Tailwind
 engine = `lighthouse` v13 + `chrome-launcher`; `p-queue`; `better-sqlite3` + Drizzle; SSE.
 
 - Full spec: `PRD.md`. Launch plan: `SAAS_PLAN.md` — **LightAudit Score**, a **free, standalone**
-  local audit app distributed via `npx` plus an optional Electron build. Phases A–H.
+  local audit app distributed **as source**: clone the repo, `npm install`, `npm start`. Phases A–H.
 - Status: core app built (engine, queue + forked workers, dashboard, history, PSI engine,
   AI score analysis). Current work: SAAS_PLAN.md phases A–H — drive them with `/next-phase`
   (it defaults to SAAS_PLAN.md; pass `@PRD.md` only to revisit the original build plan).
@@ -20,6 +20,16 @@ engine = `lighthouse` v13 + `chrome-launcher`; `p-queue`; `better-sqlite3` + Dri
 > are retired; the `cloud/` billing app is **dormant but preserved**, and never ships. Phase
 > letters were renumbered, so a phase letter from an older conversation may not mean what it used
 > to. Monetisation is deliberately unresolved (Phase G).
+>
+> **There is NO Electron.** The Electron shell, `electron-builder`, packaging, signing and
+> auto-update were removed on 2026-09-02, along with the `electron-packaging` skill and the
+> `electron-packager` agent. Distribution is a source checkout run with `npm start`
+> (`scripts/start.mjs` builds on first run). Do not reintroduce Electron, packaging, or a
+> compiled-worker build step.
+>
+> **Secrets live in `.env`.** `safeStorage`/OS-keychain storage went with Electron. Keys are read
+> from `process.env` (normally a gitignored `.env`); Settings panels are read-only status plus
+> guidance, never key-entry forms.
 >
 > **LightAudit ships no third-party application and promotes none.** AI analysis can optionally
 > use a **research MCP server**, but that server is separate software the user installs and
@@ -40,7 +50,6 @@ This applies equally to teammates spawned into a parallel team and to delegated 
 | **vercel-react-best-practices** | Writing, reviewing, or refactoring React/Next.js code (components, data fetching, performance). |
 | **vercel-composition-patterns** | Designing component APIs / composition (compound components, context, reusable libraries) — e.g. the client/hook/contract seam. |
 | **web-design-guidelines** | Reviewing built UI for accessibility / UX / web-interface-guideline compliance. |
-| **electron-packaging** | Phase A packaging work — Electron shell, electron-builder, ASAR, native rebuilds. (Signing/auto-update deferred; the Electron build is now a secondary channel behind `npx`.) |
 | **licensing** | **Dormant** — only for work inside `cloud/`, or if a paid tier is ever revived. Not part of the current free-app plan. |
 | **byo-ai-providers** | Any SAAS_PLAN Phase D work or changes under `src/lib/analysis/` — provider seam, drivers, degradation tiers. |
 
@@ -59,12 +68,11 @@ Rules of thumb:
 Prefer delegating matching work to these instead of generic agents — they carry the project's
 invariants and preload the right skill:
 
-- **electron-packager** — Phase A: Electron shell, packaging, native rebuilds.
 - **license-cloud-engineer** — **dormant**: only for `cloud/` work or a revived paid tier.
 - **ai-provider-engineer** — Phase D: AnalysisProvider seam, Claude/Ollama/OpenAI-compatible drivers.
-- **security-reviewer** (read-only) — run it after any change touching auth, secrets/keychain
-  handling, the PSI or AI-provider key paths, Electron config or IPC, deep links, or the local
-  HTTP server. (Licence/billing triggers only apply inside `cloud/`.)
+- **security-reviewer** (read-only) — run it after any change touching auth, secret handling,
+  the PSI or AI-provider key paths, the middleware/session token, or the local HTTP server.
+  (Licence/billing triggers only apply inside `cloud/`.)
 
 ## Rules & hooks
 
@@ -92,21 +100,20 @@ A typical phase of work threads all of the above into one chain:
    unchecked phase, and fans the independent slices out to sub-agents — keeping verification, the
    plan checkbox update, and the commit for itself (never delegated, so one consistent standard).
 2. **Specialist agents do the slices.** Each `.claude/agents/` agent carries the project's
-   invariants and **preloads its skill** (`electron-packager` → `electron-packaging`,
-   `license-cloud-engineer` → `licensing`, `ai-provider-engineer` → `byo-ai-providers`). Restate
+   invariants and **preloads its skill** (`ai-provider-engineer` → `byo-ai-providers`). Restate
    the relevant skill in every spawn prompt — built-in Explore/Plan agents don't read this file.
 3. **Skills supply the how.** Whoever does the work invokes the matching skill via the Skill tool
    and follows it — `frontend-design` + `vercel-react-best-practices` + `shadcn` for UI (review
-   with `web-design-guidelines`), the phase skills for packaging/licensing/providers.
+   with `web-design-guidelines`), `byo-ai-providers` for the analysis layer.
 4. **Rules enforce invariants passively.** The moment a matching file is read, its rule loads and
    constrains the edit (worker isolation, frozen contracts, DB-path discipline, secrets in the
    keychain) — no one has to remember them.
 5. **Hooks are the deterministic backstop.** They fire at tool-time regardless of intent (the
    table above): secret guards on writes/commands, `.env*`/`.mcp.json` + force-push blocks on
    Bash, and `eslint --fix` after every TS edit.
-6. **`security-reviewer` gates the diff.** After any change touching license checks, auth,
-   billing, secrets, Electron config, deep links, or the local HTTP server, run it (read-only)
-   and resolve its Critical/High findings **before** the phase is considered done.
+6. **`security-reviewer` gates the diff.** After any change touching auth, secret handling, the
+   middleware/session token, or the local HTTP server, run it (read-only) and resolve its
+   Critical/High findings **before** the phase is considered done.
 
 In short: **skills say how · agents carry context and preload skills · rules enforce invariants
 on matching files · hooks block unsafe actions at tool-time · and `/next-phase` +

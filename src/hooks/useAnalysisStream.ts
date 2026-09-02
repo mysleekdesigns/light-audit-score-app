@@ -22,6 +22,7 @@ import type {
   AnalysisAuth,
   AnalysisCategory,
   AnalysisMcpStatus,
+  AnalysisProviderId,
   AnalysisResult,
   AnalysisStreamEvent,
   Fix,
@@ -69,10 +70,23 @@ export interface UseAnalysisStreamResult {
   error: { code: string; message: string } | null;
   /** True while a stream is open. */
   isStreaming: boolean;
-  /** Start (or restart) the analysis. `force` re-runs even if one is cached. */
-  start: (opts?: { force?: boolean }) => void;
+  /**
+   * Start (or restart) the analysis. `force` re-runs even if one is cached;
+   * `provider`/`model` override the server's configured AI for this run only.
+   */
+  start: (opts?: AnalysisStartOptions) => void;
   /** Abort an in-flight analysis. */
   cancel: () => void;
+}
+
+/** Per-run options for {@link UseAnalysisStreamResult.start}. */
+export interface AnalysisStartOptions {
+  /** Re-run even when a saved analysis exists. */
+  force?: boolean;
+  /** Override the configured provider for this analysis only. */
+  provider?: AnalysisProviderId;
+  /** Override the configured model for this analysis only. */
+  model?: string;
 }
 
 const STREAMING_STATUSES: ReadonlySet<AnalysisStatus> = new Set([
@@ -191,7 +205,7 @@ export function useAnalysisStream(
   }, []);
 
   const start = useCallback(
-    (opts?: { force?: boolean }) => {
+    (opts?: AnalysisStartOptions) => {
       abortRef.current?.abort();
       const ac = new AbortController();
       abortRef.current = ac;
@@ -203,7 +217,12 @@ export function useAnalysisStream(
           const response = await fetch(analyzeStreamUrl(runId), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ category, force: opts?.force === true }),
+            body: JSON.stringify({
+              category,
+              force: opts?.force === true,
+              ...(opts?.provider ? { provider: opts.provider } : {}),
+              ...(opts?.model ? { model: opts.model } : {}),
+            }),
             signal: ac.signal,
           });
 

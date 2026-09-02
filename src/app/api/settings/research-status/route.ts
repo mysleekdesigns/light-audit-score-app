@@ -11,7 +11,7 @@
  * carry the user's own credentials. Presence only.
  */
 
-import { loadResearchMcpConfig } from "@/lib/analysis/runAnalysis";
+import { loadResearchMcpConfig } from "@/lib/analysis/providers/researchMcp";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

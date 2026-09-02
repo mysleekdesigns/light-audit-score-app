@@ -4,6 +4,18 @@ A single-user, locally-run Next.js app for auditing the [Lighthouse](https://git
 scores of one or many URLs. It runs the audits on your machine, streams live progress, persists
 every run, and lets you compare runs, view trends, and discover pages to audit.
 
+## Quick start
+
+```bash
+git clone https://github.com/mysleekdesigns/lighthouse.git
+cd lighthouse
+npm install
+npm start
+```
+
+Then open <http://127.0.0.1:3000>. You need **Node.js v24+** and **Google Chrome** installed;
+everything else is optional (see [Setup](#setup)).
+
 ## What it is
 
 - Audit one URL or a whole list at once, with **live per-URL progress**: score rings, Core Web
@@ -75,19 +87,82 @@ that same project. If `PAGESPEED_API_KEY` is unset the engine falls back to `GOO
 can serve both Custom Search and PSI — provided PSI is enabled on that key's project. The key is read
 server-side only and never sent to the browser.
 
-## Run
+### AI analysis (optional)
 
-Development server:
+After any Lighthouse or PageSpeed audit you can ask an AI *why* a category scored low and what to
+change. It runs on **your** AI — LightAudit ships no AI credentials and nothing is preconfigured,
+so pick a provider and set it up yourself.
+
+**Claude Code (default).** If you already use Claude Code or Claude Max on this machine, there is
+nothing to configure — analysis uses your existing login:
 
 ```bash
-npm run dev
+claude login    # once, if you aren't already signed in
 ```
 
-Production build and start:
+This is the only path that can research the web and cite real sources, and it does so when you
+also point it at a research MCP server (see below). Set `ANTHROPIC_API_KEY` instead if you'd
+rather use an API key.
+
+**Local model via [Ollama](https://ollama.com)** — private, free, works offline:
 
 ```bash
-npm run build
-npm run start
+ollama pull qwen2.5-coder:14b
+```
+
+```bash
+# .env
+LH_ANALYSIS_PROVIDER=ollama
+LH_ANALYSIS_MODEL=qwen2.5-coder:14b
+```
+
+Restart the server and open any finished audit. Settings → **AI analysis provider** detects a
+running Ollama and lists your installed tags, so you don't have to remember them.
+
+Model size matters here: a full Lighthouse audit is a lot of context to reason over.
+`gpt-oss:20b` produced usable structured fixes in testing; `llama3.2` (3B) could not, and fell
+back to a prose-only diagnosis. Prefer 14B and up with a large context window.
+
+Local models can't browse the web, so their fixes are diagnosed from the audit data alone and
+carry no citations — the UI badges this honestly as **NO WEB RESEARCH**. Small models sometimes
+return prose instead of structured fixes; the analysis degrades to a diagnosis rather than
+failing, and never invents a source.
+
+**Any OpenAI-compatible endpoint** — OpenAI, OpenRouter, LM Studio, vLLM:
+
+```bash
+# .env
+LH_ANALYSIS_PROVIDER=openai-compatible
+LH_ANALYSIS_BASE_URL=https://api.example.com/v1
+LH_ANALYSIS_MODEL=your-model-id
+LH_ANALYSIS_API_KEY=your-key-here
+```
+
+Keys are read from the environment at request time and never stored by the app. See
+`.env.example` for every variable.
+
+## Run
+
+```bash
+npm start        # or: pnpm start
+```
+
+That's it. On a fresh checkout `npm start` builds once (about a minute), then starts the app on
+<http://127.0.0.1:3000>. Later starts skip the build and come up in about a second.
+
+It binds **loopback only** by default — the server runs audits on your machine and has no
+authentication unless you set `LH_SESSION_TOKEN`, so exposing it beyond localhost should be a
+deliberate choice. Override with `PORT` and `HOST` if you need to:
+
+```bash
+PORT=4000 npm start
+```
+
+After changing source, rebuild explicitly (or use the dev server for hot reload):
+
+```bash
+npm run build    # rebuild once
+npm run dev      # hot-reloading dev server instead
 ```
 
 Standalone CLI (audit a single URL from the terminal, no UI):

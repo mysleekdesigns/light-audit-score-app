@@ -21,6 +21,31 @@ import type { LighthouseCategory } from "@/lib/lighthouse/types";
 /** The score a user can analyze — one of the four Lighthouse categories. */
 export type AnalysisCategory = LighthouseCategory;
 
+/**
+ * AI backends the analysis can run on. All three are the USER's own: `claude`
+ * uses their Claude Code/Max login or their `ANTHROPIC_API_KEY`; `ollama` talks
+ * to a model they installed locally; `openai-compatible` is any base URL + key +
+ * model they supply. LightAudit ships no AI credential of its own.
+ *
+ * Additive: new ids may be appended, and readers must tolerate an unknown one
+ * (see `parseProviderModel`).
+ */
+export const ANALYSIS_PROVIDER_IDS = [
+  "claude",
+  "ollama",
+  "openai-compatible",
+] as const;
+
+/** One of {@link ANALYSIS_PROVIDER_IDS}. */
+export type AnalysisProviderId = (typeof ANALYSIS_PROVIDER_IDS)[number];
+
+/** Short human labels for the provider badge / settings copy. */
+export const ANALYSIS_PROVIDER_LABELS: Record<AnalysisProviderId, string> = {
+  claude: "Claude",
+  ollama: "Ollama",
+  "openai-compatible": "Custom",
+};
+
 /** A web source the agent actually fetched while researching a fix. */
 export interface AnalysisCitation {
   /** Absolute URL of the source. */
@@ -64,7 +89,11 @@ export interface AnalysisResult {
   fixes: Fix[];
   /** Deduped union of every citation across all fixes (for a "sources" footer). */
   sources: AnalysisCitation[];
-  /** Model id that produced the analysis. */
+  /**
+   * Provider + model that produced the analysis, encoded `"<provider>/<model>"`
+   * (e.g. `"ollama/llama3.1:8b"`). Read it with `parseProviderModel`, which also
+   * tolerates the bare model ids written before providers existed.
+   */
   model: string;
   /** ISO timestamp the analysis was produced. */
   createdAt: string;
@@ -134,7 +163,12 @@ export type AnalysisErrorCode =
   | "analysis_in_progress"
   | "analysis_timeout"
   | "claude_auth_required"
-  | "agent_error";
+  | "agent_error"
+  // Added with the provider seam — consumers treat unknown codes generically.
+  | "invalid_provider"
+  | "provider_not_configured"
+  | "provider_unavailable"
+  | "rate_limited";
 
 /** Sentinel framing the agent wraps its final fixes JSON in (parsed server-side). */
 export const FIXES_OPEN = "<<<FIXES_JSON>>>";

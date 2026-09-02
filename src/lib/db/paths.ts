@@ -6,8 +6,8 @@
  * app these default to `./data/` under the process CWD (the project root for
  * `next dev`/`next start`), which `.gitignore` already excludes.
  *
- * Packaged Electron app (SAAS_PLAN.md Phase A):
- *   - LH_DATA_DIR  → app.getPath("userData") set by Electron main process
+ * Relocating the data dir:
+ *   - LH_DATA_DIR  → set this to keep audit data outside the project directory
  *                    (e.g. ~/Library/Application Support/LightAudit on macOS)
  *   - LH_MIGRATIONS_DIR → path to drizzle/ inside app.asar (set by main process)
  *     Falls back to process.cwd()/drizzle when not set (dev / next start).
@@ -35,7 +35,7 @@ export function getDbPath(): string {
  * Folder of generated drizzle migrations applied at runtime.
  *
  * Resolution order:
- *   1. LH_MIGRATIONS_DIR env var — set by the Electron main process to the
+ *   1. LH_MIGRATIONS_DIR env var — an explicit override pointing at the
  *      drizzle/ folder inside app.asar (accessible as a plain path even inside
  *      the ASAR because drizzle just reads SQL files, no fork/dlopen needed).
  *   2. process.cwd()/drizzle — dev / next start from the repo root.

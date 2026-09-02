@@ -53,13 +53,75 @@ ${FIXES_CLOSE}
 
 The JSON must be valid (double-quoted keys/strings, no trailing commas, no comments) and must NOT be wrapped in markdown code fences.`;
 
+/**
+ * The system prompt for providers that CANNOT do web research — a local Ollama
+ * model, or any OpenAI-compatible endpoint we drive without tools.
+ *
+ * The critical difference is the citation rule: with no fetch tool, any URL the
+ * model produced would be invented, so it is told to omit citations entirely
+ * (and the parser drops them anyway). An honest ungrounded answer beats a
+ * confident fabricated source, and the UI badges the result accordingly.
+ */
+export const ANALYSIS_DATA_ONLY_SYSTEM_PROMPT = `You are a senior web-performance, accessibility, SEO, and web-best-practices engineer. You are given Google Lighthouse / PageSpeed Insights audit data for ONE category of ONE page, and your job is to explain why that category scored low and how to fix it.
+
+You have NO tools and NO web access. Work entirely from the audit data supplied below and your own knowledge.
+
+Work in two steps:
+1. DIAGNOSE the root causes strictly from the supplied audit data — name the specific failing audits, metrics, or opportunities that are dragging the score down, and explain what each means in plain terms.
+2. RECOMMEND a prioritized set of concrete fixes, each tied to a specific failing audit or metric above.
+
+Rules:
+- Do NOT cite sources and do NOT output any URLs: you cannot browse, so any link would be a guess. Leave "citations" as an empty array. It is far better to be honestly uncited than to invent a source.
+- Never claim you looked something up or checked current documentation.
+- Only discuss audits, metrics, and values that actually appear in the data below. Do not speculate about what the page might contain.
+- Order fixes by their impact on THIS category's score (highest-impact first).
+- Be concrete and concise. Skip generic filler; tie each fix to the specific audit/metric it addresses.
+
+Output format — follow EXACTLY:
+- First, write the DIAGNOSIS as short markdown prose (a few tight paragraphs and/or a bullet list). Do NOT include the fixes here.
+- Then, on a new line, output your fixes as a single JSON object wrapped in these exact sentinels (and nothing after the closing sentinel):
+
+${FIXES_OPEN}
+{
+  "fixes": [
+    {
+      "title": "Imperative, specific fix title",
+      "why": "Why this matters and how it moves this category's score",
+      "steps": ["Concrete step 1", "Concrete step 2"],
+      "priority": "high" | "medium" | "low",
+      "citations": []
+    }
+  ]
+}
+${FIXES_CLOSE}
+
+The JSON must be valid (double-quoted keys/strings, no trailing commas, no comments) and must NOT be wrapped in markdown code fences.`;
+
+/**
+ * Pick the system prompt matching a provider's capability tier: the researching
+ * agent when web research is available, the honest data-only analyst otherwise.
+ */
+export function analysisSystemPrompt(webResearch: boolean): string {
+  return webResearch ? ANALYSIS_SYSTEM_PROMPT : ANALYSIS_DATA_ONLY_SYSTEM_PROMPT;
+}
+
 /** Render a 0–1 audit/metric score as a 0–100 integer or "—". */
 function pct(score: number | null): string {
   return score === null ? "—" : String(Math.round(score * 100));
 }
 
+/** Shape of the closing instruction, which differs by capability tier. */
+export interface UserPromptOptions {
+  /** Whether the provider can research on the web (default `true`). */
+  webResearch?: boolean;
+}
+
 /** Serialize the bounded {@link AnalysisInput} into the user-turn prompt. */
-export function buildUserPrompt(input: AnalysisInput): string {
+export function buildUserPrompt(
+  input: AnalysisInput,
+  options: UserPromptOptions = {},
+): string {
+  const webResearch = options.webResearch !== false;
   const lines: string[] = [];
   const label = CATEGORY_LABELS[input.category];
 
@@ -129,10 +191,11 @@ export function buildUserPrompt(input: AnalysisInput): string {
     lines.push("");
   }
 
+  const score = input.categoryScore === null ? "low" : `${input.categoryScore}/100`;
   lines.push(
-    `Diagnose why the ${label} score is ${
-      input.categoryScore === null ? "low" : `${input.categoryScore}/100`
-    }, research fixes with the available research tools, and respond in the required format (markdown diagnosis, then the ${FIXES_OPEN} … ${FIXES_CLOSE} JSON block).`,
+    webResearch
+      ? `Diagnose why the ${label} score is ${score}, research fixes with the available research tools, and respond in the required format (markdown diagnosis, then the ${FIXES_OPEN} … ${FIXES_CLOSE} JSON block).`
+      : `Diagnose why the ${label} score is ${score} using only the data above, and respond in the required format (markdown diagnosis, then the ${FIXES_OPEN} … ${FIXES_CLOSE} JSON block with empty "citations" arrays).`,
   );
 
   return lines.join("\n");

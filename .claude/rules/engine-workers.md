@@ -12,7 +12,7 @@ paths:
   concurrent in-process runs corrupt each other.
 - The worker I/O contract is env-based (`LH_AUDIT_INPUT` / `LH_AUDIT_OUTPUT`, IPC signal);
   the worker script path resolves through the `LH_AUDIT_WORKER_SCRIPT` seam. Never add bare
-  `process.cwd()` path joins here — paths must survive Electron/ASAR packaging
+  `process.cwd()` path joins here — the server must be started from the project root
   (SAAS_PLAN.md Phase A).
 - Data/DB locations resolve through `src/lib/db/paths.ts` (`LH_DATA_DIR` / `LH_DB_PATH`).
   Don't invent new location env vars without extending that module.
