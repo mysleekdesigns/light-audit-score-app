@@ -24,6 +24,7 @@ import {
 import {
   clampConcurrency,
   DEFAULT_CONCURRENCY,
+  MIN_CONCURRENCY,
 } from "@/lib/queue/types";
 import {
   clampPagesPerTemplate,
@@ -56,8 +57,10 @@ export interface AuditDefaults {
   /** Default queue concurrency (clamped to the allowed band). */
   concurrency: number;
   /**
-   * When true, force effective concurrency to 1 if Performance is in scope, for
-   * DevTools-panel parity (PRD §6 Phase 9). Does not change `concurrency` itself.
+   * Run one page at a time for DevTools-panel parity (PRD §6 Phase 9). Only ever
+   * true alongside `concurrency: 1` — the Concurrency dial is what the user sees,
+   * so it is what runs: `normalizeDefaults` drops the flag when the dial is
+   * higher, and the New Audit form keeps the two in step from then on.
    */
   accuracyMode: boolean;
   /** Default selected categories (non-empty; canonical order). */
@@ -223,16 +226,21 @@ export function normalizeDefaults(raw: unknown): AuditDefaults {
         : "mobile";
   const throttling: Throttling =
     source.throttling === "applied" ? "applied" : "simulated";
+  const concurrency =
+    typeof source.concurrency === "number" && Number.isFinite(source.concurrency)
+      ? clampConcurrency(source.concurrency)
+      : DEFAULT_AUDIT_DEFAULTS.concurrency;
   return {
     formFactor,
     throttling,
     runs: clampRuns(source.runs, DEFAULT_AUDIT_DEFAULTS.runs),
-    concurrency:
-      typeof source.concurrency === "number" &&
-      Number.isFinite(source.concurrency)
-        ? clampConcurrency(source.concurrency)
-        : DEFAULT_AUDIT_DEFAULTS.concurrency,
-    accuracyMode: source.accuracyMode === true,
+    concurrency,
+    // Accuracy mode means one page at a time, so it only holds at concurrency 1:
+    // the Concurrency dial is what the user sees, and it must be what runs. A
+    // blob carrying both `accuracyMode: true` and a higher dial (the two used to
+    // be independent, and the queue quietly pinned an "8 parallel · accuracy on"
+    // run to 1 while the dial still said 8) resolves in the dial's favour.
+    accuracyMode: source.accuracyMode === true && concurrency === MIN_CONCURRENCY,
     categories: sanitizeCategories(source.categories),
     cpuSlowdownMultiplier: clampCpuMultiplier(source.cpuSlowdownMultiplier),
     resultsView: source.resultsView === "cards" ? "cards" : "table",

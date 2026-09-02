@@ -142,6 +142,7 @@ describe("normalizeDefaults", () => {
     const custom = normalizeDefaults({
       throttling: "applied",
       accuracyMode: true,
+      concurrency: 1,
       cpuSlowdownMultiplier: 999,
     });
     expect(custom.throttling).toBe("applied");
@@ -152,6 +153,20 @@ describe("normalizeDefaults", () => {
     const junk = normalizeDefaults({ throttling: "turbo", accuracyMode: "yes" });
     expect(junk.throttling).toBe("simulated");
     expect(junk.accuracyMode).toBe(false);
+  });
+
+  it("lets the Concurrency dial win over accuracyMode (what you see is what runs)", () => {
+    // Accuracy mode means one page at a time, so it only survives at concurrency 1.
+    expect(
+      normalizeDefaults({ accuracyMode: true, concurrency: 1 }).accuracyMode,
+    ).toBe(true);
+    // A blob carrying both the flag and a higher dial (the two used to be
+    // independent, and the queue quietly pinned such runs to 1) keeps the dial.
+    const conflicted = normalizeDefaults({ accuracyMode: true, concurrency: 8 });
+    expect(conflicted.concurrency).toBe(8);
+    expect(conflicted.accuracyMode).toBe(false);
+    // The flag alone (dial absent → the factory default of 3) resolves the same way.
+    expect(normalizeDefaults({ accuracyMode: true }).accuracyMode).toBe(false);
   });
 
   it("normalizes the Phase 11 resultsView field", () => {

@@ -11,6 +11,7 @@ import {
   Radar,
   TriangleAlert,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import { parseUrls } from "@/lib/parseUrls";
 import type { CreateBatchRequest } from "@/lib/client/auditClient";
@@ -347,9 +348,21 @@ export function NewAuditForm({
     update({ runs: next });
   }
 
+  // Concurrency and accuracy mode are one dial with two handles: accuracy mode
+  // means one page at a time, so the two must always agree, and the Concurrency
+  // dial — the control you can see — is what runs. They used to be independent,
+  // and the queue quietly pinned an "8 parallel · accuracy on" run to 1.
   function handleConcurrencyChange(value: string) {
     const next = Number(value);
     setConcurrency(next);
+    if (next > MIN_CONCURRENCY && accuracyMode) {
+      setAccuracyMode(false);
+      update({ concurrency: next, accuracyMode: false });
+      toast.info(`Accuracy mode off — ${next} pages will run in parallel.`, {
+        description: "Accuracy mode runs one page at a time, so the dial wins.",
+      });
+      return;
+    }
     update({ concurrency: next });
   }
 
@@ -361,6 +374,15 @@ export function NewAuditForm({
 
   function handleAccuracyModeChange(next: boolean) {
     setAccuracyMode(next);
+    if (next && concurrency > MIN_CONCURRENCY) {
+      setConcurrency(MIN_CONCURRENCY);
+      update({ accuracyMode: true, concurrency: MIN_CONCURRENCY });
+      toast.info("Accuracy mode on — concurrency set to 1.", {
+        description:
+          "Pages run one at a time so parallel Chromes can't contend for CPU.",
+      });
+      return;
+    }
     update({ accuracyMode: next });
   }
 
@@ -769,7 +791,7 @@ export function NewAuditForm({
                       pressed={accuracyMode}
                       onPressedChange={handleAccuracyModeChange}
                       disabled={isRunning}
-                      title="Serialises the queue and discards outlier runs for the steadiest possible numbers."
+                      title="Runs one page at a time (sets Concurrency to 1) and discards outlier runs for the steadiest possible numbers."
                       className="w-full justify-between gap-3 px-3 font-normal data-[state=on]:border-score-good/40 data-[state=on]:bg-score-good/10 data-[state=on]:text-foreground"
                     >
                       Accuracy mode
@@ -823,8 +845,11 @@ export function NewAuditForm({
                   <Alert aria-live="polite">
                     <CircleCheck className="text-score-good" />
                     <AlertDescription>
-                      Serial runs — no CPU contention. The most trustworthy
-                      numbers this machine can produce.
+                      {accuracyMode
+                        ? "Accuracy mode — one page at a time, "
+                        : "Serial runs — "}
+                      no CPU contention. The most trustworthy numbers this
+                      machine can produce.
                     </AlertDescription>
                   </Alert>
                 )}
