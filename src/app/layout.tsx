@@ -23,7 +23,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "LightAudit — Lighthouse Audit Console",
+  title: "LightAudit Score",
   description:
     "An instrument for measuring Lighthouse scores across one or many pages: median-of-N runs, bounded concurrency, persisted history.",
 };

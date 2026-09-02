@@ -2,7 +2,7 @@
   "name": "lightaudit",
   "version": "0.1.0",
   "private": true,
-  "description": "LightAudit — Local-first Lighthouse auditing desktop app",
+  "description": "LightAudit Score — Local-first Lighthouse auditing desktop app",
   "author": {
     "name": "LightAudit",
     "email": "simon@crawlforge.dev"

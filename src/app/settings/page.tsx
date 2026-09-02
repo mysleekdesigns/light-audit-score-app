@@ -4,8 +4,8 @@ import { PageHeader } from "@/components/page-header";
 import { PsiKeySettings } from "@/components/settings/psi-key-settings";
 
 export const metadata: Metadata = {
-  title: "Settings — LightAudit",
-  description: "Manage API keys and credentials for LightAudit's audit engines.",
+  title: "Settings — LightAudit Score",
+  description: "Manage API keys and credentials for LightAudit Score's audit engines.",
 };
 
 export default function SettingsPage() {

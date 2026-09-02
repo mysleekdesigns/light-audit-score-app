@@ -11,7 +11,7 @@
 # CI (release.yml) sets CSC_LINK, CSC_KEY_PASSWORD, APPLE_ID etc.
 
 appId: io.lightaudit.app
-productName: LightAudit
+productName: LightAudit Score
 copyright: "Copyright © 2026 LightAudit"
 
 # The app directory: Next standalone output + our electron/ main process files.

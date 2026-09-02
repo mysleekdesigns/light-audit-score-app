@@ -104,11 +104,9 @@ function MobileNav({ pathname }: { pathname: string }) {
             translate="no"
             className="font-mono text-sm font-semibold uppercase tracking-[0.28em]"
           >
-            LightAudit
+            LightAudit Score
           </SheetTitle>
-          <SheetDescription className="font-mono text-[0.6rem] uppercase tracking-[0.3em]">
-            Lighthouse Audit Console
-          </SheetDescription>
+          <SheetDescription className="sr-only">Primary navigation</SheetDescription>
         </SheetHeader>
         {/* SheetClose closes the drawer as the link navigates, so the panel
             never lingers over the page it just routed to. */}
@@ -162,19 +160,15 @@ export function SiteHeader() {
           <span className="shrink-0 text-primary transition-transform duration-300 group-hover:rotate-[8deg]">
             <BeamMark className="size-6" />
           </span>
-          <span className="flex min-w-0 flex-col leading-none">
-            <span
-              translate="no"
-              className="truncate font-mono text-sm font-semibold uppercase tracking-[0.28em] text-foreground"
-            >
-              LightAudit
-            </span>
-            {/* Wider than the wordmark it sits under, so it's the piece that
-                decides the brand block's width — dropped in the band where the
-                inline nav needs every pixel it can get. */}
-            <span className="hidden font-mono text-[0.6rem] uppercase tracking-[0.3em] text-muted-foreground xl:inline">
-              Lighthouse Audit Console
-            </span>
+          {/* Two words, so in a tight band (320px phones, the 1024–1059px
+              compact-nav strip) the wordmark stacks "LightAudit" over "Score"
+              instead of truncating, and is back on one line as soon as there
+              is room. `min-w-0` is what lets it shrink to the longer word. */}
+          <span
+            translate="no"
+            className="min-w-0 font-mono text-sm font-semibold uppercase leading-[1.15] tracking-[0.28em] text-foreground"
+          >
+            LightAudit Score
           </span>
         </Link>
 

@@ -67,7 +67,7 @@ export function middleware(request: NextRequest): NextResponse {
   return new NextResponse(
     JSON.stringify({
       error: "Unauthorized",
-      message: "Missing or invalid session token. Open the app through LightAudit.",
+      message: "Missing or invalid session token. Open the app through LightAudit Score.",
     }),
     {
       status: 401,
