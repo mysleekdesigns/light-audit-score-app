@@ -7,8 +7,8 @@ every run, and lets you compare runs, view trends, and discover pages to audit.
 ## Quick start
 
 ```bash
-git clone https://github.com/mysleekdesigns/lighthouse.git
-cd lighthouse
+git clone https://github.com/mysleekdesigns/light-audit-score-app.git
+cd light-audit-score-app
 npm install
 npm start
 ```
