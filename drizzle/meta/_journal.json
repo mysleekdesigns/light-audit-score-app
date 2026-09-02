@@ -43,6 +43,13 @@
       "when": 1780433498682,
       "tag": "0005_cooing_sally_floyd",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1788386908587,
+      "tag": "0006_yielding_kang",
+      "breakpoints": true
     }
   ]
 }

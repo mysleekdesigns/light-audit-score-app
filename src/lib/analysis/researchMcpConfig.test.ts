@@ -19,12 +19,17 @@ import {
   hasResearchMcpConfig,
   loadResearchMcpConfig,
 } from "@/lib/analysis/providers/researchMcp";
+import { resetDbForTests } from "@/lib/db/client";
 
 /** Env vars this module reads — saved and restored around every test. */
 const ENV_KEYS = [
   "LH_RESEARCH_MCP_CONFIG",
   "LH_RESEARCH_MCP_SERVER",
   "RESEARCH_TOKEN",
+  // Resolution consults the CrawlForge switch (stored in the app DB); it is
+  // pointed at a fresh temp store below, where the switch is off.
+  "LH_DATA_DIR",
+  "LH_DB_PATH",
 ] as const;
 
 let saved: Record<string, string | undefined>;
@@ -37,9 +42,14 @@ beforeEach(() => {
     delete process.env[key];
   }
   dir = mkdtempSync(path.join(tmpdir(), "lightaudit-research-"));
+  // A fresh, empty preference store per test: CrawlForge is off by default, so
+  // these tests see the vendor-neutral config path alone.
+  process.env.LH_DATA_DIR = dir;
+  resetDbForTests();
 });
 
 afterEach(() => {
+  resetDbForTests();
   for (const key of ENV_KEYS) {
     if (saved[key] === undefined) delete process.env[key];
     else process.env[key] = saved[key];

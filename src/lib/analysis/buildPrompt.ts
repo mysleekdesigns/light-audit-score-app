@@ -97,12 +97,29 @@ ${FIXES_CLOSE}
 
 The JSON must be valid (double-quoted keys/strings, no trailing commas, no comments) and must NOT be wrapped in markdown code fences.`;
 
+/** Optional additions to the researching system prompt. */
+export interface SystemPromptOptions {
+  /**
+   * Guidance specific to the research server in use (which tools to reach
+   * for, what they cost). Appended as its own paragraph; ignored at the
+   * data-only tier, where there are no tools to guide.
+   */
+  researchGuidance?: string | null;
+}
+
 /**
  * Pick the system prompt matching a provider's capability tier: the researching
  * agent when web research is available, the honest data-only analyst otherwise.
  */
-export function analysisSystemPrompt(webResearch: boolean): string {
-  return webResearch ? ANALYSIS_SYSTEM_PROMPT : ANALYSIS_DATA_ONLY_SYSTEM_PROMPT;
+export function analysisSystemPrompt(
+  webResearch: boolean,
+  options: SystemPromptOptions = {},
+): string {
+  if (!webResearch) return ANALYSIS_DATA_ONLY_SYSTEM_PROMPT;
+  const guidance = options.researchGuidance?.trim();
+  return guidance
+    ? `${ANALYSIS_SYSTEM_PROMPT}\n\nResearch tools note: ${guidance}`
+    : ANALYSIS_SYSTEM_PROMPT;
 }
 
 /** Render a 0–1 audit/metric score as a 0–100 integer or "—". */

@@ -16,11 +16,18 @@ paths:
   `(runId, category)` via `src/lib/db/analyses.ts`.
 - Fixes parse from `<<<FIXES_JSON>>>` markers — zod-validate, allow one repair/retry, then
   degrade to prose-only. Stream failures surface as `error` events, never unhandled crashes.
-- **Web research is an OPTIONAL, vendor-neutral seam.** `loadResearchMcpConfig` reads a standard
-  MCP config and launches the server the user declared (`mcpServers.research`, or the sole server,
-  or `LH_RESEARCH_MCP_SERVER`). LightAudit **never bundles, installs, advertises, or credentials**
-  a research server — it is separate software under the user's control. Do not add a product name
-  to app code or UI copy, do not add a dependency on one, and do not store its API keys.
+- **Web research is an OPTIONAL seam with one named option.** `resolveResearchServer`
+  (`providers/researchMcp.ts`) picks, in order: **CrawlForge** when the user has switched it on in
+  Settings AND a key is detectable (`providers/crawlforge.ts` — launched via `npx -y
+  crawlforge-mcp-server`, off by default, credit-heavy tools listed in
+  `CRAWLFORGE_DISALLOWED_TOOL_NAMES`); otherwise the server the user declared in a standard MCP
+  config (`mcpServers.research`, or the sole server, or `LH_RESEARCH_MCP_SERVER`). LightAudit
+  **never bundles, installs, or credentials** a research server — it is separate software under
+  the user's control. CrawlForge is the only product name allowed in app code or UI copy; do not
+  add a dependency on it (pinned `npx` spec only, bumped in reviewed commits), never enable it by
+  default, and never read, store, or forward its API key — the server reads its own setup file,
+  which LightAudit existence-checks and reports as a boolean. Declared `env` blocks reach the
+  `claude` CLI on its command line, so no declaration LightAudit authors may carry a secret.
 - `.mcp.json` stays local-dev-only and must never ship; the shipped path is a user-supplied config
   found via `LH_RESEARCH_MCP_CONFIG`.
 - Research and the LLM are separate concerns: the MCP server does web research, the model may be

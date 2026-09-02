@@ -11,11 +11,21 @@
   the app now runs from the user's own source checkout, so `.env` is the conventional and adequate
   boundary. Secrets still must never reach SQLite, a COMMITTED file, logs, or the client bundle.
 - Settings pages are **read-only status plus guidance** — they never accept, write, or echo a key,
-  and status endpoints report presence as a boolean only.
+  and status endpoints report presence as a boolean only. Non-secret preferences (the CrawlForge
+  research switch) may be written to the `app_settings` table; nothing credential-shaped may.
 - Only LightAudit's OWN credentials belong in `.env`. A third-party tool the app merely talks to
   (e.g. a research MCP server) owns its credentials — never read, store, or forward them.
-- The local app server binds `127.0.0.1` only and requires the per-session auth token on
-  every route.
+  CrawlForge reads its own `~/.crawlforge/config.json`, which LightAudit existence-checks and
+  never opens; its declaration carries no env secret. For a custom MCP config,
+  `researchLaunchConfig` overlays only the `env` block the USER declared, at launch — and the
+  Agent SDK passes that config on the `claude` command line, so never author a declaration that
+  forwards a secret.
+- The local app server binds `127.0.0.1` only and requires the per-install session token on
+  every route. `scripts/start.mjs` resolves the token (`LH_SESSION_TOKEN`, else generated into
+  `<data dir>/session-token`, mode 0600) and exports it; `src/middleware.ts` also refuses any
+  `Host` header that is not loopback or in `LH_ALLOWED_HOSTS` (DNS-rebinding defence). Keep the
+  gate's helpers in `src/lib/http/localGate.ts` edge-safe and unit-tested; never reflect request
+  data into the 401/403 bodies.
 - Any new license-cloud endpoint gets zod input validation and rate limiting by default;
   Stripe webhooks are always signature-verified and idempotent.
 - There is NO Electron in this project — do not reintroduce it, or any packaging/signing step.

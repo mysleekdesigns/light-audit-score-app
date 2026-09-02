@@ -26,7 +26,7 @@ import { analysisSystemPrompt, buildUserPrompt } from "@/lib/analysis/buildPromp
 import { formatProviderModel } from "@/lib/analysis/providerModel";
 import { claudeDriver } from "@/lib/analysis/providers/claude";
 import { openAiCompatibleDriver } from "@/lib/analysis/providers/openaiCompatible";
-import { hasResearchMcpConfig } from "@/lib/analysis/providers/researchMcp";
+import { resolveResearchServer } from "@/lib/analysis/providers/researchMcp";
 import {
   resolveAnalysisProvider,
   type ProviderOverride,
@@ -108,11 +108,17 @@ export async function runAnalysis(args: RunAnalysisArgs): Promise<AnalysisResult
   // the agent would then either narrate the shortfall mid-diagnosis or reach for
   // a URL it never opened. Resolving the tier from the config instead means an
   // unconfigured install gets a clean, honestly uncited analysis.
-  const webResearch = resolved.canWebResearch && hasResearchMcpConfig();
+  //
+  // Resolved here (not just tested) because the server may carry guidance for
+  // the prompt — which tools to reach for, and what they cost the user.
+  const research = resolved.canWebResearch ? resolveResearchServer() : null;
+  const webResearch = research !== null;
 
   const result = await driver.run({
     provider: resolved,
-    systemPrompt: analysisSystemPrompt(webResearch),
+    systemPrompt: analysisSystemPrompt(webResearch, {
+      researchGuidance: research?.promptGuidance,
+    }),
     userPrompt: buildUserPrompt(input, { webResearch }),
     webResearch,
     signal,

@@ -20,7 +20,8 @@ import { asNumber, asString, isRecord } from "@/lib/lighthouse/parseLhr";
 import { AnalysisError } from "@/lib/analysis/AnalysisError";
 import {
   RESEARCH_MCP_NAME,
-  loadResearchMcpConfig,
+  researchLaunchConfig,
+  resolveResearchServer,
 } from "@/lib/analysis/providers/researchMcp";
 import type { AnalysisDriver, DriverResult, DriverRunArgs } from "@/lib/analysis/providers/types";
 import { parseFixes, splitDiagnosisAndFixes } from "@/lib/analysis/structured";
@@ -96,7 +97,8 @@ function isRateLimit(message: string): boolean {
 async function run(args: DriverRunArgs): Promise<DriverResult> {
   const { provider, systemPrompt, userPrompt, webResearch, signal, onEvent } = args;
 
-  const research = loadResearchMcpConfig();
+  const researchServer = resolveResearchServer();
+  const research = researchServer ? researchLaunchConfig(researchServer) : null;
   const warnings: string[] = [];
   /**
    * Whether the research tools are genuinely in the agent's hands — the gate on
@@ -140,7 +142,9 @@ async function run(args: DriverRunArgs): Promise<DriverResult> {
       settingSources: [],
       strictMcpConfig: true,
       tools: ALLOWED_BUILTIN_TOOLS,
-      disallowedTools: DISALLOWED_TOOLS,
+      // Plus whatever the research server exposes that a citation search has
+      // no use for (crawlers, batch jobs, …) — see `ResolvedResearchServer`.
+      disallowedTools: [...DISALLOWED_TOOLS, ...(researchServer?.disallowedTools ?? [])],
       ...(research ? { mcpServers: { [RESEARCH_MCP_NAME]: research } } : {}),
       // NOTE: `env` is intentionally omitted — passing it REPLACES the subprocess
       // env and would strip the Claude Code OAuth credentials + PATH.

@@ -206,6 +206,24 @@ export const analyses = sqliteTable(
   (t) => [uniqueIndex("analyses_run_category_uq").on(t.runId, t.category)],
 );
 
+/**
+ * App-level preferences the user sets from the Settings page — a tiny
+ * key/value store, one row per setting, values as strings (JSON where a
+ * setting isn't a plain scalar).
+ *
+ * This is for PREFERENCES only (e.g. whether the CrawlForge research server is
+ * enabled). Credentials never go here: keys stay in the environment
+ * (`.env`) and are only ever reported as present/absent.
+ */
+export const appSettings = sqliteTable("app_settings", {
+  /** Setting name, e.g. `research.crawlforge.enabled`. */
+  key: text("key").primaryKey(),
+  /** Serialized value. */
+  value: text("value").notNull(),
+  /** ISO timestamp of the last write. */
+  updatedAt: text("updated_at").notNull(),
+});
+
 export type BatchRow = typeof batches.$inferSelect;
 export type NewBatchRow = typeof batches.$inferInsert;
 export type RunRow = typeof runs.$inferSelect;

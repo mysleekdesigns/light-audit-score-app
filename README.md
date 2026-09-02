@@ -100,8 +100,8 @@ nothing to configure — analysis uses your existing login:
 claude login    # once, if you aren't already signed in
 ```
 
-This is the only path that can research the web and cite real sources, and it does so when you
-also point it at a research MCP server (see below). Set `ANTHROPIC_API_KEY` instead if you'd
+This is the only path that can research the web and cite real sources, and it does so once you
+give it a research server (see **Web research** below). Set `ANTHROPIC_API_KEY` instead if you'd
 rather use an API key.
 
 **Local model via [Ollama](https://ollama.com)** — private, free, works offline:
@@ -138,6 +138,21 @@ LH_ANALYSIS_MODEL=your-model-id
 LH_ANALYSIS_API_KEY=your-key-here
 ```
 
+**Web research (optional).** Claude can additionally look up current fixes on the web so each
+recommendation cites a page it actually read. That needs a research MCP server, and the easiest
+one to add is [CrawlForge](https://www.crawlforge.dev): get a free API key (1,000 credits, no
+card), run `npx crawlforge-setup` once to store it, then switch it on under Settings →
+**Web research**. It is off by default. When on, LightAudit launches a pinned
+`npx -y crawlforge-mcp-server@<version>` on demand — the server reads the key from its own
+setup file, LightAudit never touches it — and keeps the agent to CrawlForge's search and
+page-reading tools, so one analysis costs a handful of credits rather than a crawl. To run a
+newer CrawlForge release than the pinned one, set `LH_CRAWLFORGE_VERSION=x.y.z` in `.env`.
+
+Any other MCP server with web-search and page-fetch tools works too: declare it as
+`mcpServers.research` in `.mcp.json`, or point `LH_RESEARCH_MCP_CONFIG` at a config elsewhere.
+With no research server, analysis still diagnoses from the Lighthouse data and is badged
+**NO WEB RESEARCH**.
+
 Keys are read from the environment at request time and never stored by the app. See
 `.env.example` for every variable.
 
@@ -148,14 +163,24 @@ npm start        # or: pnpm start
 ```
 
 That's it. On a fresh checkout `npm start` builds once (about a minute), then starts the app on
-<http://127.0.0.1:3000>. Later starts skip the build and come up in about a second.
+<http://127.0.0.1:3000> and opens it in your browser. Later starts skip the build and come up in
+about a second.
 
-It binds **loopback only** by default — the server runs audits on your machine and has no
-authentication unless you set `LH_SESSION_TOKEN`, so exposing it beyond localhost should be a
-deliberate choice. Override with `PORT` and `HOST` if you need to:
+The server runs audits on your machine, so it is locked to you: it binds **loopback only**, only
+answers requests whose `Host` is a loopback name (so a web page can't reach it by DNS rebinding),
+refuses state-changing requests from any other origin (including other ports on localhost), and
+every route needs a per-install **session token**. `npm start` prints the token as a link —
+`http://127.0.0.1:3000/?token=…` — and opens it; that one visit sets the session cookie, and the
+token is kept in `data/session-token` so the link stays valid across restarts. Set
+`LH_SESSION_TOKEN` (32+ characters) to pin your own, or `LH_OPEN_BROWSER=0` to skip the browser
+(recommended on a shared machine, where a launching browser's command line is visible to others).
+
+Override `PORT` and `HOST` if you need to. Binding beyond localhost is a deliberate choice, and
+you then list the hostnames you will use in `LH_ALLOWED_HOSTS`:
 
 ```bash
 PORT=4000 npm start
+HOST=0.0.0.0 LH_ALLOWED_HOSTS=192.168.1.20 npm start
 ```
 
 After changing source, rebuild explicitly (or use the dev server for hot reload):

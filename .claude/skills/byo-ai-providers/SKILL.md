@@ -31,9 +31,11 @@ text-delta / fix / done / error) is the seam everything hangs off. Rules:
 3. **OpenAI-compatible** — base URL + API key + model name; presets for OpenAI, Gemini
    (compat endpoint), OpenRouter, LM Studio; covers vLLM by construction.
 
-For shipped builds the CrawlForge MCP dependency is dropped: Claude-path research uses Agent
-SDK built-in web search/fetch. `.mcp.json` (hardcoded paths + secrets) is local-dev-only and
-must be excluded from packaging.
+Web research is a separate seam (`src/lib/analysis/providers/researchMcp.ts`): the Claude
+driver's built-in WebSearch/WebFetch stay disallowed, and research comes from a research MCP
+server — **CrawlForge** as the one named, opt-in option (Settings switch, off by default,
+launched via `npx` on demand; `providers/crawlforge.ts`), or any server the user declares in a
+standard MCP config. `.mcp.json` is local-dev-only and never ships.
 
 ## Capability tiers — degrade honestly
 

@@ -9,13 +9,15 @@ scores for one or many URLs (median-of-N runs, bounded concurrency), persists ea
 shows a live dashboard. Stack: Next.js (App Router, TS, Node runtime) + Tailwind + shadcn/ui;
 engine = `lighthouse` v13 + `chrome-launcher`; `p-queue`; `better-sqlite3` + Drizzle; SSE.
 
-- Full spec: `PRD.md`. Launch plan: `SAAS_PLAN.md` — **LightAudit Score**, a **free, standalone**
-  local audit app distributed **as source**: clone the repo, `npm install`, `npm start`. Phases A–H.
+- Full spec: `PRD.md`. **LightAudit Score** is a **free, standalone** local audit app distributed
+  **as source**: clone the repo, `npm install`, `npm start`.
 - Status: core app built (engine, queue + forked workers, dashboard, history, PSI engine,
-  AI score analysis). Current work: SAAS_PLAN.md phases A–H — drive them with `/next-phase`
-  (it defaults to SAAS_PLAN.md; pass `@PRD.md` only to revisit the original build plan).
+  AI score analysis, CrawlForge research server, gated local server). The launch plan
+  (`SAAS_PLAN.md`, phases A–H) was **removed from the repo on 2026-09-02** — its history is in
+  git. `/next-phase` therefore has no default plan any more: pass a plan file explicitly
+  (e.g. `/next-phase @PRD.md`).
 
-> **Model change (2026-09-02) — read `SAAS_PLAN.md` §0 before planning any phase work.**
+> **Model change (2026-09-02).**
 > The app is free and **standalone**. Licence enforcement, anti-piracy hardening and cloud sync
 > are retired; the `cloud/` billing app is **dormant but preserved**, and never ships. Phase
 > letters were renumbered, so a phase letter from an older conversation may not mean what it used
@@ -31,11 +33,18 @@ engine = `lighthouse` v13 + `chrome-launcher`; `p-queue`; `better-sqlite3` + Dri
 > from `process.env` (normally a gitignored `.env`); Settings panels are read-only status plus
 > guidance, never key-entry forms.
 >
-> **LightAudit ships no third-party application and promotes none.** AI analysis can optionally
-> use a **research MCP server**, but that server is separate software the user installs and
-> authenticates themselves — never bundled, never installed by us, never advertised in the app,
-> and its credentials are never stored or forwarded by LightAudit. Keep this seam vendor-neutral:
-> no product names in app code, UI copy, or this plan.
+> **LightAudit ships no third-party application.** AI analysis can optionally use a **research MCP
+> server**, but that server is separate software the user installs and authenticates themselves —
+> never bundled, never installed by us, and its credentials are never stored or displayed by
+> LightAudit. The generic seam stays vendor-neutral: any server declared in an MCP config works.
+> **CrawlForge is the ONE named exception** (2026-09-02, at the owner's request — it is their own
+> MCP server): an opt-in switch in Settings → Web research, off by default, that launches a
+> pinned `npx -y crawlforge-mcp-server@<version>` on demand, lets CrawlForge read its own setup
+> file (`~/.crawlforge/config.json` — LightAudit existence-checks it, never opens it, forwards no
+> key), and strips its credit-heavy tools from the agent (`src/lib/analysis/providers/crawlforge.ts`).
+> Do not add other product names, do not bundle or auto-install CrawlForge, do not turn it on by
+> default, and do not forward a key to it (the Agent SDK puts MCP launch configs on the `claude`
+> command line).
 
 ## Skills — invoke them (binding for ALL agents, including parallel teammates)
 
@@ -51,7 +60,7 @@ This applies equally to teammates spawned into a parallel team and to delegated 
 | **vercel-composition-patterns** | Designing component APIs / composition (compound components, context, reusable libraries) — e.g. the client/hook/contract seam. |
 | **web-design-guidelines** | Reviewing built UI for accessibility / UX / web-interface-guideline compliance. |
 | **licensing** | **Dormant** — only for work inside `cloud/`, or if a paid tier is ever revived. Not part of the current free-app plan. |
-| **byo-ai-providers** | Any SAAS_PLAN Phase D work or changes under `src/lib/analysis/` — provider seam, drivers, degradation tiers. |
+| **byo-ai-providers** | Any BYO-AI provider work or changes under `src/lib/analysis/` — provider seam, drivers, degradation tiers, research server. |
 
 Rules of thumb:
 
@@ -96,9 +105,10 @@ invariants and preload the right skill:
 
 A typical phase of work threads all of the above into one chain:
 
-1. **`/next-phase` orchestrates.** It reads the plan (`SAAS_PLAN.md` by default), picks the next
-   unchecked phase, and fans the independent slices out to sub-agents — keeping verification, the
-   plan checkbox update, and the commit for itself (never delegated, so one consistent standard).
+1. **`/next-phase` orchestrates.** It reads the plan file you pass it (there is no default since
+   `SAAS_PLAN.md` was retired), picks the next unchecked phase, and fans the independent slices
+   out to sub-agents — keeping verification, the plan checkbox update, and the commit for itself
+   (never delegated, so one consistent standard).
 2. **Specialist agents do the slices.** Each `.claude/agents/` agent carries the project's
    invariants and **preloads its skill** (`ai-provider-engineer` → `byo-ai-providers`). Restate
    the relevant skill in every spawn prompt — built-in Explore/Plan agents don't read this file.

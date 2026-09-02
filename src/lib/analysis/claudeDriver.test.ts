@@ -17,12 +17,15 @@ import { FIXES_CLOSE, FIXES_OPEN } from "@/lib/analysis/types";
 import type { ResolvedProvider } from "@/lib/analysis/providers/types";
 
 const sdkQuery = vi.fn();
-const loadConfig = vi.fn();
+const resolveServer = vi.fn();
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({ query: sdkQuery }));
+// The driver resolves the server (or null) and turns it into a launch config;
+// the tests only care about the first half, so the second is a pass-through.
 vi.mock("@/lib/analysis/providers/researchMcp", () => ({
   RESEARCH_MCP_NAME: "research",
-  loadResearchMcpConfig: loadConfig,
+  resolveResearchServer: resolveServer,
+  researchLaunchConfig: vi.fn(() => ({ type: "stdio", command: "server" })),
   hasResearchMcpConfig: vi.fn(),
 }));
 
@@ -74,12 +77,41 @@ function run(webResearch: boolean) {
 
 beforeEach(() => {
   sdkQuery.mockReset();
-  loadConfig.mockReset();
+  resolveServer.mockReset();
+});
+
+describe("claudeDriver research tool gating", () => {
+  it("strips the server's disallowed tools from the agent", async () => {
+    resolveServer.mockReturnValue({
+      source: "crawlforge",
+      declaration: { command: "npx", args: [], declaredEnv: {} },
+      disallowedTools: ["mcp__research__crawl_deep"],
+      promptGuidance: null,
+    });
+    mockSession([{ name: "research", status: "connected" }]);
+
+    await run(true);
+
+    const options = sdkQuery.mock.calls[0][0].options;
+    expect(options.disallowedTools).toContain("mcp__research__crawl_deep");
+    // The built-in denials survive alongside them.
+    expect(options.disallowedTools).toContain("WebSearch");
+    expect(options.mcpServers).toEqual({ research: { type: "stdio", command: "server" } });
+  });
+
+  it("registers no MCP server when nothing resolves", async () => {
+    resolveServer.mockReturnValue(null);
+    mockSession([]);
+
+    await run(false);
+
+    expect(sdkQuery.mock.calls[0][0].options.mcpServers).toBeUndefined();
+  });
 });
 
 describe("claudeDriver grounding gate", () => {
   it("keeps citations when a declared server actually connected", async () => {
-    loadConfig.mockReturnValue({ type: "stdio", command: "server" });
+    resolveServer.mockReturnValue({ type: "stdio", command: "server" });
     mockSession([{ name: "research", status: "connected" }]);
 
     const result = await run(true);
@@ -91,7 +123,7 @@ describe("claudeDriver grounding gate", () => {
   });
 
   it("strips citations and explains when no server is configured", async () => {
-    loadConfig.mockReturnValue(null);
+    resolveServer.mockReturnValue(null);
     mockSession([]);
 
     const result = await run(false);
@@ -102,7 +134,7 @@ describe("claudeDriver grounding gate", () => {
   });
 
   it("strips citations when a declared server failed to connect", async () => {
-    loadConfig.mockReturnValue({ type: "stdio", command: "server" });
+    resolveServer.mockReturnValue({ type: "stdio", command: "server" });
     mockSession([{ name: "research", status: "failed" }]);
 
     const result = await run(true);
@@ -114,7 +146,7 @@ describe("claudeDriver grounding gate", () => {
   it("strips citations when the SDK never lists the declared server", async () => {
     // The absence of a failure is not evidence of success: an unlisted server is
     // a server whose tools the agent never held.
-    loadConfig.mockReturnValue({ type: "stdio", command: "server" });
+    resolveServer.mockReturnValue({ type: "stdio", command: "server" });
     mockSession([{ name: "something-else", status: "connected" }]);
 
     const result = await run(true);
@@ -126,7 +158,7 @@ describe("claudeDriver grounding gate", () => {
   it("strips citations when the engine prompted at the data-only tier", async () => {
     // A config that appeared between the engine's read and the driver's: the
     // model was told it had no tools, so any URL in its output is invented.
-    loadConfig.mockReturnValue({ type: "stdio", command: "server" });
+    resolveServer.mockReturnValue({ type: "stdio", command: "server" });
     mockSession([{ name: "research", status: "connected" }]);
 
     const result = await run(false);
@@ -140,7 +172,7 @@ describe("claudeDriver grounding gate", () => {
   it("still explains itself when the session never reports its MCP state", async () => {
     // No init frame at all: citations are stripped, so the reason has to be
     // stated or the record looks identical to a researched run.
-    loadConfig.mockReturnValue({ type: "stdio", command: "server" });
+    resolveServer.mockReturnValue({ type: "stdio", command: "server" });
     sdkQuery.mockImplementation(() =>
       (async function* () {
         yield { type: "result", subtype: "success", result: FINAL_TEXT };
@@ -154,7 +186,7 @@ describe("claudeDriver grounding gate", () => {
   });
 
   it("warns once when a session reports init twice", async () => {
-    loadConfig.mockReturnValue(null);
+    resolveServer.mockReturnValue(null);
     sdkQuery.mockImplementation(() =>
       (async function* () {
         yield { type: "system", subtype: "init", mcp_servers: [] };
@@ -169,7 +201,7 @@ describe("claudeDriver grounding gate", () => {
   });
 
   it("scrubs a URL out of an SDK-authored failure message", async () => {
-    loadConfig.mockReturnValue(null);
+    resolveServer.mockReturnValue(null);
     sdkQuery.mockImplementation(() =>
       (async function* () {
         yield {
@@ -185,7 +217,7 @@ describe("claudeDriver grounding gate", () => {
   });
 
   it("clamps an unexpected status string rather than passing it through", async () => {
-    loadConfig.mockReturnValue({ type: "stdio", command: "server" });
+    resolveServer.mockReturnValue({ type: "stdio", command: "server" });
     mockSession([
       { name: "research", status: "FAILED <b>x</b> " + "y".repeat(80) },
     ]);

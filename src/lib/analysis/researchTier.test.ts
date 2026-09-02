@@ -19,7 +19,7 @@ import type { DriverRunArgs } from "@/lib/analysis/providers/types";
 
 const claudeRun = vi.fn();
 const openAiRun = vi.fn();
-const hasResearch = vi.fn();
+const resolveServer = vi.fn();
 
 vi.mock("@/lib/analysis/providers/claude", () => ({
   claudeDriver: { driver: "claude", run: claudeRun },
@@ -28,9 +28,18 @@ vi.mock("@/lib/analysis/providers/openaiCompatible", () => ({
   openAiCompatibleDriver: { driver: "openai-compatible", run: openAiRun },
 }));
 vi.mock("@/lib/analysis/providers/researchMcp", () => ({
-  hasResearchMcpConfig: hasResearch,
+  resolveResearchServer: resolveServer,
+  hasResearchMcpConfig: vi.fn(() => false),
   loadResearchMcpConfig: vi.fn(() => null),
 }));
+
+/** A generic, user-declared research server with nothing to add to the prompt. */
+const CONFIG_SERVER = {
+  source: "config",
+  declaration: { command: "server", args: [], declaredEnv: {} },
+  disallowedTools: [],
+  promptGuidance: null,
+};
 
 const { runAnalysis } = await import("@/lib/analysis/runAnalysis");
 
@@ -70,7 +79,7 @@ beforeEach(() => {
   for (const key of ENV_KEYS) delete process.env[key];
   claudeRun.mockReset();
   openAiRun.mockReset();
-  hasResearch.mockReset();
+  resolveServer.mockReset();
   const result = { diagnosis: "d", fixes: [], model: "m", warnings: [] };
   claudeRun.mockResolvedValue(result);
   openAiRun.mockResolvedValue(result);
@@ -92,18 +101,35 @@ async function runAndCapture(run: typeof claudeRun): Promise<DriverRunArgs> {
 describe("runAnalysis capability tier", () => {
   it("prompts Claude as a researcher when a research server is configured", async () => {
     process.env.LH_ANALYSIS_PROVIDER = "claude";
-    hasResearch.mockReturnValue(true);
+    resolveServer.mockReturnValue(CONFIG_SERVER);
 
     const args = await runAndCapture(claudeRun);
 
     expect(args.webResearch).toBe(true);
     expect(args.systemPrompt).toContain("mcp__research__");
+    expect(args.systemPrompt).not.toContain("Research tools note:");
     expect(args.userPrompt).toContain("research fixes with the available research tools");
+  });
+
+  it("appends the research server's own guidance to the researcher prompt", async () => {
+    process.env.LH_ANALYSIS_PROVIDER = "claude";
+    resolveServer.mockReturnValue({
+      ...CONFIG_SERVER,
+      source: "crawlforge",
+      promptGuidance: "Prefer mcp__research__search_web.",
+    });
+
+    const args = await runAndCapture(claudeRun);
+
+    expect(args.webResearch).toBe(true);
+    expect(args.systemPrompt).toContain(
+      "Research tools note: Prefer mcp__research__search_web.",
+    );
   });
 
   it("drops Claude to the data-only tier when no research server is configured", async () => {
     process.env.LH_ANALYSIS_PROVIDER = "claude";
-    hasResearch.mockReturnValue(false);
+    resolveServer.mockReturnValue(null);
 
     const args = await runAndCapture(claudeRun);
 
@@ -123,6 +149,6 @@ describe("runAnalysis capability tier", () => {
     expect(args.webResearch).toBe(false);
     // Short-circuited: a provider with no research capability must not pay for a
     // config read to learn what it already knows.
-    expect(hasResearch).not.toHaveBeenCalled();
+    expect(resolveServer).not.toHaveBeenCalled();
   });
 });
