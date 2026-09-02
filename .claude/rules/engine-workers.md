@@ -12,12 +12,12 @@ paths:
   concurrent in-process runs corrupt each other.
 - The worker I/O contract is env-based (`LH_AUDIT_INPUT` / `LH_AUDIT_OUTPUT`, IPC signal);
   the worker script path resolves through the `LH_AUDIT_WORKER_SCRIPT` seam. Never add bare
-  `process.cwd()` path joins here — the server must be started from the project root
-  (SAAS_PLAN.md Phase A).
+  `process.cwd()` path joins here — the server must be started from the project root.
 - Data/DB locations resolve through `src/lib/db/paths.ts` (`LH_DATA_DIR` / `LH_DB_PATH`).
   Don't invent new location env vars without extending that module.
 - Median-of-N selection semantics live in `src/lib/lighthouse/median.ts`; any change to run
   count or median selection must update its tests — score trustworthiness is a headline
   product differentiator.
-- Chrome comes from chrome-launcher (user's installed Chrome; `CHROME_PATH` is the packaged
-  fallback). Never bundle or download a separate Chromium.
+- Chrome comes from chrome-launcher (the user's own installed Chrome). `CHROME_PATH` is a
+  user override for a non-standard install location — chrome-launcher reads it natively and
+  `src/lib/lighthouse/diagnose.ts` points users at it. Never bundle or download a Chromium.
