@@ -357,7 +357,7 @@ function ThresholdControls({
               <ReadoutNote>
                 A page clears when every category it scored sits at or above that
                 category&rsquo;s bar, and a batch clears when all of its measured
-                pages do. These bars are shared with the New Audit defaults.
+                pages do. These bars are shared with the Lighthouse page&rsquo;s defaults.
               </ReadoutNote>
             </div>
             <Button

@@ -131,7 +131,7 @@ export function RerunBatchButton({
         onCreated(created);
         return;
       }
-      // PSI re-runs stream in the PageSpeed console (field data); local in New Audit.
+      // PSI re-runs stream in the PageSpeed console (field data); local ones on the Lighthouse page.
       const watchPath = source === "psi" ? "/pagespeed" : "/";
       router.push(`${watchPath}?watch=${encodeURIComponent(created.id)}`);
     } catch (err) {

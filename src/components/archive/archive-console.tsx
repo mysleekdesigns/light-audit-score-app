@@ -140,14 +140,14 @@ export function ArchiveConsole({ schedules, batches }: ArchiveConsoleProps) {
           </EmptyMedia>
           <EmptyTitle>No schedules yet</EmptyTitle>
           <EmptyDescription>
-            Save a daily schedule from the New Audit form to start a recurring
+            Save a daily schedule from the Lighthouse page to start a recurring
             archive. Each fire re-resolves the target and persists alongside
             ad-hoc runs.
           </EmptyDescription>
         </EmptyHeader>
         <EmptyContent>
           <Button asChild variant="outline" size="sm">
-            <Link href="/">Open New Audit</Link>
+            <Link href="/">Open Lighthouse</Link>
           </Button>
         </EmptyContent>
       </Empty>

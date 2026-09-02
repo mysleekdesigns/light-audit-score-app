@@ -4,7 +4,7 @@ import { PageSpeedConsole } from "@/components/pagespeed/pagespeed-console";
 /**
  * PageSpeed Insights page (PSI feature). Audits run on Google's servers (no local
  * Chrome) and return lab scores plus real-world CrUX field data. `?watch=<batchId>`
- * deep-links a re-run here to stream live, mirroring the New Audit page.
+ * deep-links a re-run here to stream live, mirroring the Lighthouse page.
  */
 export default async function PageSpeedPage({
   searchParams,

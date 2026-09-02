@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/sheet";
 
 const NAV = [
-  { href: "/", label: "New Audit", match: (p: string) => p === "/" },
+  { href: "/", label: "Lighthouse", match: (p: string) => p === "/" },
   {
     href: "/pagespeed",
     label: "PageSpeed",

@@ -66,7 +66,7 @@ export default function RouteError({
             <Button variant="outline" asChild>
               <Link href="/">
                 <Home aria-hidden="true" />
-                New Audit
+                Lighthouse
               </Link>
             </Button>
           </div>

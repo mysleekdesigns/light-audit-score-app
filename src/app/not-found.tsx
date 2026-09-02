@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/empty";
 
 // 404 surface. Rendered inside the root layout's <main>, on-brand with a
-// route back to the New Audit console.
+// route back to the Lighthouse console.
 export default function NotFound() {
   return (
     <div className="flex flex-col gap-8">
@@ -40,7 +40,7 @@ export default function NotFound() {
           <Button asChild>
             <Link href="/">
               <Home aria-hidden="true" />
-              Back to New Audit
+              Back to Lighthouse
             </Link>
           </Button>
         </EmptyContent>
