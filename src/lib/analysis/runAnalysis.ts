@@ -2,8 +2,9 @@
  * Server-only engine for the AI score analysis.
  *
  * Embeds the Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) as a headless,
- * read-only research agent that reuses the project's EXISTING CrawlForge MCP
- * server (loaded from `.mcp.json`) to diagnose a low Lighthouse category score
+ * read-only research agent that drives a user-configured research MCP server (a
+ * SEPARATE app the user installs and authenticates themselves) to diagnose a low
+ * Lighthouse category score
  * and propose cited fixes. Auth is the developer's Claude Code login on this
  * machine — we never set `ANTHROPIC_API_KEY`, and we omit the SDK `env` option so
  * the spawned subprocess inherits `process.env` (and therefore the OAuth creds).
@@ -39,9 +40,9 @@ import {
   type FixPriority,
 } from "@/lib/analysis/types";
 
-/** Built-in tools the agent may use (research comes from CrawlForge MCP, not these). */
+/** Built-in tools the agent may use (research comes from the MCP server, not these). */
 const ALLOWED_BUILTIN_TOOLS = ["Read"];
-/** Built-in tools explicitly removed — no repo edits, no shell, no built-in web (use CrawlForge). */
+/** Built-in tools removed — no repo edits, no shell, no built-in web (use the MCP server). */
 const DISALLOWED_TOOLS = [
   "Bash",
   "Edit",
@@ -55,7 +56,7 @@ const DISALLOWED_TOOLS = [
 
 const DEFAULT_MAX_TURNS = 24;
 const DEFAULT_MAX_USD = 1;
-/** Per CrawlForge tool-call timeout (ms). */
+/** Per research-tool-call timeout (ms). */
 const MCP_TOOL_TIMEOUT_MS = 90_000;
 
 /** Typed failure surfaced to the route (mapped to an `error` SSE frame). */
@@ -84,20 +85,56 @@ export interface RunAnalysisArgs {
 }
 
 /**
- * Read the `crawlforge` stdio server config from the project's `.mcp.json`,
- * overlaying each env value from `process.env` when present (so secrets can move
- * to `.env` later) and falling back to the `.mcp.json` literal. Returns `null`
- * when `.mcp.json` is absent or has no crawlforge server — the analysis can still
- * diagnose, but its fixes won't be web-grounded (the route surfaces a warning).
+ * Path to the MCP config that declares the research server. Defaults to
+ * `<cwd>/.mcp.json` (the standard MCP config format), overridable so a packaged
+ * or `npx` install can point at a config living outside the app directory.
  */
-export function loadCrawlforgeMcpConfig(
+const RESEARCH_CONFIG_PATH_ENV = "LH_RESEARCH_MCP_CONFIG";
+/** Which server in that config to use. Defaults to `research`. */
+const RESEARCH_SERVER_NAME_ENV = "LH_RESEARCH_MCP_SERVER";
+/** Conventional server name callers are expected to use. */
+const DEFAULT_RESEARCH_SERVER = "research";
+
+/**
+ * Resolve the research MCP server the analysis agent should use.
+ *
+ * LightAudit does NOT bundle, install, or manage a research server, and it never
+ * stores that server's credentials — the server is a SEPARATE application the
+ * user installs and configures themselves, and it owns its own auth. All we do is
+ * read a standard MCP config and launch what it declares.
+ *
+ * Server selection, in order:
+ *   1. the name in `LH_RESEARCH_MCP_SERVER`, if set;
+ *   2. a server literally named `research`;
+ *   3. the only server in the config, when there is exactly one.
+ * Anything else is ambiguous and returns `null` rather than guessing.
+ *
+ * Returns `null` when nothing is configured — the analysis still diagnoses from
+ * the Lighthouse data, it just can't cite web sources (the route warns).
+ */
+export function loadResearchMcpConfig(
   cwd = process.cwd(),
 ): McpStdioServerConfig | null {
+  const configPath =
+    process.env[RESEARCH_CONFIG_PATH_ENV]?.trim() || path.join(cwd, ".mcp.json");
+
   try {
-    const raw = readFileSync(path.join(cwd, ".mcp.json"), "utf8");
-    const parsed = JSON.parse(raw) as unknown;
+    const parsed = JSON.parse(readFileSync(configPath, "utf8")) as unknown;
     if (!isRecord(parsed) || !isRecord(parsed.mcpServers)) return null;
-    const server = parsed.mcpServers.crawlforge;
+    const servers = parsed.mcpServers;
+
+    const requested = process.env[RESEARCH_SERVER_NAME_ENV]?.trim();
+    const names = Object.keys(servers);
+    const chosen =
+      requested ??
+      (DEFAULT_RESEARCH_SERVER in servers
+        ? DEFAULT_RESEARCH_SERVER
+        : names.length === 1
+          ? names[0]
+          : undefined);
+    if (!chosen) return null;
+
+    const server = servers[chosen];
     if (!isRecord(server)) return null;
 
     const command = asString(server.command);
@@ -106,6 +143,9 @@ export function loadCrawlforgeMcpConfig(
       ? server.args.filter((a): a is string => typeof a === "string")
       : [];
 
+    // Overlay each declared env value from process.env when present, falling back
+    // to the literal in the config. We pass through what the user configured; we
+    // never source a credential ourselves.
     const env: Record<string, string> = {};
     if (isRecord(server.env)) {
       for (const [key, value] of Object.entries(server.env)) {
@@ -116,7 +156,7 @@ export function loadCrawlforgeMcpConfig(
       }
     }
 
-    // `alwaysLoad: true` keeps the CrawlForge tools in the prompt (not deferred
+    // `alwaysLoad: true` keeps the research tools in the prompt (not deferred
     // behind tool-search) AND blocks startup until the server connects — without
     // it the agent often starts before the stdio server is ready and never gets
     // the web tools, leaving fixes ungrounded.
@@ -133,9 +173,9 @@ export function loadCrawlforgeMcpConfig(
   }
 }
 
-/** A short, human label for a CrawlForge tool call, for the research log. */
+/** A short, human label for a research tool call, for the research log. */
 function toolLabel(tool: string, input: Record<string, unknown>): string {
-  const short = tool.replace(/^mcp__crawlforge__/, "");
+  const short = tool.replace(/^mcp__.+?__/, "");
   const query = asString(input.query);
   const url = asString(input.url);
   if (short.includes("search") && query) return `Researching: ${query}`;
@@ -251,7 +291,7 @@ export async function runAnalysis(args: RunAnalysisArgs): Promise<AnalysisResult
 
   const input = buildAnalysisInput({ lhr, category, formFactor, field });
   const userPrompt = buildUserPrompt(input);
-  const crawlforge = loadCrawlforgeMcpConfig();
+  const research = loadResearchMcpConfig();
   const warnings: string[] = [];
 
   // Bridge an external AbortSignal (client disconnect / timeout) into the SDK.
@@ -276,12 +316,12 @@ export async function runAnalysis(args: RunAnalysisArgs): Promise<AnalysisResult
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
       // SDK isolation: ignore on-disk settings (CLAUDE.md, allow rules) AND any
-      // MCP config other than the one we pass inline — no duplicate crawlforge.
+      // MCP config other than the one we pass inline — no duplicate server.
       settingSources: [],
       strictMcpConfig: true,
       tools: ALLOWED_BUILTIN_TOOLS,
       disallowedTools: DISALLOWED_TOOLS,
-      ...(crawlforge ? { mcpServers: { crawlforge } } : {}),
+      ...(research ? { mcpServers: { research } } : {}),
       // NOTE: `env` is intentionally omitted — passing it REPLACES the subprocess
       // env and would strip the Claude Code OAuth credentials + PATH.
     },
@@ -337,18 +377,20 @@ export async function runAnalysis(args: RunAnalysisArgs): Promise<AnalysisResult
                 status: asString(s.status) ?? "",
               }))
           : [];
-        const crawlforgeStatus = mcp.find((s) => s.name === "crawlforge");
-        if (!crawlforge) {
-          warnings.push("CrawlForge MCP not found in .mcp.json — fixes may be ungrounded.");
-        } else if (crawlforgeStatus && crawlforgeStatus.status !== "connected") {
+        const researchStatus = mcp.find((s) => s.name === "research");
+        if (!research) {
           warnings.push(
-            `CrawlForge MCP did not connect (status: ${crawlforgeStatus.status}) — fixes may be ungrounded.`,
+            "No research MCP server configured — fixes may be ungrounded.",
+          );
+        } else if (researchStatus && researchStatus.status !== "connected") {
+          warnings.push(
+            `Research MCP server did not connect (status: ${researchStatus.status}) — fixes may be ungrounded.`,
           );
         }
         onEvent({
           type: "status",
           phase: "preflight",
-          message: "Connecting Claude + CrawlForge…",
+          message: "Connecting Claude + research tools…",
           model: resolvedModel,
           auth,
           mcp,

@@ -265,7 +265,7 @@ export function AnalysisPanel({
           </EmptyMedia>
           <EmptyTitle>Ask Claude why this score is low</EmptyTitle>
           <EmptyDescription>
-            Claude reads the audit data, researches fixes on the web with CrawlForge,
+            Claude reads the audit data, researches fixes on the web,
             and returns prioritized, source-cited recommendations.
           </EmptyDescription>
         </EmptyHeader>

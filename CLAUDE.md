@@ -9,11 +9,23 @@ scores for one or many URLs (median-of-N runs, bounded concurrency), persists ea
 shows a live dashboard. Stack: Next.js (App Router, TS, Node runtime) + Tailwind + shadcn/ui;
 engine = `lighthouse` v13 + `chrome-launcher`; `p-queue`; `better-sqlite3` + Drizzle; SSE.
 
-- Full spec: `PRD.md`. Launch plan: `SAAS_PLAN.md` — **LightAudit**, a local-first licensed
-  desktop app (Electron) + thin license cloud, phases A–H.
+- Full spec: `PRD.md`. Launch plan: `SAAS_PLAN.md` — **LightAudit Score**, a **free, standalone**
+  local audit app distributed via `npx` plus an optional Electron build. Phases A–H.
 - Status: core app built (engine, queue + forked workers, dashboard, history, PSI engine,
   AI score analysis). Current work: SAAS_PLAN.md phases A–H — drive them with `/next-phase`
   (it defaults to SAAS_PLAN.md; pass `@PRD.md` only to revisit the original build plan).
+
+> **Model change (2026-09-02) — read `SAAS_PLAN.md` §0 before planning any phase work.**
+> The app is free and **standalone**. Licence enforcement, anti-piracy hardening and cloud sync
+> are retired; the `cloud/` billing app is **dormant but preserved**, and never ships. Phase
+> letters were renumbered, so a phase letter from an older conversation may not mean what it used
+> to. Monetisation is deliberately unresolved (Phase G).
+>
+> **LightAudit ships no third-party application and promotes none.** AI analysis can optionally
+> use a **research MCP server**, but that server is separate software the user installs and
+> authenticates themselves — never bundled, never installed by us, never advertised in the app,
+> and its credentials are never stored or forwarded by LightAudit. Keep this seam vendor-neutral:
+> no product names in app code, UI copy, or this plan.
 
 ## Skills — invoke them (binding for ALL agents, including parallel teammates)
 
@@ -28,8 +40,8 @@ This applies equally to teammates spawned into a parallel team and to delegated 
 | **vercel-react-best-practices** | Writing, reviewing, or refactoring React/Next.js code (components, data fetching, performance). |
 | **vercel-composition-patterns** | Designing component APIs / composition (compound components, context, reusable libraries) — e.g. the client/hook/contract seam. |
 | **web-design-guidelines** | Reviewing built UI for accessibility / UX / web-interface-guideline compliance. |
-| **electron-packaging** | Any SAAS_PLAN Phase A/E packaging work — Electron shell, electron-builder, ASAR, signing, auto-update. |
-| **licensing** | Any SAAS_PLAN Phase B/C/E-Tier-3 work — entitlement tokens, Stripe, device binding, keychain. |
+| **electron-packaging** | Phase A packaging work — Electron shell, electron-builder, ASAR, native rebuilds. (Signing/auto-update deferred; the Electron build is now a secondary channel behind `npx`.) |
+| **licensing** | **Dormant** — only for work inside `cloud/`, or if a paid tier is ever revived. Not part of the current free-app plan. |
 | **byo-ai-providers** | Any SAAS_PLAN Phase D work or changes under `src/lib/analysis/` — provider seam, drivers, degradation tiers. |
 
 Rules of thumb:
@@ -47,11 +59,12 @@ Rules of thumb:
 Prefer delegating matching work to these instead of generic agents — they carry the project's
 invariants and preload the right skill:
 
-- **electron-packager** — Phase A/E: Electron shell, packaging, signing, auto-update.
-- **license-cloud-engineer** — Phase B/C: accounts, Stripe, entitlements, activation.
+- **electron-packager** — Phase A: Electron shell, packaging, native rebuilds.
+- **license-cloud-engineer** — **dormant**: only for `cloud/` work or a revived paid tier.
 - **ai-provider-engineer** — Phase D: AnalysisProvider seam, Claude/Ollama/OpenAI-compatible drivers.
-- **security-reviewer** (read-only) — run it after any change touching license checks, auth,
-  billing, secrets, Electron config, deep links, or the local HTTP server.
+- **security-reviewer** (read-only) — run it after any change touching auth, secrets/keychain
+  handling, the PSI or AI-provider key paths, Electron config or IPC, deep links, or the local
+  HTTP server. (Licence/billing triggers only apply inside `cloud/`.)
 
 ## Rules & hooks
 

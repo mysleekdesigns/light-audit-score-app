@@ -39,7 +39,7 @@ export type AnalysisStatus =
   | "error"
   | "cancelled";
 
-/** One research step in the live log (a CrawlForge tool call). */
+/** One research step in the live log (a research MCP tool call). */
 export interface ToolEvent {
   id: string;
   label: string;

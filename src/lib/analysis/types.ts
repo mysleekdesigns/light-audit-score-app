@@ -3,7 +3,7 @@
  *
  * A user clicks a Lighthouse category score (Performance / Accessibility /
  * Best Practices / SEO) and the app runs the Claude Agent SDK — reusing the
- * project's CrawlForge MCP for web research — to (1) diagnose why that category
+ * user's configured research MCP server for web research — to (1) diagnose why that category
  * scored low from the audit data and (2) propose prioritized, source-cited fixes.
  *
  * This module is the single seam both sides code against:
@@ -72,7 +72,7 @@ export interface AnalysisResult {
   costUsd?: number;
   /** Number of agentic turns taken. */
   turns?: number;
-  /** Soft warnings (e.g. CrawlForge MCP not connected → fixes ungrounded). */
+  /** Soft warnings (e.g. research MCP not connected → fixes ungrounded). */
   warnings?: string[];
 }
 
@@ -111,7 +111,7 @@ export type AnalysisStreamEvent =
       type: "tool-use";
       /** SDK tool_use block id (correlates with `tool-result`). */
       id: string;
-      /** Raw tool name, e.g. "mcp__crawlforge__search_web". */
+      /** Raw tool name, e.g. "mcp__research__search_web". */
       tool: string;
       /** Human label for the research log, e.g. "Researching: core web vitals". */
       label: string;

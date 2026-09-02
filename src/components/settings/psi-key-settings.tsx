@@ -20,6 +20,7 @@ interface KeyState {
   available: boolean;
   set: boolean;
   hint?: string;
+  rejected?: boolean;
 }
 
 /**
@@ -64,7 +65,7 @@ export function PsiKeySettings() {
     }
     let key: KeyState | undefined;
     if (typeof window !== "undefined" && window.lightaudit?.secrets) {
-      key = await window.lightaudit.secrets.status();
+      key = await window.lightaudit.secrets.status("PAGESPEED_API_KEY");
     }
     return { configured, key };
   }, []);
@@ -100,7 +101,7 @@ export function PsiKeySettings() {
     if (!window.lightaudit?.secrets) return;
     setBusy("testing");
     try {
-      const result = await window.lightaudit.secrets.test(draft);
+      const result = await window.lightaudit.secrets.test("PAGESPEED_API_KEY", draft);
       if (result.ok) {
         toast.success(result.note ?? "Key validated against PageSpeed Insights.");
       } else {
@@ -115,7 +116,7 @@ export function PsiKeySettings() {
     if (!window.lightaudit?.secrets) return;
     setBusy("saving");
     try {
-      const result = await window.lightaudit.secrets.set(draft);
+      const result = await window.lightaudit.secrets.set("PAGESPEED_API_KEY", draft);
       if (result.ok) {
         setDraft("");
         toast.success("Key saved to the OS keychain. PageSpeed audits are ready.");
@@ -132,7 +133,7 @@ export function PsiKeySettings() {
     if (!window.lightaudit?.secrets) return;
     setBusy("clearing");
     try {
-      await window.lightaudit.secrets.clear();
+      await window.lightaudit.secrets.clear("PAGESPEED_API_KEY");
       toast.success("Key removed from the keychain.");
       await refresh();
     } finally {
@@ -256,9 +257,9 @@ function DesktopControls({
       <div className="flex items-start gap-3 rounded-md border border-amber-500/30 bg-amber-500/5 px-4 py-3">
         <XCircle className="mt-0.5 size-4 shrink-0 text-amber-400" aria-hidden="true" />
         <p className="text-sm text-muted-foreground">
-          The operating system&apos;s secure storage (keychain) is unavailable on
-          this machine, so the key can&apos;t be stored safely. PageSpeed audits
-          will stay disabled until secure storage is enabled.
+          {keyState.rejected
+            ? "The app refused this key-manager request, so its status can't be read. Reopen Settings from the app window; if it persists, restart LightAudit."
+            : "The operating system's secure storage (keychain) is unavailable on this machine, so the key can't be stored safely. PageSpeed audits will stay disabled until secure storage is enabled."}
         </p>
       </div>
     );

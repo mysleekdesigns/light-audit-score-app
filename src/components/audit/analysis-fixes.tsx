@@ -5,7 +5,7 @@
  * `OpportunitiesPanel` (bordered, divided rows; balanced titles; muted secondary
  * text) so it sits naturally alongside the rest of the detail sheet. Each fix
  * carries a priority chip, a "why", concrete steps, and one or more cited source
- * links (the grounding the agent fetched via CrawlForge).
+ * links (the grounding the agent fetched via the research MCP server).
  */
 
 import { ExternalLink } from "lucide-react";

@@ -2,7 +2,7 @@
 
 /**
  * The live "what's the agent doing" surface: a mono status line plus an
- * append-only research log of CrawlForge tool calls (each a chip that flips from
+ * append-only research log of research-tool calls (each a chip that flips from
  * a spinner to a check/cross when its result lands). Announced via `aria-live`
  * so screen-reader users hear research progress without losing focus.
  */

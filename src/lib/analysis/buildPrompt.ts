@@ -23,7 +23,7 @@ export const ANALYSIS_SYSTEM_PROMPT = `You are a senior web-performance, accessi
 
 Work in three steps:
 1. DIAGNOSE the root causes strictly from the supplied audit data — name the specific failing audits, metrics, or opportunities that are dragging the score down, and explain what each means in plain terms.
-2. RESEARCH concrete, current fixes using the CrawlForge web tools available to you (e.g. mcp__crawlforge__search_web, mcp__crawlforge__fetch_url, mcp__crawlforge__extract_content; use mcp__crawlforge__deep_research sparingly — it is slow/expensive). Prefer authoritative, up-to-date sources: web.dev, developer.mozilla.org (MDN), Chrome/Lighthouse docs, and the official docs of the relevant framework.
+2. RESEARCH concrete, current fixes using the web research tools available to you (they are exposed under an mcp__research__ prefix — typically a web search tool plus tools to fetch and extract page content; use any multi-step "deep research" tool sparingly, as it is slow and expensive). Prefer authoritative, up-to-date sources: web.dev, developer.mozilla.org (MDN), Chrome/Lighthouse docs, and the official docs of the relevant framework.
 3. RECOMMEND a prioritized set of fixes, each grounded in a source you actually fetched.
 
 Rules:
@@ -132,7 +132,7 @@ export function buildUserPrompt(input: AnalysisInput): string {
   lines.push(
     `Diagnose why the ${label} score is ${
       input.categoryScore === null ? "low" : `${input.categoryScore}/100`
-    }, research fixes with the CrawlForge tools, and respond in the required format (markdown diagnosis, then the ${FIXES_OPEN} … ${FIXES_CLOSE} JSON block).`,
+    }, research fixes with the available research tools, and respond in the required format (markdown diagnosis, then the ${FIXES_OPEN} … ${FIXES_CLOSE} JSON block).`,
   );
 
   return lines.join("\n");
