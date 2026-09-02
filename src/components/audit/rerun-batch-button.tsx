@@ -13,6 +13,12 @@
  *  - labeled ("Re-run", mono-uppercase) for the Batch summary card toolbar;
  *  - icon-only (wrapped in a Tooltip) for the dense History rows / cards.
  *
+ * Two destinations once the batch exists:
+ *  - navigate (default): deep-link to the live console as above;
+ *  - stay put (`onCreated`): hand the batch to the caller, who tracks it in place
+ *    and reports back through `pending` so the icon keeps spinning until the
+ *    re-run settles — History re-runs refresh their own row this way.
+ *
  * Pure presentational/action glue — it owns only its `submitting` flag and the
  * one POST; no other data fetching. Mirrors the toast / `ApiError` idiom from
  * `audit-console.tsx`'s `handleSubmit`.
@@ -38,6 +44,7 @@ import type {
   AuditSource,
   DeviceSelection,
 } from "@/lib/lighthouse/types";
+import type { Batch } from "@/lib/queue/types";
 import { cn } from "@/lib/utils";
 
 type ButtonProps = React.ComponentProps<typeof Button>;
@@ -64,6 +71,17 @@ export interface RerunBatchButtonProps {
   variant?: ButtonProps["variant"];
   disabled?: boolean;
   className?: string;
+  /**
+   * Stay on the current page: called with the newly created batch instead of
+   * deep-linking to the live console. The caller owns tracking it from there.
+   */
+  onCreated?: (batch: Batch) => void;
+  /**
+   * The caller is still tracking a re-run started from this button. Keeps the
+   * icon spinning and the button disabled until that re-run settles, so the
+   * same page can't be queued twice while the first run is still going.
+   */
+  pending?: boolean;
 }
 
 /** Pluralize "page" against a count (`1 page`, `3 pages`). */
@@ -84,13 +102,16 @@ export function RerunBatchButton({
   variant,
   disabled = false,
   className,
+  onCreated,
+  pending = false,
 }: RerunBatchButtonProps) {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
 
   const count = urls.length;
-  const isDisabled = disabled || submitting || count === 0;
-  const label = `Re-run ${pages(count)}`;
+  const busy = submitting || pending;
+  const isDisabled = disabled || busy || count === 0;
+  const label = busy ? `Re-running ${pages(count)}…` : `Re-run ${pages(count)}`;
 
   async function handleClick() {
     setSubmitting(true);
@@ -105,6 +126,11 @@ export function RerunBatchButton({
         priorBatchId,
       });
       toast.success(`Re-running ${pages(created.jobs.length)}…`);
+      if (onCreated) {
+        // The caller tracks the batch in place; nothing to navigate to.
+        onCreated(created);
+        return;
+      }
       // PSI re-runs stream in the PageSpeed console (field data); local in New Audit.
       const watchPath = source === "psi" ? "/pagespeed" : "/";
       router.push(`${watchPath}?watch=${encodeURIComponent(created.id)}`);
@@ -130,9 +156,10 @@ export function RerunBatchButton({
             onClick={handleClick}
             disabled={isDisabled}
             aria-label={label}
+            aria-busy={busy}
             className={className}
           >
-            <RefreshCw className={cn(submitting && "animate-spin")} />
+            <RefreshCw className={cn(busy && "animate-spin")} />
           </Button>
         </TooltipTrigger>
         <TooltipContent>{label}</TooltipContent>
@@ -150,6 +177,7 @@ export function RerunBatchButton({
           onClick={handleClick}
           disabled={isDisabled}
           aria-label={label}
+          aria-busy={busy}
           className={cn(
             "font-mono text-[0.7rem] uppercase tracking-[0.14em]",
             className,
@@ -157,7 +185,7 @@ export function RerunBatchButton({
         >
           <RefreshCw
             data-icon="inline-start"
-            className={cn(submitting && "animate-spin")}
+            className={cn(busy && "animate-spin")}
           />
           Re-run
         </Button>

@@ -1,6 +1,16 @@
 "use client";
 
-import { useCallback, useId, useMemo, useState } from "react";
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useEffectEvent,
+  useId,
+  useMemo,
+  useState,
+} from "react";
 import { useRouter } from "next/navigation";
 import {
   Archive,
@@ -71,6 +81,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useAuditDefaults } from "@/hooks/useAuditDefaults";
+import { useBatchStream } from "@/hooks/useBatchStream";
 import {
   clearHistory,
   deleteRun,
@@ -89,7 +100,8 @@ import { collapseRuns, type CollapsedRun } from "@/lib/history/collapse";
 import type { DevicePair } from "@/lib/pairing/devicePairs";
 import { hasBothDevices, pairByDevice } from "@/lib/pairing/devicePairs";
 import { rowsToCsv, rowsToJson } from "@/lib/export/exporters";
-import type { LighthouseCategory } from "@/lib/lighthouse/types";
+import type { FormFactor, LighthouseCategory } from "@/lib/lighthouse/types";
+import type { Batch } from "@/lib/queue/types";
 import {
   CATEGORY_SHORT_LABELS,
   formatScore,
@@ -582,12 +594,149 @@ function ClearHistoryButton({
   );
 }
 
+// --- In-place re-runs -------------------------------------------------------
+// A History re-run stays on this page. The row's button re-runs only the device
+// it sits on (the row's own form factor) and hands the new batch to the table,
+// which watches it over SSE from the table root — so the watch survives the
+// row's website section collapsing or a filter hiding the row — and refreshes
+// the server rows once it settles. Only that device's half of the row changes;
+// filters, sort and open sections are untouched.
+
+/** A re-run in flight, keyed by the id of the run it will replace. */
+interface PendingRerun {
+  batchId: string;
+  url: string;
+  formFactor: FormFactor;
+}
+
+interface RerunTracking {
+  /** Runs whose device is being re-run right now. */
+  pending: ReadonlyMap<string, PendingRerun>;
+  /** Register a re-run of `row`'s device that just started as `batch`. */
+  start: (row: HistoryRow, batch: Batch) => void;
+}
+
+const NO_PENDING_RERUNS: ReadonlyMap<string, PendingRerun> = new Map();
+
+const RerunTrackingContext = createContext<RerunTracking>({
+  pending: NO_PENDING_RERUNS,
+  start: () => {},
+});
+
+/** Whether the run with id `runId` (null when there is no run) has a re-run in flight. */
+function useRerunPending(runId: string | null): boolean {
+  const { pending } = useContext(RerunTrackingContext);
+  return runId !== null && pending.has(runId);
+}
+
+/** Fades a device's scores while a fresh run for it is computing. */
+const PENDING_SCORES = "opacity-40 transition-opacity duration-500";
+
 /**
- * Per-run action cluster: re-run this single page (PRD §6 Phase 13), delete it,
- * plus the report links. Re-run and delete are available even for errored rows,
- * so they sit outside the report links (which collapse to `—` for failures).
+ * Invisible per-re-run watcher, mounted at the table root: subscribes to the
+ * batch's SSE stream and, once it settles, toasts the outcome, refreshes the
+ * server rows (which swaps in the new run for that device) and clears the
+ * pending marker. A stream that closes without completing means the batch is
+ * gone (server restart); that settles too, so the button never spins forever.
+ */
+function RerunWatcher({
+  runId,
+  rerun,
+  onSettled,
+}: {
+  runId: string;
+  rerun: PendingRerun;
+  onSettled: (runId: string) => void;
+}) {
+  const router = useRouter();
+  const { batch, isComplete, connection, error } = useBatchStream(rerun.batchId);
+  const settled = isComplete || (connection === "closed" && error !== null);
+
+  // Effect-event so the settle effect depends on `settled` alone and never
+  // re-fires on a batch snapshot or a toast/router identity change.
+  const settle = useEffectEvent(() => {
+    const job = batch?.jobs[0];
+    const device = rerun.formFactor;
+    if (job?.status === "done") {
+      toast.success(`Re-run complete — ${device} scores updated.`, {
+        description: rerun.url,
+      });
+    } else if (job?.status === "error") {
+      toast.error(`Re-run failed on ${device}.`, {
+        description: job.error?.message ?? rerun.url,
+      });
+    } else if (job?.status === "cancelled") {
+      toast.info("Re-run cancelled.", { description: rerun.url });
+    } else {
+      toast.error("Lost track of the re-run.", {
+        description: error ?? rerun.url,
+      });
+    }
+    router.refresh();
+    onSettled(runId);
+  });
+
+  useEffect(() => {
+    if (settled) settle();
+  }, [settled]);
+
+  return null;
+}
+
+/**
+ * Owns the table's in-flight re-runs: the pending map rows read to spin their
+ * button and fade their scores, plus one {@link RerunWatcher} per batch. Sits
+ * above the whole table, so a watch outlives the row that started it.
+ */
+function RerunTrackingProvider({ children }: { children: ReactNode }) {
+  const [pendingReruns, setPendingReruns] =
+    useState<ReadonlyMap<string, PendingRerun>>(NO_PENDING_RERUNS);
+
+  const start = useCallback((row: HistoryRow, batch: Batch) => {
+    setPendingReruns((prev) =>
+      new Map(prev).set(row.id, {
+        batchId: batch.id,
+        url: row.url,
+        formFactor: row.formFactor,
+      }),
+    );
+  }, []);
+  const settle = useCallback((runId: string) => {
+    setPendingReruns((prev) => {
+      if (!prev.has(runId)) return prev;
+      const next = new Map(prev);
+      next.delete(runId);
+      return next;
+    });
+  }, []);
+  const value = useMemo<RerunTracking>(
+    () => ({ pending: pendingReruns, start }),
+    [pendingReruns, start],
+  );
+
+  return (
+    <RerunTrackingContext value={value}>
+      {Array.from(pendingReruns, ([runId, rerun]) => (
+        <RerunWatcher
+          key={rerun.batchId}
+          runId={runId}
+          rerun={rerun}
+          onSettled={settle}
+        />
+      ))}
+      {children}
+    </RerunTrackingContext>
+  );
+}
+
+/**
+ * Per-run action cluster: re-run this single page on this device (PRD §6 Phase
+ * 13) without leaving the archive, delete it, plus the report links. Re-run and
+ * delete are available even for errored rows, so they sit outside the report
+ * links (which collapse to `—` for failures).
  */
 function RowActions({ row }: { row: HistoryRow }) {
+  const { pending, start } = useContext(RerunTrackingContext);
   return (
     <div className="flex items-center justify-end gap-0.5">
       <RerunBatchButton
@@ -598,6 +747,8 @@ function RowActions({ row }: { row: HistoryRow }) {
         source={row.source}
         concurrency={1}
         priorBatchId={row.batchId}
+        pending={pending.has(row.id)}
+        onCreated={(batch) => start(row, batch)}
       />
       <ReportLinks row={row} />
       <DeleteRunButton row={row} />
@@ -668,6 +819,7 @@ function HistoryRunCard({ entry }: { entry: CollapsedRun }) {
   const href = latest.finalUrl ?? latest.url;
   const isError = latest.status === "error";
   const diffs = entryScoreDiffs(entry);
+  const pending = useRerunPending(latest.id);
 
   return (
     <Card size="sm" className="ring-foreground/10">
@@ -715,13 +867,13 @@ function HistoryRunCard({ entry }: { entry: CollapsedRun }) {
             </span>
           </div>
         ) : (
-          <>
+          <div className={cn("flex flex-col gap-4", pending && PENDING_SCORES)}>
             <ScoreRings scores={latest.scores} size={48} />
             <ScoreTrendStrip diffs={diffs} />
             {latest.metrics ? (
               <CoreWebVitalsStrip metrics={latest.metrics} />
             ) : null}
-          </>
+          </div>
         )}
         {latest.environment ? (
           <EnvironmentBadge variant="compact" environment={latest.environment} />
@@ -799,6 +951,7 @@ function HistoryDeviceSection({
   const latest = entry?.latest ?? null;
   const isError = latest?.status === "error";
   const diffs = entry ? entryScoreDiffs(entry) : null;
+  const pending = useRerunPending(latest?.id ?? null);
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-2">
@@ -821,14 +974,14 @@ function HistoryDeviceSection({
           {latest.errorMessage ?? "Unknown error"}
         </p>
       ) : (
-        <>
+        <div className={cn("flex flex-col gap-3", pending && PENDING_SCORES)}>
           <ScoreRings scores={latest.scores} size={48} />
           <ScoreTrendStrip diffs={diffs} />
           {latest.metrics ? <CoreWebVitalsStrip metrics={latest.metrics} /> : null}
           {latest.environment ? (
             <EnvironmentBadge variant="compact" environment={latest.environment} />
           ) : null}
-        </>
+        </div>
       )}
       {latest ? (
         <div className="flex items-center justify-end">
@@ -917,6 +1070,7 @@ function HistoryDeviceHalf({
   // *table* display or the row's column alignment collapses.
   const stow = stowed ? "hidden xl:table-cell" : undefined;
   const latest = entry?.latest ?? null;
+  const pending = useRerunPending(latest?.id ?? null);
   if (!latest) {
     return (
       <>
@@ -952,7 +1106,7 @@ function HistoryDeviceHalf({
           key={category}
           score={latest.scores[category]}
           diff={diffs?.[category]}
-          className={cn(i === 0 && edge, stow)}
+          className={cn(i === 0 && edge, stow, pending && PENDING_SCORES)}
         />
       ))}
       <TableCell className={cn(COMPACT_CELL, "w-full text-right xl:w-auto", stow)}>
@@ -1166,6 +1320,7 @@ function FlatTableBody({
   sort: SortState;
   handleSort: (key: SortKey) => void;
 }) {
+  const { pending } = useContext(RerunTrackingContext);
   return (
     <div className="overflow-hidden rounded-lg border border-border/60">
       <Table>
@@ -1204,6 +1359,7 @@ function FlatTableBody({
             const row = entry.latest;
             const href = row.finalUrl ?? row.url;
             const diffs = entryScoreDiffs(entry);
+            const rerunning = pending.has(row.id);
             return (
               <TableRow key={row.id} className="hover:bg-muted/40">
                 <TableCell className={cn(COMPACT_CELL, "max-w-0")}>
@@ -1240,6 +1396,7 @@ function FlatTableBody({
                       key={category}
                       score={row.scores[category]}
                       diff={diffs?.[category]}
+                      className={cn(rerunning && PENDING_SCORES)}
                     />
                   ))
                 )}
@@ -1354,7 +1511,7 @@ interface HistoryTableProps {
  * the four category scores (nulls last), or run time. Filter by URL substring,
  * and/or flip the Needs-work toggle to hide everything that already scores 90+.
  */
-export function HistoryTable({ rows }: HistoryTableProps) {
+function HistoryTableView({ rows }: HistoryTableProps) {
   const filterId = useId();
   const { defaults, update } = useAuditDefaults();
   const view = defaults.resultsView;
@@ -1807,5 +1964,18 @@ export function HistoryTable({ rows }: HistoryTableProps) {
         )}
       </div>
     </TooltipProvider>
+  );
+}
+
+/**
+ * The History archive: the filter console plus one collapsible section per
+ * website, wrapped in the in-place re-run tracker so a row's re-run button can
+ * refresh the table without leaving the page.
+ */
+export function HistoryTable(props: HistoryTableProps) {
+  return (
+    <RerunTrackingProvider>
+      <HistoryTableView {...props} />
+    </RerunTrackingProvider>
   );
 }
