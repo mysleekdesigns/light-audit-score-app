@@ -80,7 +80,7 @@ invariants and preload the right skill:
 - **license-cloud-engineer** — **dormant**: only for `cloud/` work or a revived paid tier.
 - **ai-provider-engineer** — Phase D: AnalysisProvider seam, Claude/Ollama/OpenAI-compatible drivers.
 - **security-reviewer** (read-only) — run it after any change touching auth, secret handling,
-  the PSI or AI-provider key paths, the middleware/session token, or the local HTTP server.
+  the PSI or AI-provider key paths, the proxy (request gate)/session token, or the local HTTP server.
   (Licence/billing triggers only apply inside `cloud/`.)
 
 ## Rules & hooks
@@ -122,7 +122,7 @@ A typical phase of work threads all of the above into one chain:
    table above): secret guards on writes/commands, `.env*`/`.mcp.json` + force-push blocks on
    Bash, and `eslint --fix` after every TS edit.
 6. **`security-reviewer` gates the diff.** After any change touching auth, secret handling, the
-   middleware/session token, or the local HTTP server, run it (read-only) and resolve its
+   proxy (request gate)/session token, or the local HTTP server, run it (read-only) and resolve its
    Critical/High findings **before** the phase is considered done.
 
 In short: **skills say how · agents carry context and preload skills · rules enforce invariants

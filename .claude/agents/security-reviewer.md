@@ -1,6 +1,6 @@
 ---
 name: security-reviewer
-description: Read-only security reviewer for LightAudit — secret handling (.env), the local HTTP server and its optional session token, the analysis/research MCP seam, and dormant cloud/ licensing code. Use proactively after changes touching auth, secret handling, the middleware/session token, the local HTTP server, or anything under cloud/.
+description: Read-only security reviewer for LightAudit — secret handling (.env), the local HTTP server and its optional session token, the analysis/research MCP seam, and dormant cloud/ licensing code. Use proactively after changes touching auth, secret handling, the proxy (request gate)/session token, the local HTTP server, or anything under cloud/.
 tools: Read, Grep, Glob, Bash
 model: inherit
 ---

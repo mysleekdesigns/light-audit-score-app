@@ -1,5 +1,5 @@
 /**
- * Pure helpers behind `src/middleware.ts` — the local server's request gate.
+ * Pure helpers behind `src/proxy.ts` — the local server's request gate.
  *
  * Edge-runtime safe (no Node built-ins) and dependency-free, so the checks that
  * decide who may talk to the local API can be unit-tested without booting Next.

@@ -1,5 +1,5 @@
 /**
- * Next.js middleware — the local server's request gate.
+ * Next.js proxy (`src/proxy.ts`, Next 16's name for middleware) — the local server's request gate.
  *
  * The server binds 127.0.0.1, but "local" is not "private": any web page open
  * in the user's browser can fire requests at 127.0.0.1:<port>, a page whose
@@ -155,7 +155,7 @@ function stripTokenRedirect(request: NextRequest): NextResponse | null {
   }
 }
 
-export function middleware(request: NextRequest): NextResponse {
+export function proxy(request: NextRequest): NextResponse {
   // 1. Host allow-list — before anything else, for every route.
   if (!isAllowedHost(request.headers.get("host"), process.env[ALLOWED_HOSTS_ENV])) {
     return forbiddenHost();

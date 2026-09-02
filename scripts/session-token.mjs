@@ -1,6 +1,6 @@
 /**
  * The local server's per-install session token — resolved by `scripts/start.mjs`
- * and handed to the server as `LH_SESSION_TOKEN`, which `src/middleware.ts`
+ * and handed to the server as `LH_SESSION_TOKEN`, which `src/proxy.ts`
  * requires on every route.
  *
  * Resolution order:

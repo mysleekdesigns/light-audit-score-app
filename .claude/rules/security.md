@@ -22,12 +22,12 @@
   forwards a secret.
 - The local app server binds `127.0.0.1` only and requires the per-install session token on
   every route. `scripts/start.mjs` resolves the token (`LH_SESSION_TOKEN`, else generated into
-  `<data dir>/session-token`, mode 0600) and exports it; `src/middleware.ts` also refuses any
+  `<data dir>/session-token`, mode 0600) and exports it; `src/proxy.ts` also refuses any
   `Host` header that is not loopback or in `LH_ALLOWED_HOSTS` (DNS-rebinding defence). Keep the
-  gate's helpers in `src/lib/http/localGate.ts` edge-safe and unit-tested; never reflect request
+  gate's helpers in `src/lib/http/localGate.ts` dependency-free (no Node built-ins) and unit-tested; never reflect request
   data into the 401/403 bodies.
 - Any new license-cloud endpoint gets zod input validation and rate limiting by default;
   Stripe webhooks are always signature-verified and idempotent.
 - There is NO Electron in this project — do not reintroduce it, or any packaging/signing step.
-- After changing auth, secret handling, the middleware/session token, or the local HTTP server: have the `security-reviewer` agent review the diff before
+- After changing auth, secret handling, the proxy (request gate)/session token, or the local HTTP server: have the `security-reviewer` agent review the diff before
   considering the work done.

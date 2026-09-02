@@ -7,7 +7,7 @@
  * with a bare "could not find a production build" error. So this builds on first
  * run, then starts. Subsequent starts skip the build and come up immediately.
  *
- * It also arms the local server's gate (see `src/middleware.ts`): a per-install
+ * It also arms the local server's gate (see `src/proxy.ts`): a per-install
  * session token is resolved here (scripts/session-token.mjs), exported to the
  * server as `LH_SESSION_TOKEN`, and printed as a `?token=` link — which is
  * opened in the browser, since the app only answers to a client that has
@@ -81,7 +81,7 @@ const setting = (key) => process.env[key]?.trim() || dotEnv[key]?.trim() || unde
 const port = setting("PORT") ?? "3000";
 // Bind loopback by default: this server runs audits and reads local files.
 // Exposing it on 0.0.0.0 should be a deliberate act, not the default — and even
-// then the middleware only answers to Host headers listed in LH_ALLOWED_HOSTS.
+// then the proxy (request gate) only answers to Host headers listed in LH_ALLOWED_HOSTS.
 const host = setting("HOSTNAME") ?? setting("HOST") ?? "127.0.0.1";
 const dataDir = path.resolve(root, setting("LH_DATA_DIR") ?? "data");
 
