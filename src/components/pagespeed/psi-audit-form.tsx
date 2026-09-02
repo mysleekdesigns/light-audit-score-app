@@ -79,21 +79,20 @@ import {
   PSI_REQUESTS_PER_MINUTE,
   psiRequestCost,
 } from "@/lib/pagespeed/quota";
-import {
-  DEFAULT_CONCURRENCY,
-  MAX_CONCURRENCY,
-  MIN_CONCURRENCY,
-} from "@/lib/queue/types";
+import { MAX_CONCURRENCY, MIN_CONCURRENCY } from "@/lib/queue/types";
 import type { ScheduleTarget } from "@/lib/schedules/types";
 import { selectedUrls, type DiscoverResult } from "@/lib/crawl/types";
 import { samplePerTemplate } from "@/lib/crawl/template";
 import { useAuditDefaults } from "@/hooks/useAuditDefaults";
+import { usePsiAuditDraft } from "@/hooks/useAuditDraft";
+import { PSI_LOCALE_DEFAULT as LOCALE_DEFAULT } from "@/lib/settings/drafts";
 import { CATEGORY_LABELS } from "@/lib/scores";
 
-/** Sentinel `<Select>` value for "no locale override" (PSI default). */
-const LOCALE_DEFAULT = "default";
-
-/** A small curated set of PSI report locales (the API accepts many more). */
+/**
+ * A small curated set of PSI report locales (the API accepts many more).
+ * `LOCALE_DEFAULT` is the "no locale override" sentinel, shared with the draft
+ * contract so a restored draft and this list agree.
+ */
 const LOCALES: { value: string; label: string }[] = [
   { value: LOCALE_DEFAULT, label: "Default locale" },
   { value: "en_US", label: "English (US)" },
@@ -140,22 +139,56 @@ export function PsiAuditForm({
   const runsId = useId();
   const concurrencyId = useId();
 
-  const [tab, setTab] = useState<"paste" | "crawl">("paste");
-  const [text, setText] = useState("");
-  // Crawl discovery state, lifted so the curation list renders full-width in the
-  // workspace below (mirrors NewAuditForm). The panel only triggers discovery.
-  const [crawlResult, setCrawlResult] = useState<DiscoverResult | null>(null);
-  const [crawlSelected, setCrawlSelected] = useState<Set<string>>(new Set());
-  const [workspaceView, setWorkspaceView] = useState<
-    "discovered" | "results" | null
-  >(null);
-  const [device, setDevice] = useState<DeviceSelection>("mobile");
-  const [categories, setCategories] = useState<LighthouseCategory[]>([
-    ...LIGHTHOUSE_CATEGORIES,
-  ]);
-  const [locale, setLocale] = useState<string>(LOCALE_DEFAULT);
-  const [runs, setRuns] = useState<number>(3);
-  const [concurrency, setConcurrency] = useState<number>(DEFAULT_CONCURRENCY);
+  // The whole editable form — targets (URL list, active tab, discovered pages +
+  // selection, last workspace intent) AND this form's dials — is a per-tab draft
+  // rather than component state, so leaving the page and coming back (or
+  // reloading) shows it exactly as it was left while the batch keeps running
+  // (see `@/lib/settings/drafts`). Unlike the local form, these dials aren't
+  // remembered in the shared audit defaults, so the draft carries them. Crawl
+  // state is lifted so the curation list renders full-width in the workspace
+  // below (mirrors NewAuditForm); the panel only triggers discovery.
+  const [draft, updateDraft] = usePsiAuditDraft();
+  const { tab, text, workspaceView, device, categories, locale, runs, concurrency } =
+    draft;
+  const crawlResult = draft.crawl?.result ?? null;
+  const crawlSelected = useMemo<Set<string>>(
+    () => new Set(draft.crawl?.selected ?? []),
+    [draft.crawl],
+  );
+  const setTab = useCallback(
+    (next: "paste" | "crawl") => updateDraft((d) => ({ ...d, tab: next })),
+    [updateDraft],
+  );
+  const setText = useCallback(
+    (next: string) => updateDraft((d) => ({ ...d, text: next })),
+    [updateDraft],
+  );
+  const setWorkspaceView = useCallback(
+    (next: "discovered" | "results") =>
+      updateDraft((d) => ({ ...d, workspaceView: next })),
+    [updateDraft],
+  );
+  const setDevice = useCallback(
+    (next: DeviceSelection) => updateDraft((d) => ({ ...d, device: next })),
+    [updateDraft],
+  );
+  const setCategories = useCallback(
+    (next: LighthouseCategory[]) =>
+      updateDraft((d) => ({ ...d, categories: next })),
+    [updateDraft],
+  );
+  const setLocale = useCallback(
+    (next: string) => updateDraft((d) => ({ ...d, locale: next })),
+    [updateDraft],
+  );
+  const setRuns = useCallback(
+    (next: number) => updateDraft((d) => ({ ...d, runs: next })),
+    [updateDraft],
+  );
+  const setConcurrency = useCallback(
+    (next: number) => updateDraft((d) => ({ ...d, concurrency: next })),
+    [updateDraft],
+  );
   const [scheduleOpen, setScheduleOpen] = useState(false);
   // Per-template sampling cap (0 = All) — the one persisted, cross-tool default
   // this lean form shares with the local audit form. Hydrated below once the
@@ -208,11 +241,16 @@ export function PsiAuditForm({
 
   const handleDiscover = useCallback(
     (result: DiscoverResult) => {
-      setCrawlResult(result);
-      setCrawlSelected(samplePerTemplate(result.urls, pagesPerTemplate));
-      setWorkspaceView("discovered");
+      updateDraft((d) => ({
+        ...d,
+        crawl: {
+          result,
+          selected: [...samplePerTemplate(result.urls, pagesPerTemplate)],
+        },
+        workspaceView: "discovered",
+      }));
     },
-    [pagesPerTemplate],
+    [pagesPerTemplate, updateDraft],
   );
 
   // Re-sample the discovered set when the cap changes, and remember the choice.
@@ -220,39 +258,69 @@ export function PsiAuditForm({
     (n: number) => {
       setPagesPerTemplate(n);
       update({ pagesPerTemplate: n });
-      if (crawlResult) setCrawlSelected(samplePerTemplate(crawlResult.urls, n));
+      updateDraft((d) =>
+        d.crawl
+          ? {
+              ...d,
+              crawl: {
+                ...d.crawl,
+                selected: [...samplePerTemplate(d.crawl.result.urls, n)],
+              },
+            }
+          : d,
+      );
     },
-    [crawlResult, update],
+    [update, updateDraft],
   );
 
-  const toggleCrawlUrl = useCallback((url: string) => {
-    setCrawlSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(url)) next.delete(url);
-      else next.add(url);
-      return next;
-    });
-  }, []);
+  const toggleCrawlUrl = useCallback(
+    (url: string) => {
+      updateDraft((d) => {
+        if (!d.crawl) return d;
+        const selected = d.crawl.selected.includes(url)
+          ? d.crawl.selected.filter((u) => u !== url)
+          : [...d.crawl.selected, url];
+        return { ...d, crawl: { ...d.crawl, selected } };
+      });
+    },
+    [updateDraft],
+  );
 
-  const removeCrawlUrl = useCallback((url: string) => {
-    setCrawlResult((prev) =>
-      prev ? { ...prev, urls: prev.urls.filter((u) => u.url !== url) } : prev,
-    );
-    setCrawlSelected((prev) => {
-      const next = new Set(prev);
-      next.delete(url);
-      return next;
-    });
-  }, []);
+  const removeCrawlUrl = useCallback(
+    (url: string) => {
+      updateDraft((d) =>
+        d.crawl
+          ? {
+              ...d,
+              crawl: {
+                result: {
+                  ...d.crawl.result,
+                  urls: d.crawl.result.urls.filter((u) => u.url !== url),
+                },
+                selected: d.crawl.selected.filter((u) => u !== url),
+              },
+            }
+          : d,
+      );
+    },
+    [updateDraft],
+  );
 
   const toggleAllCrawlUrls = useCallback(() => {
-    setCrawlSelected((prev) => {
-      if (!crawlResult || crawlResult.urls.length === 0) return prev;
-      return prev.size >= crawlResult.urls.length
-        ? new Set()
-        : new Set(crawlResult.urls.map((u) => u.url));
+    updateDraft((d) => {
+      if (!d.crawl || d.crawl.result.urls.length === 0) return d;
+      return {
+        ...d,
+        crawl: {
+          ...d.crawl,
+          selected:
+            d.crawl.selected.length >= d.crawl.result.urls.length
+              ? []
+              : d.crawl.result.urls.map((u) => u.url),
+        },
+      };
     });
-  }, [crawlResult]);
+  }, [updateDraft]);
 
   const crawlSelection = useMemo<DiscoverySelection | null>(
     () =>

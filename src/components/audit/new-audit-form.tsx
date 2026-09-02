@@ -55,6 +55,7 @@ import {
   MATCH_DEVTOOLS_PRESET,
 } from "@/lib/settings/defaults";
 import { useAuditDefaults } from "@/hooks/useAuditDefaults";
+import { useLocalAuditDraft } from "@/hooks/useAuditDraft";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -154,18 +155,35 @@ export function NewAuditForm({
   // adopt persisted values once `loaded` flips true (one-time hydration effect).
   const { defaults, update, loaded } = useAuditDefaults();
 
-  const [tab, setTab] = useState<"paste" | "crawl">("paste");
-  const [text, setText] = useState("");
-  // Crawl discovery state, lifted out of CrawlPanel so the curation list can
-  // render full-width in the workspace below the card. The panel only triggers
-  // discovery (reporting each result up); this form owns the result + selection.
-  const [crawlResult, setCrawlResult] = useState<DiscoverResult | null>(null);
-  const [crawlSelected, setCrawlSelected] = useState<Set<string>>(new Set());
+  // Targets draft — the URL list, active tab, discovered pages + selection and
+  // the last workspace intent — lives in a per-tab store rather than component
+  // state, so leaving this page and coming back (or reloading) shows the form
+  // exactly as it was left while the batch keeps running (see
+  // `@/lib/settings/drafts`). Crawl state is lifted out of CrawlPanel so the
+  // curation list can render full-width in the workspace below the card; the
+  // panel only triggers discovery (reporting each result up).
+  const [draft, updateDraft] = useLocalAuditDraft();
+  const { tab, text, workspaceView } = draft;
+  const crawlResult = draft.crawl?.result ?? null;
+  const crawlSelected = useMemo<Set<string>>(
+    () => new Set(draft.crawl?.selected ?? []),
+    [draft.crawl],
+  );
+  const setTab = useCallback(
+    (next: "paste" | "crawl") => updateDraft((d) => ({ ...d, tab: next })),
+    [updateDraft],
+  );
+  const setText = useCallback(
+    (next: string) => updateDraft((d) => ({ ...d, text: next })),
+    [updateDraft],
+  );
   // Which readout the workspace shows. Set by the user's last intent (Discover /
   // Run); null until they act. Resolved against `hasBatch` + `tab` below.
-  const [workspaceView, setWorkspaceView] = useState<
-    "discovered" | "results" | null
-  >(null);
+  const setWorkspaceView = useCallback(
+    (next: "discovered" | "results") =>
+      updateDraft((d) => ({ ...d, workspaceView: next })),
+    [updateDraft],
+  );
   // Device selection (Phase 12): "mobile" | "desktop" | "both". "both" fans each
   // URL out into a mobile + a desktop job server-side.
   const [device, setDevice] = useState<DeviceSelection>("mobile");
@@ -237,11 +255,16 @@ export function NewAuditForm({
   // workspace at the discovered table.
   const handleDiscover = useCallback(
     (result: DiscoverResult) => {
-      setCrawlResult(result);
-      setCrawlSelected(samplePerTemplate(result.urls, pagesPerTemplate));
-      setWorkspaceView("discovered");
+      updateDraft((d) => ({
+        ...d,
+        crawl: {
+          result,
+          selected: [...samplePerTemplate(result.urls, pagesPerTemplate)],
+        },
+        workspaceView: "discovered",
+      }));
     },
-    [pagesPerTemplate],
+    [pagesPerTemplate, updateDraft],
   );
 
   // Changing the cap re-samples the discovered set from scratch (an explicit
@@ -251,41 +274,71 @@ export function NewAuditForm({
     (n: number) => {
       setPagesPerTemplate(n);
       update({ pagesPerTemplate: n });
-      if (crawlResult) setCrawlSelected(samplePerTemplate(crawlResult.urls, n));
+      updateDraft((d) =>
+        d.crawl
+          ? {
+              ...d,
+              crawl: {
+                ...d.crawl,
+                selected: [...samplePerTemplate(d.crawl.result.urls, n)],
+              },
+            }
+          : d,
+      );
     },
-    [crawlResult, update],
+    [update, updateDraft],
   );
 
-  const toggleCrawlUrl = useCallback((url: string) => {
-    setCrawlSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(url)) next.delete(url);
-      else next.add(url);
-      return next;
-    });
-  }, []);
+  const toggleCrawlUrl = useCallback(
+    (url: string) => {
+      updateDraft((d) => {
+        if (!d.crawl) return d;
+        const selected = d.crawl.selected.includes(url)
+          ? d.crawl.selected.filter((u) => u !== url)
+          : [...d.crawl.selected, url];
+        return { ...d, crawl: { ...d.crawl, selected } };
+      });
+    },
+    [updateDraft],
+  );
 
-  const removeCrawlUrl = useCallback((url: string) => {
-    // Drop it from both the visible set and the selection so it can't return.
-    setCrawlResult((prev) =>
-      prev ? { ...prev, urls: prev.urls.filter((u) => u.url !== url) } : prev,
-    );
-    setCrawlSelected((prev) => {
-      const next = new Set(prev);
-      next.delete(url);
-      return next;
-    });
-  }, []);
+  const removeCrawlUrl = useCallback(
+    (url: string) => {
+      // Drop it from both the visible set and the selection so it can't return.
+      updateDraft((d) =>
+        d.crawl
+          ? {
+              ...d,
+              crawl: {
+                result: {
+                  ...d.crawl.result,
+                  urls: d.crawl.result.urls.filter((u) => u.url !== url),
+                },
+                selected: d.crawl.selected.filter((u) => u !== url),
+              },
+            }
+          : d,
+      );
+    },
+    [updateDraft],
+  );
 
   const toggleAllCrawlUrls = useCallback(() => {
-    setCrawlSelected((prev) => {
-      if (!crawlResult || crawlResult.urls.length === 0) return prev;
-      const all = crawlResult.urls.length;
-      return prev.size >= all
-        ? new Set()
-        : new Set(crawlResult.urls.map((u) => u.url));
+    updateDraft((d) => {
+      if (!d.crawl || d.crawl.result.urls.length === 0) return d;
+      const all = d.crawl.result.urls.length;
+      return {
+        ...d,
+        crawl: {
+          ...d.crawl,
+          selected:
+            d.crawl.selected.length >= all
+              ? []
+              : d.crawl.result.urls.map((u) => u.url),
+        },
+      };
     });
-  }, [crawlResult]);
+  }, [updateDraft]);
 
   // The single cohesive object the workspace's discovered view consumes.
   const crawlSelection = useMemo<DiscoverySelection | null>(

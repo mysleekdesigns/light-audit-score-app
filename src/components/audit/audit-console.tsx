@@ -3,54 +3,28 @@
 /**
  * Client orchestrator for the New Audit flow (PRD §6 Phase 3).
  *
- * Owns the interactive state that ties the three Phase-3 slices together:
- *  - renders {@link NewAuditForm}; on submit it POSTs via `createBatch`, stores the
- *    returned batch id, and subscribes to live progress with {@link useBatchStream};
- *  - renders {@link AuditResults} (the live per-URL grid) off the streamed batch;
- *  - opens {@link AuditDetailSheet} for a selected job;
- *  - raises sonner toasts on submit failure and on batch completion.
+ * The audit session itself — the watched batch, its live SSE stream, the
+ * submit / cancel / archive / clear actions and the completion toast — lives in
+ * {@link AuditSessionProvider} at the root layout, so it survives navigating
+ * away from `/` and back (and a reload, via its persisted batch pointer). This
+ * component is the page-level view over that session:
+ *  - renders {@link NewAuditForm}, wiring its submit to the session;
+ *  - renders {@link AuditResults} (the live per-URL grid) off the session's batch;
+ *  - opens {@link AuditDetailSheet} for a selected job (the one piece of state
+ *    that is genuinely page-local).
  *
  * `initialBatchId` (PRD §6 Phase 13) lets a Re-run elsewhere (Batch summary /
- * History) deep-link here via `/?watch=<batchId>` to watch the re-run stream live
- * — it just seeds the watched batch; the SSE handler replays a snapshot on connect.
+ * History) deep-link here via `/?watch=<batchId>` to watch the re-run stream
+ * live — it hands the id to the session, which persists it like any other run.
  */
 
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
-import { toast } from "sonner";
+import { useEffect, useMemo, useState } from "react";
 
 import { AuditDetailSheet } from "@/components/audit/audit-detail-sheet";
 import { AuditResults } from "@/components/audit/audit-results";
+import { useAuditSession } from "@/components/audit/audit-session-provider";
 import { NewAuditForm } from "@/components/audit/new-audit-form";
-import { useBatchStream } from "@/hooks/useBatchStream";
-import {
-  ApiError,
-  cancelBatch,
-  createBatch,
-  deleteBatch,
-  getBatch,
-  type CreateBatchRequest,
-} from "@/lib/client/auditClient";
-import type { AuditJob, BatchStatus } from "@/lib/queue/types";
-
-/**
- * localStorage key holding the id of the batch currently being watched. Persisted
- * so navigating away from `/` and back reconnects to the still-running server-side
- * batch (the queue keeps running regardless of the client) instead of showing an
- * empty form. The pointer now survives completion (the reconnect effect restores a
- * finished run too); it is dropped only on an explicit dismissal (Phase 16's
- * Archive/Clear) or when a new run overwrites it.
- */
-const ACTIVE_BATCH_KEY = "lh:activeBatchId";
-
-/** Terminal batch states — a batch in one of these has finished server-side. */
-const TERMINAL_BATCH_STATUSES = new Set<BatchStatus>([
-  "completed",
-  "completed_with_errors",
-  "cancelled",
-]);
-function isTerminalBatchStatus(status: BatchStatus): boolean {
-  return TERMINAL_BATCH_STATUSES.has(status);
-}
+import type { AuditJob } from "@/lib/queue/types";
 
 export function AuditConsole({
   initialBatchId,
@@ -58,137 +32,26 @@ export function AuditConsole({
   /** Seed a batch to watch live (e.g. a Re-run deep-linked via `/?watch=<id>`). */
   initialBatchId?: string;
 } = {}) {
-  const [batchId, setBatchId] = useState<string | null>(initialBatchId ?? null);
-  const [submitting, setSubmitting] = useState(false);
-  const [cancelling, setCancelling] = useState(false);
+  const { state, actions } = useAuditSession("local");
+  const { batch, batchId, connection, running, cancelling } = state;
+  const { watch } = actions;
+
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
 
-  const { batch, connection, isComplete } = useBatchStream(batchId);
-
-  // Tracks the batch id we've already toasted completion for, so the toast fires
-  // exactly once per batch. The persisted active-batch id is intentionally KEPT
-  // through completion so the reconnect effect can restore a finished run on return;
-  // it is dropped only on an explicit dismissal (Phase 16's Archive/Clear) or when a
-  // new run overwrites it.
-  const toastedFor = useRef<string | null>(null);
-
-  // Restoring a finished run must not re-fire the completion toast. This effect-event
-  // attaches the watched batch and, when it's already terminal, pre-seeds the toast
-  // guard first (a still-running batch is left unseeded so it still toasts on its
-  // eventual completion). Kept as a useEffectEvent so the guard mutation stays out of
-  // reactive effect scope and shares the single `toastedFor` ref with the toast effect.
-  const onReconnect = useEffectEvent((restored: { status: BatchStatus }, stored: string) => {
-    if (isTerminalBatchStatus(restored.status)) {
-      toastedFor.current = stored;
-    }
-    setBatchId(stored);
-  });
-
-  // Reconnect on mount: if we weren't deep-linked to a batch (`?watch=`), look for
-  // one we were watching before navigating away and re-attach to it — but only if
-  // it still exists server-side (a restart drops the in-memory queue). Validating
-  // with `getBatch` up front avoids EventSource's permanent-failure-on-404 quirk.
+  // Deep link: hand the batch to the session. `watch` is stable, so this runs
+  // once per distinct id — never again on unrelated session changes.
   useEffect(() => {
-    if (initialBatchId) return;
-    const stored = localStorage.getItem(ACTIVE_BATCH_KEY);
-    if (!stored) return;
-    let active = true;
-    getBatch(stored)
-      .then((restored) => {
-        if (active) onReconnect(restored, stored);
-      })
-      .catch(() => {
-        localStorage.removeItem(ACTIVE_BATCH_KEY);
-      });
-    return () => {
-      active = false;
-    };
-    // Run once on mount; `initialBatchId` is a stable prop.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (initialBatchId) watch(initialBatchId);
+  }, [initialBatchId, watch]);
 
-  useEffect(() => {
-    if (!isComplete || !batch || toastedFor.current === batch.id) return;
-    toastedFor.current = batch.id;
-    const { done, error, total } = batch.counts;
-    if (batch.status === "cancelled") {
-      toast.info(`Audit cancelled — ${done} of ${total} pages scored before stopping.`);
-    } else if (error === 0) {
-      toast.success(`Audit complete — ${done}/${total} pages scored.`);
-    } else if (done === 0) {
-      toast.error(`Audit failed — all ${total} pages errored.`);
-    } else {
-      toast.warning(
-        `Audit complete — ${done} scored, ${error} failed of ${total}.`,
-      );
-    }
-  }, [isComplete, batch]);
-
-  async function handleSubmit(request: CreateBatchRequest) {
-    setSubmitting(true);
-    try {
-      const created = await createBatch(request);
-      toastedFor.current = null;
-      setSelectedId(null);
-      setSheetOpen(false);
-      setBatchId(created.id);
-      // Persist so navigating away and back reconnects to this run.
-      localStorage.setItem(ACTIVE_BATCH_KEY, created.id);
-      toast.info(
-        `Queued ${created.jobs.length} ${created.jobs.length === 1 ? "page" : "pages"} at concurrency ${created.concurrency}.`,
-      );
-    } catch (err) {
-      const message =
-        err instanceof ApiError
-          ? err.issues[0]?.message ?? err.message
-          : "Could not start the audit. Is the dev server running?";
-      toast.error(message);
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function handleCancel() {
-    if (!batchId || cancelling) return;
-    setCancelling(true);
-    try {
-      // The server flips the batch to `cancelled` and emits `batch-cancelled`,
-      // which the SSE stream delivers — that drives the UI to terminal. We don't
-      // optimistically mutate here. The active-batch pointer is intentionally kept
-      // (a cancelled batch is terminal/restorable); it clears on dismissal or a new run.
-      await cancelBatch(batchId);
-    } catch (err) {
-      const message =
-        err instanceof ApiError ? err.message : "Could not cancel the audit.";
-      toast.error(message);
-    } finally {
-      setCancelling(false);
-    }
-  }
-
-  // Archive: dismiss a finished batch from the console without touching the
-  // backend — the run stays in History. Drops the active-batch pointer and resets
-  // the detail sheet so the console returns to a clean form.
-  function handleArchive() {
-    setBatchId(null);
-    localStorage.removeItem(ACTIVE_BATCH_KEY);
+  // A new run (or a dismissal) invalidates the detail-sheet selection. Reset it
+  // during render, keyed on the batch id — React's adjust-state-on-change pattern.
+  const [trackedBatchId, setTrackedBatchId] = useState(batchId);
+  if (batchId !== trackedBatchId) {
+    setTrackedBatchId(batchId);
     setSelectedId(null);
     setSheetOpen(false);
-  }
-
-  // Clear: destructively delete a finished batch from History, then reset the
-  // console exactly like Archive. Left to throw on failure so the AlertDialog in
-  // AuditResults catches it and toasts; the destructive confirm itself lives in
-  // that view layer (mirroring DeleteRunButton in history-table.tsx).
-  async function handleClear() {
-    if (!batchId) return;
-    await deleteBatch(batchId);
-    setBatchId(null);
-    localStorage.removeItem(ACTIVE_BATCH_KEY);
-    setSelectedId(null);
-    setSheetOpen(false);
-    toast.success("Run cleared from history.");
   }
 
   // Latest completed run's host benchmark, for the form's Calibrate affordance
@@ -206,9 +69,6 @@ export function AuditConsole({
     }
     return best?.index ?? null;
   }, [batch]);
-
-  // A batch is "in flight" while we have one that hasn't reached a terminal state.
-  const running = submitting || (batchId !== null && !isComplete);
 
   const selectedJob: AuditJob | null =
     (selectedId && batch?.jobs.find((j) => j.id === selectedId)) || null;
@@ -229,7 +89,7 @@ export function AuditConsole({
   return (
     <div className="flex flex-col gap-8">
       <NewAuditForm
-        onSubmit={handleSubmit}
+        onSubmit={actions.submit}
         isRunning={running}
         latestBenchmarkIndex={latestBenchmarkIndex}
         hasBatch={batch != null}
@@ -239,10 +99,10 @@ export function AuditConsole({
               batch={batch}
               connection={connection}
               onSelect={handleSelect}
-              onCancel={handleCancel}
+              onCancel={actions.cancel}
               cancelling={cancelling}
-              onArchive={handleArchive}
-              onClear={handleClear}
+              onArchive={actions.archive}
+              onClear={actions.clear}
             />
           ) : null
         }

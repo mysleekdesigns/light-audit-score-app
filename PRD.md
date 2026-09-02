@@ -1029,6 +1029,20 @@ snapshot). Since every run is already persisted to SQLite (`runs`/`batches`) + r
       restored on refresh, no duplicate toast, zero console errors. Lint, typecheck, build, and **459 unit
       tests** all green (Phase 15 added 4 `reconstructBatch` round-trip tests + 2 route-fallback tests).*
 
+> **Addendum (2026-09-02) — the session moved up to the root layout.** The per-page reconnect described
+> above (validate the stored id, re-attach, replay a snapshot) still worked, but it ran *after* the console
+> remounted, and everything else on the page — the pasted URL list, the discovered pages + selection, the
+> PageSpeed dials, and a `?watch=` deep link (which never wrote the pointer) — was lost on every route change.
+> The watched batch, its `useBatchStream` subscription, the submit/cancel/archive/clear actions and the
+> completion toast now live in `AuditSessionProvider` (`src/components/audit/audit-session-provider.tsx`),
+> mounted once in `src/app/layout.tsx`: Next.js layouts persist across navigation, so the SSE stream never
+> drops, the console renders from live state the instant it mounts (no empty-form flash, no API round-trip),
+> and the toast fires on whatever page the user is on. The `localStorage` pointer keys are unchanged and still
+> cover a reload / fresh tab; `?watch=` deep links now persist through the same path. Each form's editable
+> state is a per-tab draft (`src/lib/settings/drafts.ts` + `src/hooks/useAuditDraft.ts`, `sessionStorage`,
+> debounced), so the form comes back exactly as it was left — still **no client state library and no result
+> blob**; the database remains the source of truth for results.
+
 ### Phase 16 — Archive & Clear dismissal controls
 **Why:** with results now persisting across navigation (Phase 15), the user needs explicit ways to dismiss
 them. Per the agreed model: **Archive** = remove from the console view but **keep** the run in History
