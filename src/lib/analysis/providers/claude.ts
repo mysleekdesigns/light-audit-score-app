@@ -24,6 +24,7 @@ import {
 } from "@/lib/analysis/providers/researchMcp";
 import type { AnalysisDriver, DriverResult, DriverRunArgs } from "@/lib/analysis/providers/types";
 import { parseFixes, splitDiagnosisAndFixes } from "@/lib/analysis/structured";
+import { redactUrlsInText } from "@/lib/redactUrl";
 import { FIXES_OPEN } from "@/lib/analysis/types";
 
 /** Built-in tools the agent may use (research comes from the MCP server, not these). */
@@ -70,6 +71,19 @@ function partialTextDelta(event: unknown): string | null {
 }
 
 /**
+ * Render an MCP server's status for a user-facing warning.
+ *
+ * The SDK types this as a bare `string`, and the warning is persisted to
+ * `analyses.warnings` and rendered in the UI, so bound it rather than passing it
+ * through: a short lower-case token describing a server the USER declared.
+ */
+function describeMcpStatus(status: string | undefined): string {
+  if (status === undefined) return "not reported";
+  const cleaned = status.toLowerCase().replace(/[^a-z0-9 _-]/g, "").trim();
+  return cleaned ? cleaned.slice(0, 32) : "unknown";
+}
+
+/**
  * Whether an agent failure is the user hitting their own plan limit (Claude's
  * rolling 5-hour window) rather than something broken — worth a friendly
  * "try again later" instead of a red error.
@@ -80,10 +94,25 @@ function isRateLimit(message: string): boolean {
 
 /** Run one analysis on the Claude Agent SDK. */
 async function run(args: DriverRunArgs): Promise<DriverResult> {
-  const { provider, systemPrompt, userPrompt, signal, onEvent } = args;
+  const { provider, systemPrompt, userPrompt, webResearch, signal, onEvent } = args;
 
   const research = loadResearchMcpConfig();
   const warnings: string[] = [];
+  /**
+   * Whether the research tools are genuinely in the agent's hands — the gate on
+   * whether a citation is believable.
+   *
+   * Starts `false` and is only raised by POSITIVE evidence in the init message
+   * below: the engine prompted for research, a server was declared, and the SDK
+   * reports it connected. Inferring it from the absence of a failure would trust
+   * every gap — a config that changed between the engine's read and ours, a
+   * server the SDK never lists, an init frame that never arrives — and each of
+   * those is a run with no fetch tool whose invented URLs would be persisted as
+   * sources.
+   */
+  let researchAvailable = false;
+  /** Whether the session ever reported its MCP state — see the `result` branch. */
+  let sawInit = false;
 
   // Bridge an external AbortSignal (client disconnect / timeout) into the SDK.
   const abortController = new AbortController();
@@ -169,19 +198,37 @@ async function run(args: DriverRunArgs): Promise<DriverResult> {
               }))
           : [];
         const researchStatus = mcp.find((s) => s.name === RESEARCH_MCP_NAME);
-        if (!research) {
-          warnings.push(
-            "No research MCP server configured — fixes may be ungrounded.",
-          );
-        } else if (researchStatus && researchStatus.status !== "connected") {
-          warnings.push(
-            `Research MCP server did not connect (status: ${researchStatus.status}) — fixes may be ungrounded.`,
-          );
+        // Guarded: a resumed or compacted session can init twice, and the tier
+        // is settled by the first one.
+        if (!sawInit) {
+          sawInit = true;
+          researchAvailable =
+            webResearch && research !== null && researchStatus?.status === "connected";
+          if (!research) {
+            // Not a failure, and not a surprise to the model either: the engine
+            // already prompted it as a data-only analyst, so say what the reader
+            // actually got rather than hedging with "may be".
+            warnings.push(
+              "No research MCP server configured — this analysis comes from the Lighthouse data alone, with no cited sources.",
+            );
+          } else if (!researchAvailable) {
+            // A server was declared but its tools are not in hand. Two ways that
+            // happens, and they need different words: saying "did not connect"
+            // about a server we just read as `connected` would flatly contradict
+            // the status in the same sentence.
+            warnings.push(
+              researchStatus?.status === "connected"
+                ? "A research MCP server was configured after this analysis started — the model was prompted without research tools, so its fixes are uncited."
+                : `Research MCP server did not connect (status: ${describeMcpStatus(researchStatus?.status)}) — fixes are ungrounded and uncited.`,
+            );
+          }
         }
         onEvent({
           type: "status",
           phase: "preflight",
-          message: "Connecting Claude + research tools…",
+          message: research
+            ? "Connecting Claude + research tools…"
+            : "Connecting Claude…",
           model: resolvedModel,
           auth,
           mcp,
@@ -251,8 +298,12 @@ async function run(args: DriverRunArgs): Promise<DriverResult> {
           const errors = Array.isArray(message.errors)
             ? message.errors.filter((e): e is string => typeof e === "string").join("; ")
             : "";
-          const detail =
-            errors || `Analysis ended early (${asString(message.subtype) ?? "unknown"}).`;
+          // SDK-authored text. This driver spawns the research server with the
+          // user's own third-party credentials, so nothing it says reaches the
+          // client without a scrub first.
+          const detail = redactUrlsInText(
+            errors || `Analysis ended early (${asString(message.subtype) ?? "unknown"}).`,
+          );
           throw new AnalysisError(
             isRateLimit(detail) ? "rate_limited" : "agent_error",
             detail,
@@ -264,7 +315,19 @@ async function run(args: DriverRunArgs): Promise<DriverResult> {
         // Prefer the authoritative final text; fall back to the streamed text.
         const finalText = asString(message.result) || rawText;
         const { diagnosis, fixesJson } = splitDiagnosisAndFixes(finalText);
-        const parsed = parseFixes(fixesJson);
+        // A session that never announced its MCP state is ungrounded by default,
+        // and the init branch that normally explains that never ran. Say it here
+        // instead: stripping citations silently would leave the persisted record
+        // indistinguishable from a genuinely researched run.
+        if (!sawInit && !researchAvailable) {
+          warnings.push(
+            "Web research was unavailable for this analysis — fixes are ungrounded and uncited.",
+          );
+        }
+
+        // Citations only survive when the agent actually held a fetch tool: with
+        // none, any URL it produced is a guess, however confidently phrased.
+        const parsed = parseFixes(fixesJson, { allowCitations: researchAvailable });
         if (parsed.error !== null) {
           warnings.push("Could not parse structured fixes from the model output.");
         }
@@ -284,7 +347,7 @@ async function run(args: DriverRunArgs): Promise<DriverResult> {
     // Abort is an expected control-flow signal, not a failure — re-raise as-is so
     // the route can distinguish it (client disconnect / timeout) from agent errors.
     if (abortController.signal.aborted) throw err;
-    const message = err instanceof Error ? err.message : String(err);
+    const message = redactUrlsInText(err instanceof Error ? err.message : String(err));
     throw new AnalysisError(
       isRateLimit(message) ? "rate_limited" : "agent_error",
       message,

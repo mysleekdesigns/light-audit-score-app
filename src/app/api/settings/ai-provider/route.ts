@@ -14,7 +14,8 @@
  * set. Base URLs are stripped of any embedded userinfo before they cross the wire.
  */
 
-import { loadResearchMcpConfig } from "@/lib/analysis/providers/researchMcp";
+import { hasResearchMcpConfig } from "@/lib/analysis/providers/researchMcp";
+import { redactUrl } from "@/lib/redactUrl";
 import { probeOllama } from "@/lib/analysis/providers/ollama";
 import {
   resolveAnalysisProvider,
@@ -25,25 +26,6 @@ import { ANALYSIS_PROVIDER_LABELS } from "@/lib/analysis/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-/**
- * Drop anything secret-shaped from a URL before returning it: `user:pass@` and
- * any query string (some vendors put the key there). Unparseable input is
- * dropped entirely rather than echoed.
- */
-function redactUrl(raw: string | null): string | null {
-  if (!raw) return null;
-  try {
-    const url = new URL(raw);
-    url.username = "";
-    url.password = "";
-    url.search = "";
-    url.hash = "";
-    return url.toString().replace(/\/$/, "");
-  } catch {
-    return null;
-  }
-}
 
 export async function GET(request: Request): Promise<Response> {
   const provider = resolveAnalysisProvider(process.env);
@@ -65,7 +47,9 @@ export async function GET(request: Request): Promise<Response> {
     model: provider.model,
     baseUrl: redactUrl(provider.baseUrl),
     canWebResearch: provider.canWebResearch,
-    researchConfigured: loadResearchMcpConfig() !== null,
+    // The same predicate `runAnalysis` resolves the tier with, so the panel
+    // cannot promise research the next analysis won't do.
+    researchConfigured: hasResearchMcpConfig(),
     // Presence only — the key itself never leaves the server.
     apiKeyEnv: provider.apiKeyEnv,
     hasApiKey: Boolean(provider.apiKeyEnv && process.env[provider.apiKeyEnv]?.trim()),

@@ -26,6 +26,7 @@ import { analysisSystemPrompt, buildUserPrompt } from "@/lib/analysis/buildPromp
 import { formatProviderModel } from "@/lib/analysis/providerModel";
 import { claudeDriver } from "@/lib/analysis/providers/claude";
 import { openAiCompatibleDriver } from "@/lib/analysis/providers/openaiCompatible";
+import { hasResearchMcpConfig } from "@/lib/analysis/providers/researchMcp";
 import {
   resolveAnalysisProvider,
   type ProviderOverride,
@@ -41,7 +42,10 @@ import type {
 export { AnalysisError } from "@/lib/analysis/AnalysisError";
 // Both moved out of this file when the provider seam landed; re-exported so the
 // engine stays the one import site callers already know.
-export { loadResearchMcpConfig } from "@/lib/analysis/providers/researchMcp";
+export {
+  hasResearchMcpConfig,
+  loadResearchMcpConfig,
+} from "@/lib/analysis/providers/researchMcp";
 
 /** Every driver, keyed by the id a {@link ResolvedProvider} names. */
 const DRIVERS: Record<string, AnalysisDriver> = {
@@ -97,12 +101,20 @@ export async function runAnalysis(args: RunAnalysisArgs): Promise<AnalysisResult
   const input = buildAnalysisInput({ lhr, category, formFactor, field });
   // The capability tier picks the prompt pair: the researching agent when the
   // provider can cite what it fetched, the honest data-only analyst when it can't.
-  const webResearch = resolved.canWebResearch;
+  //
+  // It takes BOTH halves — a provider that supports research and a research
+  // server to drive. Claude supports it, but the server is optional user-supplied
+  // software, so `canWebResearch` alone would promise tools that may not exist:
+  // the agent would then either narrate the shortfall mid-diagnosis or reach for
+  // a URL it never opened. Resolving the tier from the config instead means an
+  // unconfigured install gets a clean, honestly uncited analysis.
+  const webResearch = resolved.canWebResearch && hasResearchMcpConfig();
 
   const result = await driver.run({
     provider: resolved,
     systemPrompt: analysisSystemPrompt(webResearch),
     userPrompt: buildUserPrompt(input, { webResearch }),
+    webResearch,
     signal,
     onEvent,
   });

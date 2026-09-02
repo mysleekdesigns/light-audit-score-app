@@ -21,6 +21,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { APICallError, generateText, streamText } from "ai";
 
 import { AnalysisError } from "@/lib/analysis/AnalysisError";
+import { redactUrl, redactUrlsInText } from "@/lib/redactUrl";
 import { readProviderApiKey } from "@/lib/analysis/providers/select";
 import type {
   AnalysisDriver,
@@ -79,6 +80,10 @@ function createModel(provider: ResolvedProvider) {
 function toAnalysisError(err: unknown, provider: ResolvedProvider): AnalysisError {
   const label = ANALYSIS_PROVIDER_LABELS[provider.id];
   const message = err instanceof Error ? err.message : String(err);
+  // The endpoint is the user's own and may carry `user:pass@` or `?key=…`. Every
+  // branch below ends up in an SSE error frame, so the only form of it that may
+  // leave this function is the redacted one.
+  const endpoint = redactUrl(provider.baseUrl) ?? "the configured endpoint";
 
   if (APICallError.isInstance(err)) {
     if (err.statusCode === 401 || err.statusCode === 403) {
@@ -107,12 +112,14 @@ function toAnalysisError(err: unknown, provider: ResolvedProvider): AnalysisErro
     return new AnalysisError(
       "provider_unavailable",
       provider.id === "ollama"
-        ? `Could not reach Ollama at ${provider.baseUrl}. Start it with \`ollama serve\` and make sure \`${provider.model}\` is pulled.`
-        : `Could not reach ${label} at ${provider.baseUrl}.`,
+        ? `Could not reach Ollama at ${endpoint}. Start it with \`ollama serve\` and make sure \`${provider.model}\` is pulled.`
+        : `Could not reach ${label} at ${endpoint}.`,
     );
   }
 
-  return new AnalysisError("agent_error", message);
+  // Last resort: an SDK message we did not compose, which routinely quotes the
+  // request URL. Scrub any URL in it rather than trusting its wording.
+  return new AnalysisError("agent_error", redactUrlsInText(message));
 }
 
 /** Run one analysis against an OpenAI-compatible endpoint. */

@@ -30,6 +30,7 @@ import {
   type LighthouseResult,
 } from "@/lib/lighthouse/types";
 import { getAuditQueue } from "@/lib/queue/AuditQueue";
+import { redactUrlsInText } from "@/lib/redactUrl";
 import { normalizeProviderId } from "@/lib/analysis/providers/select";
 import { AnalysisError, runAnalysis } from "@/lib/analysis/runAnalysis";
 import {
@@ -309,7 +310,11 @@ export async function POST(
           if (err instanceof AnalysisError) {
             send({ type: "error", code: err.code, message: err.message });
           } else {
-            const message = err instanceof Error ? err.message : String(err);
+            // Not an AnalysisError, so this text was composed by something
+            // upstream of us — scrub any URL before it crosses to the client.
+            const message = redactUrlsInText(
+              err instanceof Error ? err.message : String(err),
+            );
             send({ type: "error", code: "agent_error", message });
           }
           teardown();

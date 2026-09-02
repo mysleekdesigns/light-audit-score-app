@@ -344,7 +344,23 @@ export function AnalysisPanel({
     );
   } else {
     const label = providerStatus?.label ?? "AI";
-    const grounded = providerStatus ? providerStatus.canWebResearch : true;
+    // Research takes both halves — a provider that supports it and a server to
+    // drive — so promise citations only when both are actually in place. Until
+    // the status lands (or if it never does) claim NEITHER: an over-promise and a
+    // premature "ungrounded" are both wrong, and this state is momentary.
+    const grounded = providerStatus
+      ? providerStatus.canWebResearch && providerStatus.researchConfigured
+      : null;
+    const description =
+      grounded === null
+        ? `${label} reads the audit data and returns prioritized, high-impact fixes.`
+        : grounded
+          ? `${label} reads the audit data, researches fixes on the web, and returns prioritized, source-cited recommendations.`
+          : `${label} reads the audit data and returns prioritized fixes. Because ${
+              providerStatus?.canWebResearch
+                ? "no research server is configured"
+                : "it can't browse"
+            }, this diagnosis is ungrounded — no web research and no citations.`;
     body = (
       <Empty className="border border-dashed border-border/60 py-10">
         <EmptyHeader>
@@ -352,11 +368,7 @@ export function AnalysisPanel({
             <Sparkles />
           </EmptyMedia>
           <EmptyTitle>Ask {label} why this score is low</EmptyTitle>
-          <EmptyDescription>
-            {grounded
-              ? `${label} reads the audit data, researches fixes on the web, and returns prioritized, source-cited recommendations.`
-              : `${label} reads the audit data and returns prioritized fixes. It can't browse, so this diagnosis is ungrounded — no web research and no citations.`}
-          </EmptyDescription>
+          <EmptyDescription>{description}</EmptyDescription>
         </EmptyHeader>
         <Button onClick={() => analysis.start()}>
           <Sparkles data-icon="inline-start" />

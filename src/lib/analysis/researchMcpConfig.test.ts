@@ -15,7 +15,10 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { loadResearchMcpConfig } from "@/lib/analysis/providers/researchMcp";
+import {
+  hasResearchMcpConfig,
+  loadResearchMcpConfig,
+} from "@/lib/analysis/providers/researchMcp";
 
 /** Env vars this module reads — saved and restored around every test. */
 const ENV_KEYS = [
@@ -148,5 +151,26 @@ describe("loadResearchMcpConfig", () => {
     writeFileSync(path.join(dir, ".mcp.json"), JSON.stringify({ somethingElse: true }));
 
     expect(loadResearchMcpConfig(dir)).toBeNull();
+  });
+});
+
+describe("hasResearchMcpConfig", () => {
+  // This boolean IS the analysis capability tier: false means the engine prompts
+  // the model as a data-only analyst instead of promising it research tools it
+  // does not have.
+  it("is false when nothing is configured", () => {
+    expect(hasResearchMcpConfig(dir)).toBe(false);
+  });
+
+  it("is true once a server resolves", () => {
+    writeConfig({ research: { command: "my-research-server" } });
+
+    expect(hasResearchMcpConfig(dir)).toBe(true);
+  });
+
+  it("is false when the config is present but ambiguous", () => {
+    writeConfig({ alpha: { command: "a" }, beta: { command: "b" } });
+
+    expect(hasResearchMcpConfig(dir)).toBe(false);
   });
 });

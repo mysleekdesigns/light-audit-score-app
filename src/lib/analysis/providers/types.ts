@@ -43,9 +43,15 @@ export interface ResolvedProvider {
   /** Env var NAME holding this provider's API key, if it uses one. Never the key. */
   apiKeyEnv: string | null;
   /**
-   * Whether this provider can do web research at all. Claude can (through a
+   * Whether this provider can do web research **at all** — a static property of
+   * the backend, not of the current machine. Claude can (through a
    * user-configured research MCP server); a local model driving no tools cannot,
    * so its fixes are LHR-data-only and must be badged ungrounded.
+   *
+   * This is a capability, NOT the tier a given run executes at: research also
+   * needs a server to drive. The effective tier is this AND
+   * `hasResearchMcpConfig()`, resolved by `runAnalysis` and passed to the driver
+   * as {@link DriverRunArgs.webResearch}.
    */
   canWebResearch: boolean;
   /** What the user still has to set before this provider can run, if anything. */
@@ -59,6 +65,13 @@ export interface DriverRunArgs {
   systemPrompt: string;
   /** The serialized audit data + task. */
   userPrompt: string;
+  /**
+   * The EFFECTIVE tier the prompts above were built at: whether this run can
+   * really research the web (provider capability AND a resolvable research
+   * server). Drivers must honour it — chiefly by refusing citations when it is
+   * false, since a model with no fetch tool can only have invented them.
+   */
+  webResearch: boolean;
   /** Aborts the underlying model call (client disconnect / timeout). */
   signal?: AbortSignal;
   /** Progress sink — forwarded to SSE by the route. */
