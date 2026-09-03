@@ -77,42 +77,6 @@ export function StartChapters() {
           ]}
         />
 
-        <H3>The pages in the header</H3>
-        <List>
-          <LI>
-            <UiLabel>Lighthouse</UiLabel> — where you enter pages and run a local audit. Start
-            here.
-          </LI>
-          <LI>
-            <UiLabel>PageSpeed</UiLabel> — the same thing, but measured by Google, with real-user
-            data.
-          </LI>
-          <LI>
-            <UiLabel>History</UiLabel> — every audit you have ever run, grouped by website.
-          </LI>
-          <LI>
-            <UiLabel>Compare</UiLabel> — a chart of one page’s scores over time, and a
-            side-by-side diff of any two of its audits.
-          </LI>
-          <LI>
-            <UiLabel>Batches</UiLabel> — each group of pages you audited together, averaged and
-            marked pass or fail against your own targets.
-          </LI>
-          <LI>
-            <UiLabel>Schedule</UiLabel> — audits that repeat every day on their own.
-          </LI>
-          <LI>
-            <UiLabel>Settings</UiLabel> — which AI does the analysis, and whether the PageSpeed key
-            and web research are set up.
-          </LI>
-          <LI>
-            <UiLabel>Documentation</UiLabel> — this manual.
-          </LI>
-        </List>
-        <Callout tone="note">
-          On a narrow window the header links collapse into a menu button in the top-left corner.
-          Everything is still there.
-        </Callout>
       </DocsSection>
 
       <DocsSection

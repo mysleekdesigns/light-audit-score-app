@@ -5,8 +5,9 @@
  * inventing a second one: monospace plate numbers and labels, hairline rules,
  * a signal-cyan accent reserved for structure (never for score semantics), and
  * body copy in the UI grotesque. Everything here is pure and server-safe — no
- * `"use client"`, no hooks — so the manual renders as static HTML and only the
- * table of contents ships JavaScript.
+ * `"use client"`, no hooks — so the manual renders as static HTML. The only
+ * JavaScript is the contents rail and the chapter shell `DocsSection` delegates
+ * to, which turns the chapters into an accordion on a narrow screen.
  *
  * Nothing here caps its own measure: chapters run the full width of their
  * column, matching the full-bleed density the rest of the app uses on wide
@@ -15,60 +16,25 @@
  */
 
 import Link from "next/link";
+
+import { DocsChapter, type DocsChapterProps } from "@/components/docs/docs-chapter";
 import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ section */
 
-interface DocsSectionProps {
-  /** Anchor id — must match the `id` in `DOCS_SECTIONS` so the TOC can find it. */
-  id: string;
-  /** Monospace plate number, e.g. "03". */
-  index: string;
-  title: string;
-  /** One-line summary under the heading. */
-  lede?: string;
-  children: React.ReactNode;
-}
-
 /**
  * One numbered chapter.
  *
- * The heading self-link is a sibling of the `<h2>`, not a child: nested inside,
- * its label is concatenated into the heading's accessible name, and a manual of
- * twenty chapters is navigated mostly through the headings list. The `<section>`
- * is deliberately left unnamed so it stays a generic grouping — twenty `region`
- * landmarks would bury the two real ones.
+ * A server wrapper over the chapter shell, which has to be a client island: it
+ * is an accordion below `xl`, where there is no room for the contents rail
+ * beside the text. Only the shell hydrates — everything a chapter contains is
+ * passed through as already-rendered children.
  */
-export function DocsSection({ id, index, title, lede, children }: DocsSectionProps) {
+export function DocsSection({ id, index, title, lede, children }: DocsChapterProps) {
   return (
-    <section id={id} className="group border-t border-border/60 pt-8 first:border-t-0 first:pt-0">
-      <div className="flex flex-col gap-2.5">
-        <span className="font-mono text-[0.7rem] uppercase tracking-[0.32em] text-primary">
-          {index}
-        </span>
-        <div className="flex items-baseline gap-3">
-          <h2
-            id={`${id}-heading`}
-            className="text-pretty text-2xl font-semibold tracking-tight text-foreground md:text-[1.75rem]"
-          >
-            {title}
-          </h2>
-          {/* Reveals on hover/focus so the manual stays quiet at rest but every
-              chapter is still linkable. Focusable, so it is reachable by keyboard. */}
-          <a
-            href={`#${id}`}
-            aria-label={`Link to “${title}”`}
-            className="font-mono text-sm font-normal text-muted-foreground opacity-0 transition-opacity hover:text-primary focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100 motion-reduce:transition-none"
-          >
-            #
-          </a>
-        </div>
-        {lede ? (
-          <p className="text-pretty text-[0.95rem] leading-relaxed text-muted-foreground">{lede}</p>
-        ) : null}
-      </div>
-      <div className="mt-6 flex flex-col gap-5">{children}</div>
-    </section>
+    <DocsChapter id={id} index={index} title={title} lede={lede}>
+      {children}
+    </DocsChapter>
   );
 }
 

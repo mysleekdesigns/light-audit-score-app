@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Compass, Cpu, Gauge } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
+import { DocsChapters } from "@/components/docs/docs-chapter";
 import { DocsToc } from "@/components/docs/docs-toc";
 import { StartChapters } from "@/components/docs/chapters/start-chapters";
 import { AuditingChapters } from "@/components/docs/chapters/auditing-chapters";
@@ -46,11 +47,13 @@ const ENTRY_POINTS = [
  * The user manual.
  *
  * Static by construction: every chapter is a server component and the route is
- * prerendered at build time, so the manual is plain HTML a reader can search
- * with the browser's own find and deep-link into. The only client code is the
- * contents rail, which needs an observer to know which chapter you are in — and
- * even that leans on a native `<details>` so the entries are reachable before it
- * hydrates.
+ * prerendered at build time, so the manual is plain HTML a reader can deep-link
+ * into. Two small islands hydrate over it — the contents rail, which needs an
+ * observer to know which chapter you are in, and the chapter shell, which turns
+ * the chapters into a single-open accordion below `xl`, where the rail cannot
+ * sit beside the text and twenty full chapters would be a very long scroll.
+ * Both fall back to something usable before they hydrate: a native `<details>`
+ * for the rail, and CSS alone for which chapter is open.
  *
  * Chapters run the full width of their column at every breakpoint rather than
  * sitting in a capped measure, matching the full-bleed density the rest of the
@@ -93,20 +96,24 @@ export default function DocumentationPage() {
         <DocsToc />
 
         {/* `min-w-0` so a wide code block scrolls inside its own frame rather
-            than stretching the grid column and the whole page with it. */}
-        <div className="flex min-w-0 flex-col gap-10">
-          <StartChapters />
-          <AuditingChapters />
-          <AiChapters />
-          <ResultsChapters />
-          <ReferenceChapters />
+            than stretching the grid column and the whole page with it. Below
+            `xl` the chapters are an accordion of cards, so they sit closer
+            together than the chapters of a wide, always-open manual. */}
+        <DocsChapters>
+          <div className="flex min-w-0 flex-col gap-3 xl:gap-10">
+            <StartChapters />
+            <AuditingChapters />
+            <AiChapters />
+            <ResultsChapters />
+            <ReferenceChapters />
 
-          <footer className="border-t border-border/60 pt-6">
-            <p className="font-mono text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground">
-              End of manual · Lighthouse v13 · local lab data
-            </p>
-          </footer>
-        </div>
+            <footer className="mt-8 border-t border-border/60 pt-6 xl:mt-0">
+              <p className="font-mono text-[0.7rem] uppercase tracking-[0.18em] text-muted-foreground">
+                End of manual · Lighthouse v13 · local lab data
+              </p>
+            </footer>
+          </div>
+        </DocsChapters>
       </div>
     </div>
   );
