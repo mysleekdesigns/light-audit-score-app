@@ -22,6 +22,15 @@ const nextConfig: NextConfig = {
     "better-sqlite3",
     "@anthropic-ai/claude-agent-sdk",
   ],
+
+  // The scheduled-audits page moved from /archive to /schedule (2026-09-03) so
+  // the URL matches its nav label; keep the old address working for bookmarks.
+  async redirects() {
+    return [
+      { source: "/archive", destination: "/schedule", permanent: true },
+      { source: "/archive/:path*", destination: "/schedule/:path*", permanent: true },
+    ];
+  },
 };
 
 export default nextConfig;

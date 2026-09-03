@@ -40,9 +40,9 @@ const NAV = [
     match: (p: string) => p.startsWith("/batches"),
   },
   {
-    href: "/archive",
-    label: "Archive",
-    match: (p: string) => p.startsWith("/archive"),
+    href: "/schedule",
+    label: "Schedule",
+    match: (p: string) => p.startsWith("/schedule"),
   },
   {
     href: "/settings",

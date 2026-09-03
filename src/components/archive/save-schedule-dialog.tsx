@@ -6,7 +6,7 @@
  * Captures `name` (free text) + `time` (HH:MM 24h) and previews the target
  * derived from the New-Audit form state. Submits to `POST /api/schedules`,
  * which validates via `parseCreateScheduleBody` and persists. On success the
- * caller navigates to `/archive` (where the new entry lives) — we let the
+ * caller navigates to `/schedule` (where the new entry lives) — we let the
  * caller decide so this dialog stays self-contained.
  *
  * Visual contract: reuses the existing `Dialog` primitive + the form's
@@ -124,7 +124,7 @@ export function SaveScheduleDialog({
         action: {
           label: "View",
           onClick: () => {
-            if (typeof window !== "undefined") window.location.href = "/archive";
+            if (typeof window !== "undefined") window.location.href = "/schedule";
           },
         },
       });
