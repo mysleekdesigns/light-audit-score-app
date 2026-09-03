@@ -136,6 +136,16 @@
   * {
     @apply border-border outline-ring/50;
   }
+  html {
+    /*
+     * The site header is sticky and 4rem tall, so anything scrolled to the top
+     * of the viewport lands underneath it — an `#anchor`, a `scrollIntoView`,
+     * and, most easily missed, the element the browser scrolls to when Tab
+     * moves focus off-screen. One padding on the scroll container covers all
+     * three; the extra 3rem is breathing room above a heading.
+     */
+    scroll-padding-top: 7rem;
+  }
   body {
     @apply bg-background text-foreground;
     /* Faint instrument grid — barely-there technical texture. */

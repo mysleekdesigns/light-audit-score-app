@@ -228,6 +228,9 @@ npm run typecheck   # tsc --noEmit
 - **Batches** — groups runs by batch and shows average scores, best/worst page, and pass/fail
   counts against configurable per-category thresholds, with JSON/CSV export and bulk report
   opening.
+- **Documentation** — a built-in, beginner-friendly manual (20 chapters) covering setup, the audit
+  dials, calibration, AI analysis and providers, schedules, privacy and troubleshooting, with a
+  scroll-spy contents rail.
 - **Settings persistence** — default device, runs, concurrency, categories, and per-category pass
   thresholds are remembered between visits.
 

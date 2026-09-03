@@ -49,6 +49,11 @@ const NAV = [
     label: "Settings",
     match: (p: string) => p.startsWith("/settings"),
   },
+  {
+    href: "/documentation",
+    label: "Documentation",
+    match: (p: string) => p.startsWith("/documentation"),
+  },
 ] as const;
 
 /** Minimal lighthouse-beam mark: a focal point throwing a measured arc. */
@@ -74,11 +79,12 @@ function BeamMark({ className }: { className?: string }) {
 }
 
 /**
- * Drawer nav for widths below `lg`, where the seven inline destinations plus the
- * wordmark and status pill need ~990px and would otherwise push the whole page
- * into a horizontal scroll. Only rendered (and only reachable) below `lg`; from
- * `lg` up the trigger is `display: none`, so the inline `<nav>` is the single
- * visible Primary landmark at any one width.
+ * Drawer nav for widths below `xl`. The eight inline destinations plus the
+ * wordmark and status pill need ~1120px — "Documentation" alone is the widest
+ * label in the row — and below that they would push the whole page into a
+ * horizontal scroll. Only rendered (and only reachable) below `xl`; from `xl` up
+ * the trigger is `display: none`, so the inline `<nav>` is the single visible
+ * Primary landmark at any one width.
  */
 function MobileNav({ pathname }: { pathname: string }) {
   const [open, setOpen] = useState(false);
@@ -90,7 +96,7 @@ function MobileNav({ pathname }: { pathname: string }) {
           variant="ghost"
           size="icon-lg"
           aria-label="Open navigation"
-          className="-ml-1 shrink-0 touch-manipulation lg:hidden"
+          className="-ml-1 shrink-0 touch-manipulation xl:hidden"
         >
           <Menu />
         </Button>
@@ -153,17 +159,18 @@ export function SiteHeader() {
     <header className="sticky top-0 z-40 border-b border-border/70 bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       {/* instrument accent line */}
       <div className="h-px w-full bg-gradient-to-r from-transparent via-primary/70 to-transparent" />
-      <div className="flex h-16 w-full items-center gap-4 px-6 lg:gap-8 lg:px-10">
+      <div className="flex h-16 w-full items-center gap-4 px-6 lg:px-10 xl:gap-8">
         <MobileNav pathname={pathname} />
 
         <Link href="/" className="group flex min-w-0 items-center gap-3">
-          <span className="shrink-0 text-primary transition-transform duration-300 group-hover:rotate-[8deg]">
+          <span className="shrink-0 text-primary transition-transform duration-300 group-hover:rotate-[8deg] motion-reduce:transition-none motion-reduce:group-hover:rotate-0">
             <BeamMark className="size-6" />
           </span>
-          {/* Two words, so in a tight band (320px phones, the 1024–1059px
-              compact-nav strip) the wordmark stacks "LightAudit" over "Score"
-              instead of truncating, and is back on one line as soon as there
-              is room. `min-w-0` is what lets it shrink to the longer word. */}
+          {/* Two words, so in a tight band (320px phones, the strip just above
+              the 1280px inline-nav breakpoint) the wordmark stacks "LightAudit"
+              over "Score" instead of truncating, and is back on one line as soon
+              as there is room. `min-w-0` is what lets it shrink to the longer
+              word. */}
           <span
             translate="no"
             className="min-w-0 font-mono text-sm font-semibold uppercase leading-[1.15] tracking-[0.28em] text-foreground"
@@ -173,7 +180,7 @@ export function SiteHeader() {
         </Link>
 
         <nav
-          className="hidden items-center gap-0.5 lg:flex xl:gap-1"
+          className="hidden items-center gap-0.5 xl:flex 2xl:gap-1"
           aria-label="Primary"
         >
           {NAV.map((item) => {
@@ -184,7 +191,7 @@ export function SiteHeader() {
                 href={item.href}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "relative px-2 py-2 font-mono text-xs uppercase tracking-[0.18em] transition-colors xl:px-3",
+                  "relative px-2 py-2 font-mono text-xs uppercase tracking-[0.18em] transition-colors 2xl:px-3",
                   "rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                   active
                     ? "text-foreground"
@@ -203,13 +210,21 @@ export function SiteHeader() {
           })}
         </nav>
 
-        <div className="ml-auto flex shrink-0 items-center gap-2 rounded-full border border-border/70 bg-card/60 px-2 py-1.5 xl:px-3">
+        {/* The "Local · Node" caption is held back to `2xl`: at `xl` the eight
+            nav labels need the width more than the pill needs its wording. It is
+            hidden with `sr-only` rather than `hidden`, so the pill keeps its
+            meaning for assistive tech at every width, and `title` gives sighted
+            users the same wording while it is not drawn. */}
+        <div
+          title="Running locally on Node"
+          className="ml-auto flex shrink-0 items-center gap-2 rounded-full border border-border/70 bg-card/60 px-2 py-1.5 2xl:px-3"
+        >
           <span className="relative flex size-2">
             {/* Indefinite loop — stilled for anyone who asked for less motion. */}
             <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-60 motion-reduce:animate-none" />
             <span className="relative inline-flex size-2 rounded-full bg-primary" />
           </span>
-          <span className="hidden font-mono text-[0.65rem] uppercase tracking-[0.2em] text-muted-foreground xl:inline">
+          <span className="sr-only font-mono text-[0.65rem] uppercase tracking-[0.2em] text-muted-foreground 2xl:not-sr-only 2xl:inline">
             Local · Node
           </span>
         </div>
