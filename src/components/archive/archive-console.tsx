@@ -40,6 +40,17 @@ import {
 import { toast } from "sonner";
 
 import { ScorePill } from "@/components/audit/score-pill";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -59,6 +70,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useBatchStream } from "@/hooks/useBatchStream";
+import { deleteBatch } from "@/lib/client/auditClient";
 import type { BatchInfo, HistoryRow } from "@/lib/db/persistence";
 import { nextFireAt } from "@/lib/schedules/cadence";
 import type { Schedule, ScheduleTarget } from "@/lib/schedules/types";
@@ -537,7 +549,10 @@ function ScheduleCard({ schedule, batches }: ScheduleCardProps) {
 
         {/* Day-over-day run history strip — a simple list of dated batches with
             their lifecycle status; richer score trends live in /batches. */}
-        <RunHistoryStrip batches={batches} />
+        <RunHistoryStrip
+          batches={batches}
+          activeBatchId={isRunning ? watchedBatchId : null}
+        />
       </CardContent>
     </Card>
   );
@@ -583,10 +598,12 @@ function TelemetryCell({
 
 interface RunHistoryStripProps {
   batches: BatchInfo[];
+  /** The batch the card's Pause button is watching, if a run is in flight. */
+  activeBatchId: string | null;
 }
 
 /** Compact day-over-day list of a schedule's persisted batches (newest first). */
-function RunHistoryStrip({ batches }: RunHistoryStripProps) {
+function RunHistoryStrip({ batches, activeBatchId }: RunHistoryStripProps) {
   if (batches.length === 0) {
     return (
       <section
@@ -621,7 +638,10 @@ function RunHistoryStrip({ batches }: RunHistoryStripProps) {
       <ul className="flex list-none flex-col gap-1.5 p-0">
         {visible.map((batch) => (
           <li key={batch.id}>
-            <RunHistoryRow batch={batch} />
+            <RunHistoryRow
+              batch={batch}
+              inFlight={batch.id === activeBatchId}
+            />
           </li>
         ))}
       </ul>
@@ -631,20 +651,32 @@ function RunHistoryStrip({ batches }: RunHistoryStripProps) {
 
 interface RunHistoryRowProps {
   batch: BatchInfo;
+  /** True for the run currently in flight — it can be paused, not deleted. */
+  inFlight: boolean;
 }
 
-function RunHistoryRow({ batch }: RunHistoryRowProps) {
+/**
+ * One persisted batch: the row body links to the live batch view, and a
+ * delete control sits at its right edge. The two are siblings (a button can't
+ * nest inside a link), sharing one bordered wrapper that highlights as a unit.
+ */
+function RunHistoryRow({ batch, inFlight }: RunHistoryRowProps) {
   const isError = batch.status === "completed_with_errors";
   const isRunning = batch.status === "running";
   const isQueued = batch.status === "queued";
   const isPaused = batch.status === "cancelled";
 
   return (
+    <div
+      className={cn(
+        "group flex items-center gap-1 rounded-md border border-border/60 bg-card/30 py-1 pr-1 pl-3",
+        "transition-colors hover:border-primary/40 hover:bg-card/60",
+      )}
+    >
     <Link
       href={`/?watch=${encodeURIComponent(batch.id)}`}
       className={cn(
-        "group flex items-center gap-3 rounded-md border border-border/60 bg-card/30 px-3 py-2",
-        "transition-colors hover:border-primary/40 hover:bg-card/60",
+        "flex min-w-0 flex-1 items-center gap-3 rounded-sm py-1",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
       )}
       aria-label={`Open batch ${batch.id} from ${batch.createdAt}`}
@@ -692,6 +724,92 @@ function RunHistoryRow({ batch }: RunHistoryRowProps) {
         />
       </span>
     </Link>
+      <DeleteBatchButton batch={batch} disabled={inFlight} />
+    </div>
+  );
+}
+
+/**
+ * Per-batch delete for the run history strip: a destructive icon button behind
+ * a confirm dialog (the same guard the History page puts on a run). On confirm
+ * it removes the batch — its page results, stored reports and analyses — and
+ * refreshes the server component so the row disappears. Disabled for the run
+ * in flight: pause it first, then delete.
+ */
+function DeleteBatchButton({
+  batch,
+  disabled,
+}: {
+  batch: BatchInfo;
+  disabled: boolean;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const when = formatTimestamp(batch.createdAt);
+
+  async function handleDelete() {
+    setDeleting(true);
+    try {
+      await deleteBatch(batch.id);
+      toast.success("Run deleted.");
+      setOpen(false);
+      router.refresh();
+    } catch {
+      toast.error("Could not delete the run.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <AlertDialog open={open} onOpenChange={setOpen}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <AlertDialogTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              disabled={disabled}
+              aria-label={`Delete run from ${when}`}
+              className="shrink-0 text-muted-foreground hover:text-destructive"
+            >
+              <Trash2 />
+            </Button>
+          </AlertDialogTrigger>
+        </TooltipTrigger>
+        <TooltipContent>
+          {disabled ? "Pause the run before deleting it" : "Delete this run"}
+        </TooltipContent>
+      </Tooltip>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete this run?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This permanently removes the run from{" "}
+            <span className="font-mono text-foreground">{when}</span> — all{" "}
+            {batch.total} of its page {batch.total === 1 ? "result" : "results"}{" "}
+            and their stored reports. This can&apos;t be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={deleting}
+            onClick={(event) => {
+              // Keep the dialog mounted through the async call; it closes once
+              // the delete settles (success path) instead of on click.
+              event.preventDefault();
+              void handleDelete();
+            }}
+          >
+            {deleting ? "Deleting…" : "Delete run"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
