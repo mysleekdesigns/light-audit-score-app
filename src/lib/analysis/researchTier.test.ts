@@ -32,6 +32,17 @@ vi.mock("@/lib/analysis/providers/researchMcp", () => ({
   hasResearchMcpConfig: vi.fn(() => false),
   loadResearchMcpConfig: vi.fn(() => null),
 }));
+// The engine also consults the choice saved from Settings. None here, so the
+// environment alone decides — and no SQLite file is touched.
+vi.mock("@/lib/analysis/providers/preference", async () => {
+  const { resolveAnalysisProvider } = await import("@/lib/analysis/providers/select");
+  return {
+    resolveConfiguredProvider: (
+      override: Record<string, string | null | undefined> = {},
+      env: Record<string, string | undefined> = process.env,
+    ) => resolveAnalysisProvider(env, override, null),
+  };
+});
 
 /** A generic, user-declared research server with nothing to add to the prompt. */
 const CONFIG_SERVER = {

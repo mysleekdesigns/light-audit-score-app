@@ -44,6 +44,7 @@ const PROVIDER: ResolvedProvider = {
   model: "",
   baseUrl: null,
   apiKeyEnv: "ANTHROPIC_API_KEY",
+  source: "env",
   canWebResearch: true,
   missing: null,
 };

@@ -2,8 +2,8 @@
  * App-level preference store — the `app_settings` key/value table.
  *
  * Holds the handful of things the user toggles from the Settings page (today:
- * whether the CrawlForge research server is enabled). It is deliberately NOT a
- * home for credentials: keys live in the environment (`.env`) and are only ever
+ * whether the CrawlForge research server is enabled, and which AI provider +
+ * model the user picked). It is deliberately NOT a home for credentials: keys live in the environment (`.env`) and are only ever
  * reported as present or absent, never written to SQLite.
  *
  * Reads follow the log-and-swallow discipline of the other DB modules — a
@@ -44,6 +44,11 @@ export function setAppSetting(key: string, value: string): void {
       set: { value, updatedAt },
     })
     .run();
+}
+
+/** Remove one setting so its default applies again. Throws on a DB failure. */
+export function deleteAppSetting(key: string): void {
+  getDb().delete(appSettings).where(eq(appSettings.key, key)).run();
 }
 
 /** Read a boolean setting stored as `"true"` / `"false"`, with a default. */

@@ -31,7 +31,7 @@ import {
 } from "@/lib/lighthouse/types";
 import { getAuditQueue } from "@/lib/queue/AuditQueue";
 import { redactUrlsInText } from "@/lib/redactUrl";
-import { normalizeProviderId } from "@/lib/analysis/providers/select";
+import { MAX_MODEL_ID_LENGTH, MODEL_ID_PATTERN, normalizeProviderId } from "@/lib/analysis/providers/select";
 import { AnalysisError, runAnalysis } from "@/lib/analysis/runAnalysis";
 import {
   ANALYSIS_PROVIDER_IDS,
@@ -61,9 +61,6 @@ const inFlight = (globalForAnalysis.__lhAnalysisInflight ??= new Map<
   string,
   AbortController
 >());
-
-/** Longest model id we'll accept from a request body. */
-const MAX_MODEL_ID_LENGTH = 200;
 
 /** Narrow an arbitrary value to a valid analysis category. */
 function asCategory(value: unknown): AnalysisCategory | null {
@@ -162,6 +159,12 @@ export async function POST(
       return badRequest(
         "invalid_model",
         `"model" must be at most ${MAX_MODEL_ID_LENGTH} characters.`,
+      );
+    }
+    if (!MODEL_ID_PATTERN.test(body.model.trim())) {
+      return badRequest(
+        "invalid_model",
+        '"model" must be a model id — no spaces or control characters.',
       );
     }
     model = body.model.trim();

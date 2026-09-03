@@ -27,10 +27,8 @@ import { formatProviderModel } from "@/lib/analysis/providerModel";
 import { claudeDriver } from "@/lib/analysis/providers/claude";
 import { openAiCompatibleDriver } from "@/lib/analysis/providers/openaiCompatible";
 import { resolveResearchServer } from "@/lib/analysis/providers/researchMcp";
-import {
-  resolveAnalysisProvider,
-  type ProviderOverride,
-} from "@/lib/analysis/providers/select";
+import { resolveConfiguredProvider } from "@/lib/analysis/providers/preference";
+import type { ProviderOverride } from "@/lib/analysis/providers/select";
 import type { AnalysisDriver, ResolvedProvider } from "@/lib/analysis/providers/types";
 import { collectSources } from "@/lib/analysis/structured";
 import type {
@@ -62,7 +60,7 @@ export interface RunAnalysisArgs {
   field?: FieldData | null;
   /** Optional model override; defaults to the provider's configured model. */
   model?: string;
-  /** Optional provider override for this analysis; defaults to the env selection. */
+  /** Optional provider override for this analysis; defaults to the Settings choice, then the env selection. */
   provider?: string;
   /** Aborts the underlying model call (client disconnect / timeout). */
   signal?: AbortSignal;
@@ -72,7 +70,7 @@ export interface RunAnalysisArgs {
 
 /** Resolve the provider for a request, rejecting an unusable configuration. */
 function selectProvider(override: ProviderOverride): ResolvedProvider {
-  const provider = resolveAnalysisProvider(process.env, override);
+  const provider = resolveConfiguredProvider(override);
   if (provider.missing) {
     throw new AnalysisError("provider_not_configured", provider.missing);
   }

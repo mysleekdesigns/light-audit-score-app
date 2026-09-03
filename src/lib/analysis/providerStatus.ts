@@ -8,6 +8,7 @@
  * code into the bundle.
  */
 
+import type { ProviderSource } from "@/lib/analysis/providers/types";
 import type { AnalysisProviderId } from "@/lib/analysis/types";
 
 /** One model the user has pulled into a local Ollama. */
@@ -30,10 +31,33 @@ export interface OllamaStatus {
   models: OllamaModel[];
 }
 
+/** What switching to Claude would run: the model `.env` pins for it, or `""` for the SDK default. */
+export interface ClaudeOption {
+  model: string;
+}
+
+/**
+ * What switching to the OpenAI-compatible endpoint would run. The endpoint and
+ * its key are configured in `.env` only — reported here redacted and as a
+ * presence boolean — and the model is whatever `.env` names for it, if anything.
+ */
+export interface CustomEndpointOption {
+  /** `LH_ANALYSIS_BASE_URL` is set — the fact the switch depends on. */
+  configured: boolean;
+  /** Redacted base URL for display; `null` when unset or not parseable. */
+  baseUrl: string | null;
+  /** Whether `LH_ANALYSIS_API_KEY` is set. Presence only. */
+  hasApiKey: boolean;
+  /** `LH_ANALYSIS_MODEL` when `.env` selects this provider, else `""`. */
+  model: string;
+}
+
 /** Everything the settings panel and the analysis empty state need to be honest. */
 export interface AiProviderStatus {
   /** The provider an analysis would use right now. */
   provider: AnalysisProviderId;
+  /** Where that selection came from: saved in Settings, `.env`, or the default. */
+  source: ProviderSource;
   /** Its short human label. */
   label: string;
   /** The driver behind it. */
@@ -54,4 +78,7 @@ export interface AiProviderStatus {
   missing: string | null;
   /** Local Ollama detection (skipped when the caller passes `?probe=0`). */
   ollama: OllamaStatus;
+  /** The other two switches the panel offers, as `.env` has configured them. */
+  claude: ClaudeOption;
+  custom: CustomEndpointOption;
 }

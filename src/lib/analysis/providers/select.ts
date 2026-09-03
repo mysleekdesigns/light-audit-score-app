@@ -1,6 +1,6 @@
 /**
- * Which AI backend runs an analysis, decided purely from the environment plus an
- * optional per-analysis override.
+ * Which AI backend runs an analysis, decided from the environment, the choice
+ * saved from Settings, and an optional per-analysis override.
  *
  * The default is `claude`, so an existing install keeps behaving exactly as it
  * did before providers existed. Everything else is opt-in:
@@ -12,12 +12,18 @@
  *   OLLAMA_BASE_URL        Ollama root (default http://localhost:11434)
  *   OLLAMA_MODEL           convenience alias for LH_ANALYSIS_MODEL on Ollama
  *
+ * Three tiers can name the provider, highest first: the request's override,
+ * the provider + model the user clicked in Settings (kept in `app_settings` by
+ * `providers/preference.ts`, so it needs no restart), then the environment.
+ * Only the SELECTION is layered like this — endpoints and keys always come
+ * from the environment, because nothing credential-shaped is ever stored.
+ *
  * Credentials are the USER's, read from `process.env` (a local `.env`) and never
  * bundled: this module only ever records the NAME of the variable a key lives
  * in, so its output is safe to serialize to the settings UI.
  *
- * Pure — no I/O, no `process.env` access of its own (the env is an argument) —
- * so provider selection is fully unit-testable.
+ * Pure — no I/O, no `process.env` access of its own (the env and the saved
+ * choice are arguments) — so provider selection is fully unit-testable.
  */
 
 import { isAnalysisProviderId } from "@/lib/analysis/providerModel";
@@ -26,7 +32,7 @@ import {
   DEFAULT_OLLAMA_BASE_URL,
   ollamaOpenAiBaseUrl,
 } from "@/lib/analysis/providers/ollama";
-import type { ResolvedProvider } from "@/lib/analysis/providers/types";
+import type { ProviderSource, ResolvedProvider } from "@/lib/analysis/providers/types";
 
 /** The subset of the environment this module reads. */
 export type AnalysisEnv = Record<string, string | undefined>;
@@ -35,6 +41,16 @@ export type AnalysisEnv = Record<string, string | undefined>;
 export interface ProviderOverride {
   provider?: string | null;
   model?: string | null;
+}
+
+/**
+ * The choice saved from Settings: a provider and the model to run it on
+ * (`""` = whatever that provider defaults to). A provider id and a model tag
+ * are all it can hold — a key has no place here.
+ */
+export interface ProviderPreference {
+  provider: AnalysisProviderId;
+  model: string;
 }
 
 /** Env var holding the provider selection. */
@@ -51,6 +67,14 @@ export const OLLAMA_BASE_URL_ENV = "OLLAMA_BASE_URL";
 export const OLLAMA_MODEL_ENV = "OLLAMA_MODEL";
 /** Optional key for an Ollama instance sitting behind an auth proxy. */
 export const OLLAMA_API_KEY_ENV = "OLLAMA_API_KEY";
+/** Longest model id accepted from a request body or saved from Settings. */
+export const MAX_MODEL_ID_LENGTH = 200;
+/**
+ * What a model id may look like: printable ASCII with no whitespace. Every
+ * Ollama tag, Hugging Face id and vendor model id fits; control characters and
+ * newlines — which would otherwise reach SQLite and the analysis badge — do not.
+ */
+export const MODEL_ID_PATTERN = /^[\x21-\x7e]+$/;
 
 /** Spellings we accept for each provider, so a reasonable guess just works. */
 const PROVIDER_ALIASES: Record<string, AnalysisProviderId> = {
@@ -70,7 +94,9 @@ export function normalizeProviderId(value: unknown): AnalysisProviderId | null {
   const key = value.trim().toLowerCase();
   if (!key) return null;
   if (isAnalysisProviderId(key)) return key;
-  return PROVIDER_ALIASES[key] ?? null;
+  // Own keys only: a plain-object index would answer "constructor" or
+  // "__proto__" with something that is not a provider.
+  return Object.hasOwn(PROVIDER_ALIASES, key) ? PROVIDER_ALIASES[key] : null;
 }
 
 /** Read + trim one env value, returning `undefined` for blank. */
@@ -82,41 +108,58 @@ function read(env: AnalysisEnv, key: string): string | undefined {
 /**
  * Resolve the provider for one analysis.
  *
- * Precedence: an explicit per-analysis override, then `LH_ANALYSIS_PROVIDER`,
- * then `claude`. An unrecognized override provider is rejected by the caller
- * (the route validates it) rather than silently falling back here — but an
- * unrecognized *env* value degrades to the default, so a typo in `.env` can
- * never take AI analysis offline.
+ * Precedence: an explicit per-analysis override, then the choice saved from
+ * Settings, then `LH_ANALYSIS_PROVIDER`, then `claude`. An unrecognized
+ * override provider is rejected by the caller (the route validates it) rather
+ * than silently falling back here — but an unrecognized *env* value degrades
+ * to the default, so a typo in `.env` can never take AI analysis offline.
+ *
+ * A model id only means something next to the provider it was written for:
+ * the saved choice carries its own, and `LH_ANALYSIS_MODEL` belongs to the
+ * provider the environment selects. Neither follows a switch to a different
+ * provider — an Ollama tag is never handed to Claude because `.env` named it.
  */
 export function resolveAnalysisProvider(
   env: AnalysisEnv,
   override: ProviderOverride = {},
+  preference: ProviderPreference | null = null,
 ): ResolvedProvider {
-  const id =
-    normalizeProviderId(override.provider) ??
-    normalizeProviderId(env[PROVIDER_ENV]) ??
-    "claude";
+  const overrideId = normalizeProviderId(override.provider);
+  const preferredId = preference ? normalizeProviderId(preference.provider) : null;
+  const envId = normalizeProviderId(env[PROVIDER_ENV]);
+  const id = overrideId ?? preferredId ?? envId ?? "claude";
+  const source: ProviderSource = overrideId
+    ? "override"
+    : preferredId
+      ? "settings"
+      : envId
+        ? "env"
+        : "default";
 
   const overrideModel = override.model?.trim() || undefined;
+  const preferredModel =
+    preference && preferredId === id ? preference.model.trim() || undefined : undefined;
+  const envModel = (envId ?? "claude") === id ? read(env, MODEL_ENV) : undefined;
+  const model = overrideModel ?? preferredModel ?? envModel;
 
   switch (id) {
     case "ollama": {
-      const model = overrideModel ?? read(env, MODEL_ENV) ?? read(env, OLLAMA_MODEL_ENV);
+      const ollamaModel = model ?? read(env, OLLAMA_MODEL_ENV);
       return {
         id,
+        source,
         driver: "openai-compatible",
-        model: model ?? "",
+        model: ollamaModel ?? "",
         baseUrl: ollamaOpenAiBaseUrl(read(env, OLLAMA_BASE_URL_ENV)),
         apiKeyEnv: OLLAMA_API_KEY_ENV,
         canWebResearch: false,
-        missing: model
+        missing: ollamaModel
           ? null
-          : `Set ${MODEL_ENV} (or ${OLLAMA_MODEL_ENV}) to an installed Ollama model.`,
+          : `Set ${MODEL_ENV} (or ${OLLAMA_MODEL_ENV}) to an installed Ollama model, or pick one in Settings.`,
       };
     }
 
     case "openai-compatible": {
-      const model = overrideModel ?? read(env, MODEL_ENV);
       const baseUrl = read(env, BASE_URL_ENV);
       const missing: string[] = [];
       if (!baseUrl) {
@@ -125,6 +168,7 @@ export function resolveAnalysisProvider(
       if (!model) missing.push(`${MODEL_ENV} (the model id)`);
       return {
         id,
+        source,
         driver: "openai-compatible",
         model: model ?? "",
         baseUrl: baseUrl ?? null,
@@ -138,9 +182,10 @@ export function resolveAnalysisProvider(
     default:
       return {
         id: "claude",
+        source,
         driver: "claude",
         // Empty = the Claude Code default model, which is today's behaviour.
-        model: overrideModel ?? read(env, MODEL_ENV) ?? "",
+        model: model ?? "",
         baseUrl: null,
         apiKeyEnv: "ANTHROPIC_API_KEY",
         canWebResearch: true,

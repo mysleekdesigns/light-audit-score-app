@@ -1,33 +1,59 @@
 "use client";
 
 /**
- * AI analysis provider status.
+ * AI analysis provider — status, the switch between providers, and local
+ * Ollama detection.
  *
  * AI analysis runs on YOUR AI — a Claude Code / Max login, a provider key you
  * own, or a model running locally under Ollama. LightAudit ships no AI
  * credential of its own, so like the PageSpeed panel this is read-only status
- * plus guidance: the selection lives in the environment (a gitignored `.env`),
- * and nothing here is stored or written by the app.
+ * plus guidance for everything credential-shaped: keys and endpoints live in
+ * the environment (a gitignored `.env`) and are never accepted, stored, or
+ * echoed here.
  *
- * `GET /api/settings/ai-provider` resolves exactly what the analysis engine
- * resolves — so "Ready" here means an analysis really will run — and probes for
- * a local Ollama, which is the one thing the user cannot easily look up: which
- * models they have already pulled.
+ * The switch is the exception. `GET /api/settings/ai-provider` resolves exactly
+ * what the analysis engine resolves — so "Ready" here means an analysis really
+ * will run — probes a local Ollama for the models the user has already pulled,
+ * and reports how `.env` has set up the other two options. Choosing one
+ * (Claude, an installed Ollama model, or the custom endpoint with a model id)
+ * saves that provider + model (`PUT`), which takes effect on the next analysis
+ * with no `.env` edit or restart and overrides `.env` until "Use .env instead"
+ * clears it (`DELETE`). A provider id and a model id are all that is ever
+ * written; the custom endpoint's URL and key can only come from `.env`.
  */
 
 import { useCallback, useEffect, useEffectEvent, useState } from "react";
 import {
+  Check,
   CheckCircle2,
   Cpu,
   GlobeLock,
   HardDrive,
   Loader2,
+  RotateCcw,
+  Server,
+  Sparkles,
   TriangleAlert,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
-import { getAiProviderStatus } from "@/lib/client/aiProvider";
-import type { AiProviderStatus, OllamaModel } from "@/lib/analysis/providerStatus";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  type AiProviderChoice,
+  clearAiProviderChoice,
+  getAiProviderStatus,
+  saveAiProviderChoice,
+} from "@/lib/client/aiProvider";
+import type {
+  AiProviderStatus,
+  CustomEndpointOption,
+  OllamaModel,
+  OllamaStatus,
+} from "@/lib/analysis/providerStatus";
+import type { ProviderSource } from "@/lib/analysis/providers/types";
 import { cn } from "@/lib/utils";
 
 /** A mono key/value row in the resolved-provider readout. */
@@ -42,6 +68,40 @@ function Readout({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
+/** An identifier in running text — a model tag, an env var, a file name. */
+function Mono({ children }: { children: React.ReactNode }) {
+  return (
+    <span translate="no" className="font-mono text-foreground">
+      {children}
+    </span>
+  );
+}
+
+/** A section kicker in the panel's instrument voice. */
+function Kicker({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="font-mono text-[0.6rem] uppercase tracking-[0.2em] text-muted-foreground">
+      {children}
+    </span>
+  );
+}
+
+/** How the resolved selection was made, as the readout's suffix. */
+const SOURCE_COPY: Record<ProviderSource, string> = {
+  settings: "chosen in Settings",
+  env: "from .env",
+  default: "default",
+  override: "this analysis only",
+};
+
+/** The same, short enough for a badge. */
+const SOURCE_SHORT: Record<ProviderSource, string> = {
+  settings: "Settings",
+  env: ".env",
+  default: "default",
+  override: "this run",
+};
+
 /** The `.env` lines that would select this provider, ready to copy. */
 function EnvSnippet({ lines }: { lines: string[] }) {
   return (
@@ -51,9 +111,52 @@ function EnvSnippet({ lines }: { lines: string[] }) {
   );
 }
 
+/** A write that didn't stick must say so; what was on screen stays as it was. */
+function reportSaveError(err: unknown) {
+  toast.error(err instanceof Error ? err.message : "Could not save the setting.");
+}
+
+/** The card frame every provider option sits in; emerald when it is the one running. */
+function cardClass(active: boolean): string {
+  return cn(
+    "flex flex-col gap-3 rounded-md border px-4 py-3 transition-colors",
+    active ? "border-emerald-500/30 bg-emerald-500/5" : "border-border/60 bg-background/50",
+  );
+}
+
+/** Marks the option an analysis would run on right now, and what chose it. */
+function ActiveBadge({ source }: { source: ProviderSource }) {
+  return (
+    <Badge
+      variant="outline"
+      className="gap-1.5 border-emerald-500/40 font-mono text-[0.6rem] uppercase tracking-[0.12em] text-emerald-400"
+    >
+      <Check className="size-3" aria-hidden="true" />
+      Active · {SOURCE_SHORT[source]}
+    </Badge>
+  );
+}
+
+/** A present/absent badge for something that must never be shown — a key. */
+function PresenceBadge({ present, label }: { present: boolean; label: string }) {
+  return (
+    <Badge
+      variant="outline"
+      className={cn(
+        "shrink-0 font-mono text-[0.6rem]",
+        present ? "border-emerald-500/40 text-emerald-400" : "border-border/60 text-muted-foreground",
+      )}
+    >
+      {present ? `${label} SET` : `${label} NOT SET`}
+    </Badge>
+  );
+}
+
 export function AiProviderSettings() {
   const [status, setStatus] = useState<AiProviderStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  /** The write in flight, if any: `claude`, `ollama:<tag>`, `custom`, or `clear`. */
+  const [pending, setPending] = useState<string | null>(null);
 
   // Pure read — no setState, so it's safe to call synchronously from an effect.
   const fetchStatus = useCallback(() => getAiProviderStatus({ probe: true }), []);
@@ -76,6 +179,28 @@ export function AiProviderSettings() {
 
   const ready = status !== null && status.missing === null;
   const ollama = status?.ollama;
+  const busy = pending !== null;
+  const disabled = busy || loading || status === null;
+  const chosenHere = status?.source === "settings";
+  const source = status?.source ?? "default";
+
+  const choose = (choice: AiProviderChoice, key: string) => {
+    if (busy) return;
+    setPending(key);
+    saveAiProviderChoice(choice)
+      .then(setStatus)
+      .catch(reportSaveError)
+      .finally(() => setPending(null));
+  };
+
+  const onClear = () => {
+    if (busy) return;
+    setPending("clear");
+    clearAiProviderChoice()
+      .then(setStatus)
+      .catch(reportSaveError)
+      .finally(() => setPending(null));
+  };
 
   // Suggest the beefiest installed model rather than whatever sorts first —
   // on-disk size tracks capability closely enough, and a bigger local model
@@ -126,7 +251,21 @@ export function AiProviderSettings() {
           )}
         >
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
-            <Readout label="Provider" value={status?.label ?? "—"} />
+            <Readout
+              label="Provider"
+              value={
+                status ? (
+                  <>
+                    {status.label}{" "}
+                    <span className="text-muted-foreground">
+                      · {SOURCE_COPY[status.source]}
+                    </span>
+                  </>
+                ) : (
+                  "—"
+                )
+              }
+            />
             <Readout
               label="Model"
               value={
@@ -184,110 +323,89 @@ export function AiProviderSettings() {
           )}
         </div>
 
-        {/* local Ollama detection */}
-        <div className="flex flex-col gap-3 rounded-md border border-border/60 bg-background/50 px-4 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5">
-              <HardDrive
-                className={cn(
-                  "size-4 shrink-0",
-                  ollama?.running ? "text-emerald-400" : "text-muted-foreground",
+        {/* the switch — three options, one saved choice */}
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+            <Kicker>Switch provider — saved by the app, no restart</Kicker>
+            {chosenHere ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                onClick={onClear}
+                disabled={disabled}
+                className="font-mono text-[0.65rem] uppercase tracking-[0.12em] text-muted-foreground hover:text-foreground"
+              >
+                {pending === "clear" ? (
+                  <Loader2 className="animate-spin" aria-hidden="true" />
+                ) : (
+                  <RotateCcw aria-hidden="true" />
                 )}
-                aria-hidden="true"
-              />
-              <span className="text-sm font-medium text-foreground">
-                Local Ollama
-              </span>
-            </div>
-            <Badge
-              variant="outline"
-              className={cn(
-                "font-mono text-[0.6rem] uppercase tracking-[0.12em]",
-                ollama?.running
-                  ? "border-emerald-500/40 text-emerald-400"
-                  : "border-border/60 text-muted-foreground",
-              )}
-            >
-              {loading ? "checking" : ollama?.running ? "detected" : "not running"}
-            </Badge>
+                Use .env instead
+              </Button>
+            ) : null}
           </div>
+          <p aria-live="polite" className="text-xs text-muted-foreground">
+            <ChoiceCopy status={status} />
+          </p>
 
-          {ollama?.running ? (
-            ollama.models.length > 0 ? (
-              <>
-                <p className="text-xs text-muted-foreground">
-                  {ollama.models.length}{" "}
-                  {ollama.models.length === 1 ? "model" : "models"} installed at{" "}
-                  <span className="font-mono text-foreground">{ollama.baseUrl}</span>.
-                  Use one of these tags as your model id:
-                </p>
-                <ul className="flex flex-wrap gap-1.5">
-                  {ollama.models.map((model) => (
-                    <li key={model.name}>
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 font-mono text-[0.7rem] text-foreground">
-                        {model.name}
-                        {model.parameterSize ? (
-                          <span className="text-muted-foreground">
-                            {model.parameterSize}
-                          </span>
-                        ) : null}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                Ollama is running at{" "}
-                <span className="font-mono text-foreground">{ollama.baseUrl}</span>{" "}
-                but has no models installed. Pull one first, e.g.{" "}
-                <span className="font-mono text-foreground">
-                  ollama pull qwen2.5-coder:14b
-                </span>
-                .
-              </p>
-            )
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              Nothing answered at{" "}
-              <span className="font-mono text-foreground">
-                {ollama?.baseUrl ?? "http://localhost:11434"}
-              </span>
-              . Start it with{" "}
-              <span className="font-mono text-foreground">ollama serve</span>, or
-              point{" "}
-              <span className="font-mono text-foreground">OLLAMA_BASE_URL</span> at
-              wherever yours runs.
-            </p>
-          )}
+          <ClaudeCard
+            active={status?.provider === "claude"}
+            source={source}
+            model={status?.claude.model ?? ""}
+            pending={pending === "claude"}
+            disabled={disabled}
+            onChoose={() => choose({ provider: "claude" }, "claude")}
+          />
+
+          <OllamaCard
+            ollama={ollama ?? null}
+            loading={loading}
+            active={status?.provider === "ollama"}
+            source={source}
+            activeModel={status?.provider === "ollama" ? status.model : null}
+            pending={pending}
+            disabled={disabled}
+            onChoose={(model) => choose({ provider: "ollama", model }, `ollama:${model}`)}
+          />
+
+          <CustomEndpointCard
+            // Remount once the status is in, so the model field starts from
+            // what .env (or the saved choice) already names.
+            key={loading ? "loading" : "ready"}
+            custom={status?.custom ?? null}
+            active={status?.provider === "openai-compatible"}
+            source={source}
+            initialModel={
+              status?.provider === "openai-compatible" ? status.model : (status?.custom.model ?? "")
+            }
+            pending={pending === "custom"}
+            disabled={disabled}
+            onChoose={(model) => choose({ provider: "openai-compatible", model }, "custom")}
+          />
         </div>
 
-        {/* how to switch */}
+        {/* the .env way */}
         <div className="flex flex-col gap-3 border-t border-border/50 pt-4 text-xs text-muted-foreground">
           <span>
-            Choose a provider in a{" "}
-            <span className="font-mono text-foreground">.env</span> file in the
-            project root, then restart the server.{" "}
-            <span className="font-mono text-foreground">.env</span> is gitignored,
-            so your keys stay out of version control.
+            Or set it in <Mono>.env</Mono>: choose a provider in a <Mono>.env</Mono>{" "}
+            file in the project root, then restart the server. <Mono>.env</Mono> is
+            gitignored, so your keys stay out of version control — and it is the
+            only place an endpoint or a key can be set. A choice made above
+            overrides the <Mono>.env</Mono> selection until you clear it.
           </span>
 
           <div className="flex flex-col gap-1.5">
-            <span className="font-mono text-[0.6rem] uppercase tracking-[0.2em] text-muted-foreground">
-              Claude — default, can cite sources
-            </span>
+            <Kicker>Claude — default, can cite sources</Kicker>
             <EnvSnippet lines={["LH_ANALYSIS_PROVIDER=claude"]} />
             <span>
               Uses your existing Claude Code / Max login on this machine, or{" "}
-              <span className="font-mono text-foreground">ANTHROPIC_API_KEY</span>{" "}
-              if you set one.
+              <Mono>ANTHROPIC_API_KEY</Mono> if you set one.
             </span>
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <span className="font-mono text-[0.6rem] uppercase tracking-[0.2em] text-muted-foreground">
-              Ollama — local &amp; private, no web research
-            </span>
+            <Kicker>Ollama — local &amp; private, no web research</Kicker>
             <EnvSnippet
               lines={[
                 "LH_ANALYSIS_PROVIDER=ollama",
@@ -303,17 +421,15 @@ export function AiProviderSettings() {
               <span>
                 Local models don&apos;t browse, so these analyses are diagnosed
                 from the audit data alone and are badged{" "}
-                <span className="font-mono text-foreground">no web research</span>.
-                Pick a model with a large context window — 14B and up reason about
-                a full audit noticeably better than 7B.
+                <Mono>no web research</Mono>. Pick a model with a large context
+                window — 14B and up reason about a full audit noticeably better
+                than 7B.
               </span>
             </span>
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <span className="font-mono text-[0.6rem] uppercase tracking-[0.2em] text-muted-foreground">
-              Any OpenAI-compatible endpoint
-            </span>
+            <Kicker>Any OpenAI-compatible endpoint</Kicker>
             <EnvSnippet
               lines={[
                 "LH_ANALYSIS_PROVIDER=openai-compatible",
@@ -331,6 +447,373 @@ export function AiProviderSettings() {
         </div>
       </div>
     </section>
+  );
+}
+
+/** What the current selection means for the next analysis, in one line. */
+function ChoiceCopy({ status }: { status: AiProviderStatus | null }) {
+  if (!status) return <>Checking which provider is configured…</>;
+  const what = status.model ? (
+    <>
+      {status.label} <Mono>{status.model}</Mono>
+    </>
+  ) : (
+    <>{status.label}</>
+  );
+  if (status.source === "settings") {
+    return (
+      <>
+        {what} runs the next analysis — chosen here, overriding <Mono>.env</Mono>{" "}
+        until you clear it.
+      </>
+    );
+  }
+  if (status.source === "env") {
+    return (
+      <>
+        {what} is selected by <Mono>.env</Mono>. Pick another option to switch
+        without a restart.
+      </>
+    );
+  }
+  return <>{what} is the default. Pick another option to switch without a restart.</>;
+}
+
+/** Claude: the premium path, one click. */
+function ClaudeCard({
+  active,
+  source,
+  model,
+  pending,
+  disabled,
+  onChoose,
+}: {
+  active: boolean;
+  source: ProviderSource;
+  model: string;
+  pending: boolean;
+  disabled: boolean;
+  onChoose: () => void;
+}) {
+  return (
+    <div className={cardClass(active)}>
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start gap-3">
+          <span className="grid size-9 shrink-0 place-items-center rounded-md border border-border/70 bg-background/60 text-primary">
+            <Sparkles className="size-4" aria-hidden="true" />
+          </span>
+          <div className="flex flex-col gap-1">
+            <span className="text-sm font-semibold tracking-tight text-foreground">Claude</span>
+            <span className="text-xs leading-relaxed text-muted-foreground">
+              Your Claude Code / Max login on this machine, or{" "}
+              <Mono>ANTHROPIC_API_KEY</Mono> if you set one. The only provider that
+              can research fixes on the web and cite sources.
+            </span>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center pt-1">
+          {active ? (
+            <ActiveBadge source={source} />
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onChoose}
+              disabled={disabled}
+              className="font-mono text-xs"
+            >
+              {pending ? (
+                <Loader2 className="animate-spin" aria-hidden="true" />
+              ) : (
+                <Sparkles aria-hidden="true" />
+              )}
+              Use Claude
+            </Button>
+          )}
+        </div>
+      </div>
+      <dl className="grid grid-cols-2 gap-3 border-t border-border/50 pt-3">
+        <Readout
+          label="Model"
+          value={
+            model ? (
+              <>
+                {model} <span className="text-muted-foreground">· pinned in .env</span>
+              </>
+            ) : (
+              <span className="text-muted-foreground">SDK default</span>
+            )
+          }
+        />
+        <Readout label="Web research" value={<span className="text-emerald-400">capable</span>} />
+      </dl>
+    </div>
+  );
+}
+
+/** Local Ollama: detection plus one button per installed model. */
+function OllamaCard({
+  ollama,
+  loading,
+  active,
+  source,
+  activeModel,
+  pending,
+  disabled,
+  onChoose,
+}: {
+  ollama: OllamaStatus | null;
+  loading: boolean;
+  active: boolean;
+  source: ProviderSource;
+  activeModel: string | null;
+  pending: string | null;
+  disabled: boolean;
+  onChoose: (model: string) => void;
+}) {
+  return (
+    <div className={cardClass(active)}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <HardDrive
+            className={cn(
+              "size-4 shrink-0",
+              ollama?.running ? "text-emerald-400" : "text-muted-foreground",
+            )}
+            aria-hidden="true"
+          />
+          <span className="text-sm font-medium text-foreground">Local Ollama</span>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          {active ? <ActiveBadge source={source} /> : null}
+          <Badge
+            variant="outline"
+            className={cn(
+              "font-mono text-[0.6rem] uppercase tracking-[0.12em]",
+              ollama?.running
+                ? "border-emerald-500/40 text-emerald-400"
+                : "border-border/60 text-muted-foreground",
+            )}
+          >
+            {loading ? "checking" : ollama?.running ? "detected" : "not running"}
+          </Badge>
+        </div>
+      </div>
+
+      {ollama?.running ? (
+        ollama.models.length > 0 ? (
+          <>
+            <p className="text-xs text-muted-foreground">
+              {ollama.models.length} {ollama.models.length === 1 ? "model" : "models"}{" "}
+              installed at <Mono>{ollama.baseUrl}</Mono>. Click one to run analyses on
+              it — private, but no web research:
+            </p>
+            <ul className="flex flex-wrap gap-1.5" aria-label="Installed Ollama models">
+              {ollama.models.map((model) => (
+                <li key={model.name}>
+                  <ModelButton
+                    model={model}
+                    active={activeModel === model.name}
+                    pending={pending === `ollama:${model.name}`}
+                    disabled={disabled}
+                    onSelect={onChoose}
+                  />
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Ollama is running at <Mono>{ollama.baseUrl}</Mono> but has no models
+            installed. Pull one first, e.g. <Mono>ollama pull qwen2.5-coder:14b</Mono>.
+          </p>
+        )
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Nothing answered at <Mono>{ollama?.baseUrl ?? "http://localhost:11434"}</Mono>.
+          Start it with <Mono>ollama serve</Mono>, or point <Mono>OLLAMA_BASE_URL</Mono>{" "}
+          at wherever yours runs.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** One installed model, as the button that makes it the analysis model. */
+function ModelButton({
+  model,
+  active,
+  pending,
+  disabled,
+  onSelect,
+}: {
+  model: OllamaModel;
+  active: boolean;
+  pending: boolean;
+  disabled: boolean;
+  onSelect: (name: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      disabled={disabled}
+      onClick={() => onSelect(model.name)}
+      title={active ? `${model.name} runs the next analysis` : `Run analyses on ${model.name}`}
+      translate="no"
+      className={cn(
+        "inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-left font-mono text-[0.7rem] break-all transition-colors outline-none touch-manipulation",
+        "focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-wait disabled:opacity-70",
+        active
+          ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-300"
+          : "border-border/60 bg-muted/40 text-foreground hover:border-primary/60 hover:bg-muted/70",
+      )}
+    >
+      {pending ? (
+        <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+      ) : active ? (
+        <Check className="size-3" aria-hidden="true" />
+      ) : null}
+      {model.name}
+      {model.parameterSize ? (
+        <span className={active ? "text-emerald-400/70" : "text-muted-foreground"}>
+          {model.parameterSize}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+/**
+ * The OpenAI-compatible endpoint: configured in `.env` (URL + key, shown as a
+ * redacted URL and a presence badge), with the model id chosen here.
+ */
+function CustomEndpointCard({
+  custom,
+  active,
+  source,
+  initialModel,
+  pending,
+  disabled,
+  onChoose,
+}: {
+  custom: CustomEndpointOption | null;
+  active: boolean;
+  source: ProviderSource;
+  initialModel: string;
+  pending: boolean;
+  disabled: boolean;
+  onChoose: (model: string) => void;
+}) {
+  const [model, setModel] = useState(initialModel);
+  const configured = custom?.configured ?? false;
+  const trimmed = model.trim();
+
+  return (
+    <form
+      className={cardClass(active)}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (trimmed) onChoose(trimmed);
+      }}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start gap-3">
+          <span className="grid size-9 shrink-0 place-items-center rounded-md border border-border/70 bg-background/60 text-primary">
+            <Server className="size-4" aria-hidden="true" />
+          </span>
+          <div className="flex flex-col gap-1">
+            <span className="text-sm font-semibold tracking-tight text-foreground">
+              OpenAI-compatible endpoint
+            </span>
+            <span className="text-xs leading-relaxed text-muted-foreground">
+              OpenAI, OpenRouter, LM Studio, vLLM — anything that speaks the
+              chat-completions API. The endpoint and key come from{" "}
+              <Mono>.env</Mono>; pick the model here. Data only, no web research.
+            </span>
+          </div>
+        </div>
+        {active ? (
+          <div className="flex shrink-0 items-center pt-1">
+            <ActiveBadge source={source} />
+          </div>
+        ) : null}
+      </div>
+
+      <dl className="grid grid-cols-1 gap-3 border-t border-border/50 pt-3 sm:grid-cols-2">
+        <div className="flex min-w-0 flex-col gap-1">
+          <dt className="font-mono text-[0.6rem] uppercase tracking-[0.2em] text-muted-foreground">
+            Endpoint
+          </dt>
+          <dd className="flex min-w-0 items-center gap-2">
+            <span className="truncate font-mono text-xs text-foreground" translate="no">
+              {custom?.baseUrl ?? (configured ? "set, not displayable" : "LH_ANALYSIS_BASE_URL")}
+            </span>
+            {custom ? <PresenceBadge present={configured} label="URL" /> : null}
+          </dd>
+        </div>
+        <div className="flex min-w-0 flex-col gap-1">
+          <dt className="font-mono text-[0.6rem] uppercase tracking-[0.2em] text-muted-foreground">
+            API key
+          </dt>
+          <dd className="flex min-w-0 items-center gap-2">
+            <span className="truncate font-mono text-xs text-foreground" translate="no">
+              LH_ANALYSIS_API_KEY
+            </span>
+            {custom ? <PresenceBadge present={custom.hasApiKey} label="KEY" /> : null}
+          </dd>
+        </div>
+      </dl>
+
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+          <Label
+            htmlFor="custom-endpoint-model"
+            className="font-mono text-[0.6rem] uppercase tracking-[0.2em] text-muted-foreground"
+          >
+            Model id
+          </Label>
+          <Input
+            id="custom-endpoint-model"
+            name="model"
+            value={model}
+            onChange={(event) => setModel(event.target.value)}
+            placeholder="e.g. gpt-4.1-mini…"
+            autoComplete="off"
+            spellCheck={false}
+            translate="no"
+            maxLength={200}
+            disabled={!configured || disabled}
+            className="font-mono text-xs"
+          />
+        </div>
+        <Button
+          type="submit"
+          variant="outline"
+          size="sm"
+          disabled={!configured || disabled || !trimmed || (active && trimmed === initialModel)}
+          className="font-mono text-xs"
+        >
+          {pending ? (
+            <Loader2 className="animate-spin" aria-hidden="true" />
+          ) : (
+            <Server aria-hidden="true" />
+          )}
+          Use this endpoint
+        </Button>
+      </div>
+
+      {custom && !configured ? (
+        <p className="flex items-start gap-2 text-xs text-amber-400">
+          <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+          <span>
+            Set <Mono>LH_ANALYSIS_BASE_URL</Mono> (and <Mono>LH_ANALYSIS_API_KEY</Mono>{" "}
+            if the endpoint needs one) in <Mono>.env</Mono>, then restart the server.
+          </span>
+        </p>
+      ) : null}
+    </form>
   );
 }
 

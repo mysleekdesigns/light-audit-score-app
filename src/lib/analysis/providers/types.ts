@@ -24,6 +24,13 @@ import type {
 export type AnalysisDriverId = "claude" | "openai-compatible";
 
 /**
+ * Which tier of configuration selected the provider: a per-analysis request
+ * override, the choice saved from Settings, `LH_ANALYSIS_PROVIDER` in the
+ * environment, or the built-in default (Claude).
+ */
+export type ProviderSource = "override" | "settings" | "env" | "default";
+
+/**
  * A fully-resolved choice of AI backend: which provider, which model, where it
  * lives, and what it is capable of. Produced by `resolveAnalysisProvider` from
  * the environment (plus an optional per-analysis override).
@@ -34,6 +41,8 @@ export type AnalysisDriverId = "claude" | "openai-compatible";
 export interface ResolvedProvider {
   /** The provider the user selected (drives labels + the analysis badge). */
   id: AnalysisProviderId;
+  /** Which configuration tier chose it (drives the Settings readout). */
+  source: ProviderSource;
   /** The driver implementing it. */
   driver: AnalysisDriverId;
   /** Model id to run. Empty means "let the driver use its own default". */

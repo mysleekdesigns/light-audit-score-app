@@ -148,6 +148,81 @@ describe("resolveAnalysisProvider", () => {
   });
 });
 
+describe("the choice saved from Settings", () => {
+  it("beats the environment's selection", () => {
+    const provider = resolveAnalysisProvider(
+      { LH_ANALYSIS_PROVIDER: "claude", LH_ANALYSIS_MODEL: "claude-opus-5" },
+      {},
+      { provider: "ollama", model: "qwen2.5-coder:14b" },
+    );
+
+    expect(provider).toMatchObject({
+      id: "ollama",
+      model: "qwen2.5-coder:14b",
+      source: "settings",
+      missing: null,
+    });
+  });
+
+  it("loses to a per-analysis override", () => {
+    const provider = resolveAnalysisProvider(
+      {},
+      { provider: "claude" },
+      { provider: "ollama", model: "phi4" },
+    );
+
+    expect(provider).toMatchObject({ id: "claude", model: "", source: "override" });
+  });
+
+  it("supplies the model when an override names the same provider without one", () => {
+    const provider = resolveAnalysisProvider(
+      {},
+      { provider: "ollama" },
+      { provider: "ollama", model: "phi4" },
+    );
+
+    expect(provider.model).toBe("phi4");
+  });
+
+  it("never hands one provider's model to another", () => {
+    // LH_ANALYSIS_MODEL belongs to the provider .env selects — Ollama here — so
+    // it must not follow a switch to Claude, which has a default of its own…
+    const toClaude = resolveAnalysisProvider(
+      { LH_ANALYSIS_PROVIDER: "ollama", LH_ANALYSIS_MODEL: "qwen2.5-coder:14b" },
+      {},
+      { provider: "claude", model: "" },
+    );
+    expect(toClaude).toMatchObject({ id: "claude", model: "", source: "settings" });
+
+    // …and a Claude model id must not be handed to Ollama by an override either.
+    const toOllama = resolveAnalysisProvider(
+      { LH_ANALYSIS_MODEL: "claude-opus-5" },
+      { provider: "ollama" },
+    );
+    expect(toOllama.model).toBe("");
+    expect(toOllama.missing).toMatch(/LH_ANALYSIS_MODEL/);
+  });
+
+  it("lets an empty saved model fall through to one pinned for the same provider", () => {
+    const provider = resolveAnalysisProvider(
+      { LH_ANALYSIS_MODEL: "claude-opus-5" },
+      {},
+      { provider: "claude", model: "" },
+    );
+
+    expect(provider.model).toBe("claude-opus-5");
+  });
+
+  it("reports which tier made the selection", () => {
+    expect(resolveAnalysisProvider({}).source).toBe("default");
+    expect(resolveAnalysisProvider({ LH_ANALYSIS_PROVIDER: "ollama" }).source).toBe("env");
+    // A typo in .env selects nothing, so it is the default that is running.
+    expect(resolveAnalysisProvider({ LH_ANALYSIS_PROVIDER: "llamma" }).source).toBe(
+      "default",
+    );
+  });
+});
+
 describe("normalizeProviderId", () => {
   it("accepts the canonical ids and common spellings", () => {
     expect(normalizeProviderId("claude")).toBe("claude");
@@ -161,6 +236,10 @@ describe("normalizeProviderId", () => {
   it("rejects anything else", () => {
     expect(normalizeProviderId("")).toBeNull();
     expect(normalizeProviderId("gemini")).toBeNull();
+    // Inherited object keys are not providers.
+    expect(normalizeProviderId("constructor")).toBeNull();
+    expect(normalizeProviderId("__proto__")).toBeNull();
+    expect(normalizeProviderId("toString")).toBeNull();
     expect(normalizeProviderId(42)).toBeNull();
     expect(normalizeProviderId(null)).toBeNull();
   });

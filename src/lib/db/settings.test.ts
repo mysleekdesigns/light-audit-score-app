@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { resetDbForTests } from "@/lib/db/client";
 import {
+  deleteAppSetting,
   getAppSetting,
   getBooleanSetting,
   setAppSetting,
@@ -53,6 +54,15 @@ describe("app settings store", () => {
 
     setAppSetting("a.b", "two");
     expect(getAppSetting("a.b")).toBe("two");
+  });
+
+  it("deletes a setting so its default applies again", () => {
+    setAppSetting("a.b", "one");
+    deleteAppSetting("a.b");
+    expect(getAppSetting("a.b")).toBeNull();
+
+    // Nothing to remove is not an error.
+    expect(() => deleteAppSetting("a.b")).not.toThrow();
   });
 
   it("stores booleans as true/false strings with a caller-chosen default", () => {
