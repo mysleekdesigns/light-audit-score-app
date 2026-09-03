@@ -20,7 +20,12 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the process-isolated audit runner so the queue never launches Chrome.
-vi.mock("@/lib/queue/runAuditWorker", () => ({ runAuditInWorker: vi.fn() }));
+vi.mock("@/lib/queue/runAuditWorker", () => ({
+  runAuditInWorker: vi.fn(),
+  // The queue's settle path does `instanceof WorkerAbortError`; a missing
+  // export would throw inside its catch block once a job is cancelled.
+  WorkerAbortError: class WorkerAbortError extends Error {},
+}));
 // Mock discovery so a crawl target's resolveUrls() doesn't hit the network.
 vi.mock("@/lib/crawl/discover", () => ({ discover: vi.fn() }));
 
@@ -33,6 +38,7 @@ const { createSchedule, getSchedule, listSchedules } = await import(
 const { createSchedulerForTests, fireSchedule } = await import(
   "@/lib/schedules/scheduler"
 );
+const { getAuditQueue } = await import("@/lib/queue/AuditQueue");
 
 /** Wait until the audit queue is idle (all enqueued jobs done). */
 async function drainQueue(): Promise<void> {
@@ -45,9 +51,46 @@ async function drainQueue(): Promise<void> {
   }
 }
 
-import type { AuditResult } from "@/lib/lighthouse/types";
+import type { AuditOptions, AuditResult } from "@/lib/lighthouse/types";
 import { DEFAULT_OPTIONS } from "@/lib/lighthouse/options";
 import type { CreateScheduleInput } from "@/lib/schedules/types";
+
+/**
+ * Poll `predicate` until it holds, yielding to timers between checks so the
+ * queue's tasks (and their awaited report writes) can make progress. Fails the
+ * test rather than hanging when the condition never arrives.
+ */
+async function waitFor(predicate: () => boolean, label: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  throw new Error(`waitFor timed out: ${label}`);
+}
+
+/**
+ * Point the worker mock at a fake engine where jobs matching `blocks` hang
+ * until their batch is cancelled (resolving on abort, exactly as a killed
+ * worker settles), and every other job finishes immediately.
+ */
+function blockJobs(
+  blocks: (url: string, options: AuditOptions) => boolean,
+): void {
+  mockRunAudit.mockImplementation((url, options, signal) => {
+    if (!blocks(url, options)) return Promise.resolve(makeResult(url));
+    return new Promise<AuditResult>((resolve) => {
+      signal?.addEventListener("abort", () => resolve(makeResult(url)), {
+        once: true,
+      });
+    });
+  });
+}
+
+/** URLs the worker mock was asked to audit, in call order. */
+function auditedUrls(): string[] {
+  return mockRunAudit.mock.calls.map((call) => call[0]);
+}
 
 const mockRunAudit = vi.mocked(runAuditInWorker);
 const mockDiscover = vi.mocked(discover);
@@ -263,20 +306,214 @@ describe("scheduler.runNow", () => {
     const schedule = createSchedule(makeInput({ time: "23:59" }))!;
     const scheduler = createSchedulerForTests();
 
-    const batchId = await scheduler.runNow(schedule.id);
+    const outcome = await scheduler.runNow(schedule.id);
     await drainQueue();
-    expect(batchId).not.toBeNull();
-    expect(typeof batchId).toBe("string");
+    expect(outcome).not.toBeNull();
+    expect(typeof outcome!.batchId).toBe("string");
+    // Nothing to resume: a plain full fire.
+    expect(outcome).toMatchObject({ urlCount: 1, resumedFrom: null, skipped: 0 });
     expect(mockRunAudit).toHaveBeenCalledTimes(1);
     // The schedule's row reflects the forced fire.
-    expect(getSchedule(schedule.id)!.lastBatchId).toBe(batchId);
+    expect(getSchedule(schedule.id)!.lastBatchId).toBe(outcome!.batchId);
   });
 
   it("returns null for an unknown schedule id without firing anything", async () => {
     const scheduler = createSchedulerForTests();
-    const batchId = await scheduler.runNow("does-not-exist");
-    expect(batchId).toBeNull();
+    const outcome = await scheduler.runNow("does-not-exist");
+    expect(outcome).toBeNull();
     expect(mockRunAudit).not.toHaveBeenCalled();
+  });
+});
+
+describe("pause + resume", () => {
+  const URLS = ["https://a.test/", "https://b.test/", "https://c.test/"];
+
+  /**
+   * Fire a three-URL schedule at concurrency 1 with `b` blocked, and wait until
+   * `a` is done and `b` is the job in flight — the state a user sees when they
+   * hit Pause part-way through a run.
+   */
+  async function fireAndBlockOnB(scheduler: ReturnType<typeof createSchedulerForTests>) {
+    const schedule = createSchedule(
+      makeInput({ target: { kind: "urls", urls: URLS }, concurrency: 1 }),
+    )!;
+    blockJobs((url) => url === "https://b.test/");
+    const first = (await scheduler.runNow(schedule.id))!;
+    const queue = getAuditQueue();
+    await waitFor(() => {
+      const counts = queue.getBatch(first.batchId)?.counts;
+      return counts?.done === 1 && counts.running === 1;
+    }, "a done, b running");
+    return { schedule, first, queue };
+  }
+
+  it("cancelActiveBatches stops the schedule's running batch and keeps the finished run", async () => {
+    const scheduler = createSchedulerForTests();
+    const { schedule, first, queue } = await fireAndBlockOnB(scheduler);
+    expect(first).toMatchObject({ urlCount: 3, resumedFrom: null, skipped: 0 });
+
+    const cancelled = scheduler.cancelActiveBatches(schedule.id);
+    expect(cancelled.map((b) => b.id)).toEqual([first.batchId]);
+
+    const snapshot = queue.getBatch(first.batchId)!;
+    expect(snapshot.status).toBe("cancelled");
+    // `a` keeps its result; `b` (running) and `c` (still queued) are cancelled.
+    expect(snapshot.jobs.map((j) => j.status)).toEqual([
+      "done",
+      "cancelled",
+      "cancelled",
+    ]);
+    // Nothing left in flight: a second pause is a no-op.
+    expect(scheduler.cancelActiveBatches(schedule.id)).toEqual([]);
+  });
+
+  it("cancelActiveBatches is a no-op for a schedule with nothing running", async () => {
+    const schedule = createSchedule(makeInput())!;
+    const scheduler = createSchedulerForTests();
+    expect(scheduler.cancelActiveBatches(schedule.id)).toEqual([]);
+    // A completed run is not touched either.
+    const outcome = (await scheduler.runNow(schedule.id))!;
+    await waitFor(
+      () => getAuditQueue().getBatch(outcome.batchId)?.status === "completed",
+      "full fire completed",
+    );
+    expect(scheduler.cancelActiveBatches(schedule.id)).toEqual([]);
+    expect(scheduler.cancelActiveBatches("does-not-exist")).toEqual([]);
+  });
+
+  it("runNow after a pause skips URLs that already have a result, and chains across a second pause", async () => {
+    const scheduler = createSchedulerForTests();
+    const { schedule, first, queue } = await fireAndBlockOnB(scheduler);
+    scheduler.cancelActiveBatches(schedule.id);
+
+    // Resume: `a` is skipped; `b` (was running) and `c` (was queued) run, and
+    // the new batch links back to the paused one. Block on `c` this time.
+    blockJobs((url) => url === "https://c.test/");
+    mockRunAudit.mockClear();
+    const second = (await scheduler.runNow(schedule.id))!;
+    expect(second).toMatchObject({
+      urlCount: 2,
+      resumedFrom: first.batchId,
+      skipped: 1,
+    });
+    expect(queue.getBatch(second.batchId)!.priorBatchId).toBe(first.batchId);
+    await waitFor(() => {
+      const counts = queue.getBatch(second.batchId)?.counts;
+      return counts?.done === 1 && counts.running === 1;
+    }, "b done, c running");
+    expect(auditedUrls()).toEqual(["https://b.test/", "https://c.test/"]);
+
+    // Pause again part-way: the next resume must credit BOTH paused legs, so
+    // only `c` is left.
+    scheduler.cancelActiveBatches(schedule.id);
+    blockJobs(() => false);
+    mockRunAudit.mockClear();
+    const third = (await scheduler.runNow(schedule.id))!;
+    expect(third).toMatchObject({
+      urlCount: 1,
+      resumedFrom: second.batchId,
+      skipped: 2,
+    });
+    await waitFor(
+      () => queue.getBatch(third.batchId)?.status === "completed",
+      "third batch completed",
+    );
+    expect(auditedUrls()).toEqual(["https://c.test/"]);
+    expect(getSchedule(schedule.id)!.lastBatchId).toBe(third.batchId);
+
+    // The run is complete, so the next Run now is an ordinary full fire.
+    mockRunAudit.mockClear();
+    const fourth = (await scheduler.runNow(schedule.id))!;
+    await waitFor(
+      () => queue.getBatch(fourth.batchId)?.status === "completed",
+      "fourth batch completed",
+    );
+    expect(fourth).toMatchObject({ urlCount: 3, resumedFrom: null, skipped: 0 });
+    expect(auditedUrls()).toEqual(URLS);
+  });
+
+  it("resume re-runs a 'both' URL in full unless every form factor already has a result", async () => {
+    const schedule = createSchedule(
+      makeInput({
+        target: { kind: "urls", urls: ["https://a.test/"] },
+        device: "both",
+        concurrency: 1,
+      }),
+    )!;
+    // Mobile leg finishes; the desktop leg hangs until paused.
+    blockJobs((_url, options) => options.formFactor === "desktop");
+    const scheduler = createSchedulerForTests();
+    const first = (await scheduler.runNow(schedule.id))!;
+    const queue = getAuditQueue();
+    await waitFor(() => {
+      const counts = queue.getBatch(first.batchId)?.counts;
+      return counts?.done === 1 && counts.running === 1;
+    }, "mobile done, desktop running");
+    scheduler.cancelActiveBatches(schedule.id);
+
+    blockJobs(() => false);
+    mockRunAudit.mockClear();
+    const second = (await scheduler.runNow(schedule.id))!;
+    // Half-finished URL: not skipped, both legs run again, lineage kept.
+    expect(second).toMatchObject({
+      urlCount: 1,
+      resumedFrom: first.batchId,
+      skipped: 0,
+    });
+    await waitFor(
+      () => queue.getBatch(second.batchId)?.status === "completed",
+      "resumed both-batch completed",
+    );
+    expect(mockRunAudit.mock.calls.map((c) => c[1].formFactor)).toEqual([
+      "mobile",
+      "desktop",
+    ]);
+  });
+
+  it("resume still skips finished URLs after a restart, from the persisted runs", async () => {
+    const scheduler = createSchedulerForTests();
+    const { schedule, first } = await fireAndBlockOnB(scheduler);
+    scheduler.cancelActiveBatches(schedule.id);
+
+    // Simulate a server restart: the live queue forgets the batch, so the
+    // scheduler has to fall back to the persisted batch + its `done` run rows.
+    (globalThis as { __auditQueue?: unknown }).__auditQueue = undefined;
+    expect(getAuditQueue().getBatch(first.batchId)).toBeUndefined();
+
+    blockJobs(() => false);
+    mockRunAudit.mockClear();
+    const second = (await scheduler.runNow(schedule.id))!;
+    expect(second).toMatchObject({
+      urlCount: 2,
+      resumedFrom: first.batchId,
+      skipped: 1,
+    });
+    await waitFor(
+      () => getAuditQueue().getBatch(second.batchId)?.status === "completed",
+      "resumed batch completed after restart",
+    );
+    expect(auditedUrls()).toEqual(["https://b.test/", "https://c.test/"]);
+  });
+
+  it("the cadence tick never resumes — a daily fire is always the full target", async () => {
+    const scheduler = createSchedulerForTests();
+    const { schedule } = await fireAndBlockOnB(scheduler);
+    scheduler.cancelActiveBatches(schedule.id);
+
+    // Move lastFiredAt behind the 09:00 cutoff so the next tick is due.
+    // (runNow recorded a fire "now"; the test clock is a day later.)
+    blockJobs(() => false);
+    mockRunAudit.mockClear();
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    tomorrow.setHours(9, 0, 0, 0);
+    await scheduler.tick(tomorrow);
+    await waitFor(
+      () =>
+        getAuditQueue().getBatch(getSchedule(schedule.id)!.lastBatchId!)
+          ?.status === "completed",
+      "daily fire completed",
+    );
+    expect(auditedUrls()).toEqual(URLS);
   });
 });
 

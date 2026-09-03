@@ -4,8 +4,9 @@
  * Archive console (PRD §6 Phase 14 — Scheduled daily archive).
  *
  * Renders one card per persisted schedule. Each card shows the schedule's
- * cadence + target + last/next fire, lets the user pause/enable, delete, or
- * "Run now" (force-fire ignoring cadence), and lists the batches the schedule
+ * cadence + target + last/next fire, lets the user delete it or drive it with a
+ * single Run now / Pause button (Run now fires it, resuming a paused run where
+ * it left off; Pause stops the run in flight), and lists the batches the schedule
  * has actually produced (latest first) with category-score pills. Mutations
  * hit Agent A's `/api/schedules/**` routes and then `router.refresh()` so the
  * server page re-reads SQLite and the UI reflects truth — same pattern as
@@ -15,7 +16,13 @@
  * the "Next run" tick is wall-clock fresh on every render without server work.
  */
 
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -26,7 +33,6 @@ import {
   Globe,
   Loader2,
   PauseCircle,
-  PlayCircle,
   RotateCw,
   Trash2,
   TriangleAlert,
@@ -52,6 +58,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useBatchStream } from "@/hooks/useBatchStream";
 import type { BatchInfo, HistoryRow } from "@/lib/db/persistence";
 import { nextFireAt } from "@/lib/schedules/cadence";
 import type { Schedule, ScheduleTarget } from "@/lib/schedules/types";
@@ -228,7 +235,7 @@ interface ScheduleCardProps {
 function ScheduleCard({ schedule, batches }: ScheduleCardProps) {
   const router = useRouter();
   const [pendingAction, setPendingAction] = useState<
-    "toggle" | "delete" | "run" | null
+    "delete" | "run" | "pause" | null
   >(null);
   const submitting = pendingAction !== null;
 
@@ -254,6 +261,30 @@ function ScheduleCard({ schedule, batches }: ScheduleCardProps) {
   const totalRuns = batches.length;
   const lastBatch = batches[0] ?? null;
 
+  // Which batch the single Run now / Pause button is watching. The server list
+  // is the source of truth once it has refreshed; `firedBatchId` bridges the
+  // gap between a successful Run now and that refresh. A persisted row can be
+  // left at "running" by a server that died mid-run, so the button trusts the
+  // live stream, not the row: the stream's first snapshot of such a batch is
+  // already terminal, which reads as "not running".
+  const [firedBatchId, setFiredBatchId] = useState<string | null>(null);
+  const listedActive =
+    batches.find((b) => b.status === "running" || b.status === "queued") ??
+    null;
+  const fired =
+    firedBatchId !== null && !batches.some((b) => b.id === firedBatchId)
+      ? firedBatchId
+      : null;
+  const watchedBatchId = listedActive?.id ?? fired;
+  const { isComplete } = useBatchStream(watchedBatchId);
+  const isRunning = watchedBatchId !== null && !isComplete;
+
+  // The watched run reached a terminal state (finished, or paused from
+  // elsewhere): re-read the server list so run history and the button agree.
+  useEffect(() => {
+    if (watchedBatchId !== null && isComplete) router.refresh();
+  }, [watchedBatchId, isComplete, router]);
+
   async function callApi(path: string, init: RequestInit): Promise<Response> {
     const response = await fetch(path, {
       ...init,
@@ -265,31 +296,36 @@ function ScheduleCard({ schedule, batches }: ScheduleCardProps) {
     return response;
   }
 
-  const handleToggle = useCallback(async () => {
-    setPendingAction("toggle");
+  const handlePause = useCallback(async () => {
+    setPendingAction("pause");
     try {
       const response = await callApi(
-        `/api/schedules/${encodeURIComponent(schedule.id)}`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({ enabled: !schedule.enabled }),
-        },
+        `/api/schedules/${encodeURIComponent(schedule.id)}/pause`,
+        { method: "POST" },
       );
-      if (!response.ok) throw new Error(`Request failed (${response.status}).`);
+      const body = (await response.json().catch(() => null)) as
+        | { cancelledBatchIds?: string[]; error?: { message?: string } }
+        | null;
+      if (!response.ok) {
+        throw new Error(
+          body?.error?.message ?? `Request failed (${response.status}).`,
+        );
+      }
       toast.success(
-        schedule.enabled
-          ? `Paused “${schedule.name || target.label}”.`
-          : `Enabled “${schedule.name || target.label}”.`,
+        (body?.cancelledBatchIds?.length ?? 0) > 0
+          ? "Paused — Run now picks up where it left off."
+          : "Nothing was running.",
       );
+      setFiredBatchId(null);
       router.refresh();
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Could not update the schedule.",
+        err instanceof Error ? err.message : "Could not pause the run.",
       );
     } finally {
       setPendingAction(null);
     }
-  }, [schedule.enabled, schedule.id, schedule.name, target.label, router]);
+  }, [schedule.id, router]);
 
   const handleDelete = useCallback(async () => {
     // Confirm with the user before destroying a persisted schedule. The native
@@ -329,21 +365,34 @@ function ScheduleCard({ schedule, batches }: ScheduleCardProps) {
         { method: "POST" },
       );
       const body = (await response.json().catch(() => null)) as
-        | { batchId?: string; error?: { message?: string } }
+        | {
+            batchId?: string;
+            urlCount?: number;
+            resumedFrom?: string | null;
+            skipped?: number;
+            error?: { message?: string };
+          }
         | null;
       if (!response.ok || !body?.batchId) {
         throw new Error(
           body?.error?.message ?? `Request failed (${response.status}).`,
         );
       }
-      toast.success("Fired schedule — streaming…", {
-        action: {
-          label: "View",
-          onClick: () => {
-            router.push(`/?watch=${encodeURIComponent(body.batchId!)}`);
+      const { batchId, urlCount = 0, skipped = 0 } = body;
+      setFiredBatchId(batchId);
+      toast.success(
+        body.resumedFrom
+          ? `Resumed where the paused run left off — ${urlCount} ${urlCount === 1 ? "URL" : "URLs"} to go, ${skipped} already audited.`
+          : "Fired schedule — streaming…",
+        {
+          action: {
+            label: "View",
+            onClick: () => {
+              router.push(`/?watch=${encodeURIComponent(batchId)}`);
+            },
           },
         },
-      });
+      );
       router.refresh();
     } catch (err) {
       toast.error(
@@ -363,27 +412,6 @@ function ScheduleCard({ schedule, batches }: ScheduleCardProps) {
               <h3 className="font-heading text-base font-medium leading-snug text-foreground">
                 {schedule.name || target.label}
               </h3>
-              <Badge
-                variant="outline"
-                className={cn(
-                  "gap-1 font-mono text-[0.625rem] uppercase tracking-[0.18em]",
-                  schedule.enabled
-                    ? "border-score-good/40 text-score-good"
-                    : "border-border/60 text-muted-foreground",
-                )}
-              >
-                {schedule.enabled ? (
-                  <>
-                    <PlayCircle aria-hidden className="size-2.5" />
-                    Enabled
-                  </>
-                ) : (
-                  <>
-                    <PauseCircle aria-hidden className="size-2.5" />
-                    Paused
-                  </>
-                )}
-              </Badge>
               <Badge
                 variant="outline"
                 className="gap-1 border-border/60 font-mono text-[0.625rem] uppercase tracking-[0.18em] text-muted-foreground"
@@ -407,48 +435,25 @@ function ScheduleCard({ schedule, batches }: ScheduleCardProps) {
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={handleRunNow}
+                  onClick={isRunning ? handlePause : handleRunNow}
                   disabled={submitting}
-                  aria-label="Run schedule now"
+                  aria-label={isRunning ? "Pause the run" : "Run schedule now"}
                   className="font-mono text-[0.7rem] uppercase tracking-[0.14em]"
                 >
-                  {pendingAction === "run" ? (
+                  {pendingAction === "run" || pendingAction === "pause" ? (
                     <Spinner data-icon="inline-start" />
+                  ) : isRunning ? (
+                    <PauseCircle data-icon="inline-start" />
                   ) : (
                     <RotateCw data-icon="inline-start" />
                   )}
-                  Run now
+                  {isRunning ? "Pause" : "Run now"}
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
-                Force-fire this schedule (ignores cadence)
-              </TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={handleToggle}
-                  disabled={submitting}
-                  aria-label={schedule.enabled ? "Pause schedule" : "Enable schedule"}
-                  className="font-mono text-[0.7rem] uppercase tracking-[0.14em]"
-                >
-                  {pendingAction === "toggle" ? (
-                    <Spinner data-icon="inline-start" />
-                  ) : schedule.enabled ? (
-                    <PauseCircle data-icon="inline-start" />
-                  ) : (
-                    <PlayCircle data-icon="inline-start" />
-                  )}
-                  {schedule.enabled ? "Pause" : "Enable"}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                {schedule.enabled
-                  ? "Stop firing until re-enabled"
-                  : "Resume daily firing"}
+                {isRunning
+                  ? "Stop the run in progress — Run now picks up where it left off"
+                  : "Fire this schedule now — a paused run picks up where it left off"}
               </TooltipContent>
             </Tooltip>
             <Tooltip>
@@ -632,6 +637,7 @@ function RunHistoryRow({ batch }: RunHistoryRowProps) {
   const isError = batch.status === "completed_with_errors";
   const isRunning = batch.status === "running";
   const isQueued = batch.status === "queued";
+  const isPaused = batch.status === "cancelled";
 
   return (
     <Link
@@ -665,6 +671,11 @@ function RunHistoryRow({ batch }: RunHistoryRowProps) {
           <span className="inline-flex items-center gap-1 font-mono text-[0.65rem] uppercase tracking-[0.14em] text-muted-foreground">
             <Clock aria-hidden className="size-3" />
             queued
+          </span>
+        ) : isPaused ? (
+          <span className="inline-flex items-center gap-1 font-mono text-[0.65rem] uppercase tracking-[0.14em] text-muted-foreground">
+            <PauseCircle aria-hidden className="size-3" />
+            paused
           </span>
         ) : (
           <span className="inline-flex items-center gap-1 font-mono text-[0.65rem] uppercase tracking-[0.14em] text-score-good">

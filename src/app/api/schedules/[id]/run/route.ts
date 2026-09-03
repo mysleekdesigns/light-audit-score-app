@@ -4,9 +4,12 @@
  *
  * Delegates to `getScheduler().runNow(id)`, which resolves the schedule's URLs
  * (re-running discovery for crawl targets) and submits a batch through the
- * existing audit queue with `scheduleId` set. Returns the new `batchId` on
- * success, a structured 404 when the schedule doesn't exist, or a 500 when the
- * fire failed (e.g. a crawl target that resolved to zero URLs).
+ * existing audit queue with `scheduleId` set. When the schedule's latest batch
+ * was paused, the fire resumes it: URLs that already have a result are skipped
+ * and the new batch links back via `priorBatchId`. Returns the `FireOutcome`
+ * (`batchId`, `urlCount`, `resumedFrom`, `skipped`) on success, a structured
+ * 404 when the schedule doesn't exist, or a 500 when the fire failed (e.g. a
+ * crawl target that resolved to zero URLs).
  */
 
 import { apiError, notFound, serverError } from "@/lib/api/errors";
@@ -30,14 +33,14 @@ export async function POST(
     return notFound("schedule_not_found", `No schedule found with id "${id}".`);
   }
 
-  const batchId = await getScheduler().runNow(id);
-  if (batchId === null) {
+  const outcome = await getScheduler().runNow(id);
+  if (outcome === null) {
     return serverError(
       "schedule_run_failed",
       "Failed to fire the schedule (it may have resolved to zero URLs).",
     );
   }
-  return Response.json({ batchId }, { status: 200 });
+  return Response.json(outcome, { status: 200 });
 }
 
 // Reject unsupported methods with a structured 405 rather than Next's default.
