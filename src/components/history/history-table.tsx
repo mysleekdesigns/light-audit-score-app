@@ -317,17 +317,46 @@ function SortHeader({
 }
 
 /**
- * A compact engine badge — cyan "PSI" for PageSpeed Insights runs; nothing for
- * the local engine (the common case stays uncluttered).
+ * Engine badge styling, keyed on the run's source. Cyan (the primary token) is
+ * PSI's colour throughout the app; the local engine takes the theme's violet
+ * chart token — the one accent hue that isn't cyan and isn't one of the three
+ * score bands, so an engine badge never reads as a good/average/poor verdict.
+ */
+const SOURCE_BADGE: Record<
+  HistoryRow["source"],
+  { label: string; title: string; className: string }
+> = {
+  local: {
+    label: "LHA",
+    title: "Lighthouse audit — run locally by this machine's Chrome",
+    className: "border-chart-5/40 bg-chart-5/10 text-chart-5",
+  },
+  psi: {
+    label: "PSI",
+    title: "PageSpeed Insights run — measured on Google's servers",
+    className: "border-primary/40 bg-primary/10 text-primary",
+  },
+};
+
+/**
+ * A compact engine badge — violet "LHA" (Lighthouse audit) for this machine's
+ * Lighthouse, cyan "PSI" for PageSpeed Insights. Both engines are labelled,
+ * never just one: a page audited both ways lands as two rows in the same table,
+ * and an absent badge only means "local" to a reader who already knows the
+ * convention.
  */
 function SourceBadge({ source }: { source: HistoryRow["source"] }) {
-  if (source !== "psi") return null;
+  const { label, title, className } = SOURCE_BADGE[source] ?? SOURCE_BADGE.local;
   return (
     <Badge
       variant="outline"
-      className="border-primary/40 bg-primary/10 font-mono text-[0.6rem] uppercase tracking-[0.12em] text-primary"
+      title={title}
+      className={cn(
+        "font-mono text-[0.6rem] uppercase tracking-[0.12em]",
+        className,
+      )}
     >
-      PSI
+      {label}
     </Badge>
   );
 }
@@ -1252,7 +1281,7 @@ function PairedTableBody({
                 <TableRow key={primary.id} className="hover:bg-muted/40">
                   {/* `max-w-0` is what lets the URL truncate inside a table
                       cell, but it also let the column collapse to ~42px on a
-                      phone — the PSI badge and nothing else — so no row said
+                      phone — the engine badge and nothing else — so no row said
                       which page it was. Below `sm` the cap becomes a fixed 8rem
                       the scores cannot squeeze, and truncation still works. */}
                   {/* Below `xl` the URL, the engine badge and the run time all
