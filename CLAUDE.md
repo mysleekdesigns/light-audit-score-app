@@ -19,7 +19,8 @@ engine = `lighthouse` v13 + `chrome-launcher`; `p-queue`; `better-sqlite3` + Dri
 
 > **Model change (2026-09-02).**
 > The app is free and **standalone**. Licence enforcement, anti-piracy hardening and cloud sync
-> are retired; the `cloud/` billing app is **dormant but preserved**, and never ships. Phase
+> are retired. The `cloud/` billing app that backed the paid tier was **deleted on 2026-09-03**
+> (last version is tagged `cloud-archive`); nothing hosted remains. Phase
 > letters were renumbered, so a phase letter from an older conversation may not mean what it used
 > to. Monetisation is deliberately unresolved (Phase G).
 >
@@ -59,7 +60,6 @@ This applies equally to teammates spawned into a parallel team and to delegated 
 | **vercel-react-best-practices** | Writing, reviewing, or refactoring React/Next.js code (components, data fetching, performance). |
 | **vercel-composition-patterns** | Designing component APIs / composition (compound components, context, reusable libraries) — e.g. the client/hook/contract seam. |
 | **web-design-guidelines** | Reviewing built UI for accessibility / UX / web-interface-guideline compliance. |
-| **licensing** | **Dormant** — only for work inside `cloud/`, or if a paid tier is ever revived. Not part of the current free-app plan. |
 | **byo-ai-providers** | Any BYO-AI provider work or changes under `src/lib/analysis/` — provider seam, drivers, degradation tiers, research server. |
 
 Rules of thumb:
@@ -77,11 +77,9 @@ Rules of thumb:
 Prefer delegating matching work to these instead of generic agents — they carry the project's
 invariants and preload the right skill:
 
-- **license-cloud-engineer** — **dormant**: only for `cloud/` work or a revived paid tier.
 - **ai-provider-engineer** — Phase D: AnalysisProvider seam, Claude/Ollama/OpenAI-compatible drivers.
 - **security-reviewer** (read-only) — run it after any change touching auth, secret handling,
   the PSI or AI-provider key paths, the proxy (request gate)/session token, or the local HTTP server.
-  (Licence/billing triggers only apply inside `cloud/`.)
 
 ## Rules & hooks
 

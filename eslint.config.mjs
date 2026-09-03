@@ -14,9 +14,6 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // CI workflows are YAML, not linted here
     ".github/**",
-    // The license cloud (SAAS_PLAN.md Phase B) is a self-contained app with its
-    // own tooling under cloud/ — it is linted/typechecked/built by its own gate.
-    "cloud/**",
   ]),
 ]);
 
