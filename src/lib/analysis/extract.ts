@@ -105,6 +105,53 @@ function truncate(value: string, max = MAX_DESC): string {
 }
 
 /**
+ * Flatten a string written by the AUDITED PAGE — its final URL, the CSS
+ * selectors and resource URLs Lighthouse copied out of the failing elements —
+ * into a single harmless line of prompt data.
+ *
+ * Audit titles and descriptions are Lighthouse's own text; these are not. They
+ * are attacker-controlled whenever the audited site is, and they land in a
+ * prompt that a tool-using agent reads (`providers/claude.ts`), which makes them
+ * an indirect prompt-injection vector (OWASP LLM01). Line structure is what an
+ * injection needs to look like an instruction rather than a value, so:
+ *
+ *  - control characters and line breaks collapse to single spaces, keeping every
+ *    value inside the one `- examples: …` bullet it was rendered into;
+ *  - the fixes sentinels are defanged, so page content cannot forge (or
+ *    prematurely close) the JSON block the response protocol is parsed from.
+ *
+ * The prompt fences these values as untrusted data too ({@link buildUserPrompt});
+ * this is the half that holds regardless of what the model makes of the fence.
+ */
+export function sanitizeUntrusted(value: string, max = MAX_DESC): string {
+  //
+  // ORDER IS LOAD-BEARING. Every stage that DELETES characters runs before the
+  // `<` defang, and nothing after it deletes — otherwise a deletion pulls two
+  // `<` back together and re-forms the sentinel the defang just broke apart.
+  // `div ​<​<​<FIXES_JSON>>>` (zero-width spaces between the angle brackets)
+  // is the concrete case: the defang sees no adjacent `<` to separate, and the
+  // invisible-character strip then yields a verbatim `<<<FIXES_JSON>>>`.
+  const flattened = value
+    // Control characters, C0 and C1. Substitutes, so it is safe anywhere.
+    .replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")
+    // DELETES: the prompt's untrusted-data guards, so page text cannot close
+    // its own fence.
+    .replace(/[«»]/g, "")
+    // DELETES: invisible and bidi-control characters. They cannot forge line
+    // structure (`\s` below already collapses every Unicode separator), but
+    // they can hide an injection from anyone reading the prompt or the
+    // rendered example — and, before this ran first, splice a sentinel.
+    .replace(/[\u00ad\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069]/g, "")
+    // The LAST character-level stage. One space after every `<` followed by
+    // another; the lookahead (not `/<<</g`) is what makes it overlap-safe, so
+    // `<<<<FIXES_JSON>>>` cannot come out as `< <<<FIXES_JSON>>>`.
+    .replace(/<(?=<)/g, "< ")
+    // Substitutes rather than deletes, so it cannot restore adjacency.
+    .replace(/\s+/g, " ");
+  return truncate(flattened, max);
+}
+
+/**
  * Pull up to {@link MAX_EXAMPLES} concrete targets from an audit's `details`
  * (Lighthouse's table/opportunity/list shapes), preferring CSS selectors and
  * URLs — the things a fix would actually act on. Returns `{ count, examples }`.
@@ -129,8 +176,10 @@ function summarizeDetails(details: unknown): {
     const url =
       asString(item.url) ?? (source ? asString(source.url) : undefined);
 
+    // Page-authored text (a selector from the site's own DOM, a resource URL it
+    // chose) — flattened before it can reach the prompt. See `sanitizeUntrusted`.
     const target = selector ?? url ?? asString(item.label);
-    if (target) examples.push(truncate(target, 160));
+    if (target) examples.push(sanitizeUntrusted(target, 160));
   }
 
   return {
@@ -161,7 +210,7 @@ function projectAudits(refs: CategoryAuditRef[]): AuditFinding[] {
     description: truncate(a.description),
     weight: a.weight,
     score: a.score,
-    displayValue: a.displayValue,
+    displayValue: sanitizeUntrusted(a.displayValue, 160),
     failed: a.state === "failed",
   }));
 }
@@ -202,7 +251,8 @@ export function buildAnalysisInput(args: {
   const categoryScore = parsed.scores[category] ?? null;
 
   const base: AnalysisInput = {
-    url: parsed.finalUrl || parsed.requestedUrl,
+    // Also page-derived: the final URL is whatever the site redirected us to.
+    url: sanitizeUntrusted(parsed.finalUrl || parsed.requestedUrl, 500),
     formFactor,
     lighthouseVersion: parsed.lighthouseVersion,
     category,
@@ -215,7 +265,7 @@ export function buildAnalysisInput(args: {
       return {
         abbr: METRIC_META[id].abbr,
         label: METRIC_META[id].label,
-        displayValue: m?.displayValue ?? "—",
+        displayValue: sanitizeUntrusted(m?.displayValue ?? "—", 160),
         score: m?.score ?? null,
       };
     });
@@ -226,7 +276,7 @@ export function buildAnalysisInput(args: {
         title: o.title,
         description: truncate(o.description),
         savingsMs: o.savingsMs,
-        displayValue: o.displayValue,
+        displayValue: sanitizeUntrusted(o.displayValue, 160),
         score: o.score,
       }));
     if (field) base.field = projectField(field);

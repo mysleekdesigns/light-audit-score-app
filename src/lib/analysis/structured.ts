@@ -18,6 +18,7 @@
 import { z } from "zod";
 
 import { asString, isRecord } from "@/lib/lighthouse/parseLhr";
+import { safeHttpHref } from "@/lib/redactUrl";
 import {
   FIXES_CLOSE,
   FIXES_OPEN,
@@ -84,14 +85,25 @@ function coercePriority(value: unknown): FixPriority {
   return value === "high" || value === "low" ? value : "medium";
 }
 
-/** Coerce a raw citations array into {@link AnalysisCitation}[], dropping bad entries. */
+/**
+ * Coerce a raw citations array into {@link AnalysisCitation}[], dropping bad
+ * entries — including any whose URL is not an absolute http(s) one.
+ *
+ * A citation is persisted and later rendered as a link the user clicks, and the
+ * model that wrote it has been reading text from the audited page. This is the
+ * single chokepoint every driver's citations pass through, so it is where a
+ * `javascript:` "source" stops being stored at all; the render sites validate
+ * again for the analyses saved before this existed.
+ */
 function coerceCitations(value: unknown): AnalysisCitation[] {
   if (!Array.isArray(value)) return [];
   const out: AnalysisCitation[] = [];
   for (const entry of value) {
     const parsed = citationSchema.safeParse(entry);
     if (!parsed.success) continue;
-    out.push({ url: parsed.data.url, title: parsed.data.title });
+    const url = safeHttpHref(parsed.data.url);
+    if (!url) continue;
+    out.push({ url, title: parsed.data.title });
   }
   return out;
 }

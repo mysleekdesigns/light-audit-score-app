@@ -22,6 +22,7 @@ import {
   parseOllamaTags,
 } from "@/lib/analysis/providers/ollama";
 import {
+  MODEL_ID_PATTERN,
   normalizeProviderId,
   readProviderApiKey,
   resolveAnalysisProvider,
@@ -242,6 +243,34 @@ describe("normalizeProviderId", () => {
     expect(normalizeProviderId("toString")).toBeNull();
     expect(normalizeProviderId(42)).toBeNull();
     expect(normalizeProviderId(null)).toBeNull();
+  });
+});
+
+describe("MODEL_ID_PATTERN", () => {
+  it("accepts real model ids", () => {
+    for (const id of [
+      "llama3.1:8b",
+      "claude-sonnet-5",
+      "gpt-4o-mini",
+      "Qwen/Qwen2.5-7B-Instruct",
+      "mistral-nemo:12b-instruct-2407-q4_K_M",
+    ]) {
+      expect(MODEL_ID_PATTERN.test(id)).toBe(true);
+    }
+  });
+
+  it("rejects a leading dash, which would reach the agent CLI as a flag", () => {
+    // The Claude driver passes this id to the Agent SDK, which spawns the
+    // `claude` CLI with it — and the analyze/settings routes take it from a
+    // request body. A `-`-prefixed value must never look like an option.
+    expect(MODEL_ID_PATTERN.test("--dangerously-skip-permissions")).toBe(false);
+    expect(MODEL_ID_PATTERN.test("-model")).toBe(false);
+  });
+
+  it("rejects whitespace and control characters", () => {
+    expect(MODEL_ID_PATTERN.test("two words")).toBe(false);
+    expect(MODEL_ID_PATTERN.test("llama3\n--flag")).toBe(false);
+    expect(MODEL_ID_PATTERN.test("")).toBe(false);
   });
 });
 

@@ -14,6 +14,8 @@
 
 import type { ReactNode } from "react";
 
+import { safeHttpHref } from "@/lib/redactUrl";
+
 /** Render inline `code`, **bold**, and [label](url); unmatched markers stay literal. */
 function renderInline(text: string, keyPrefix: string): ReactNode[] {
   const nodes: ReactNode[] = [];
@@ -44,11 +46,15 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
       );
     } else {
       const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(token);
-      if (link) {
+      // Only http(s) becomes a link: this prose is model output shaped by the
+      // audited page's own text, so a `javascript:` target is a real possibility
+      // and would run on this app's origin. Anything else stays literal.
+      const href = link ? safeHttpHref(link[2]) : null;
+      if (link && href) {
         nodes.push(
           <a
             key={key}
-            href={link[2]}
+            href={href}
             target="_blank"
             rel="noopener noreferrer"
             className="text-primary underline underline-offset-2 hover:text-primary/80"

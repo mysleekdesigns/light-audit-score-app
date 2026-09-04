@@ -48,8 +48,15 @@ describe("isTrustedWrite", () => {
     expect(isTrustedWrite("POST", headers({ host, origin: "not a url" }))).toBe(false);
   });
 
-  it("leaves non-browser clients (no Origin, no Sec-Fetch-Site) alone", () => {
-    expect(isTrustedWrite("POST", headers({ host: "127.0.0.1:3000" }))).toBe(true);
+  it("refuses a write that declares no origin at all", () => {
+    // Fail closed: this check is the only thing between the app and a page on
+    // another loopback port (SameSite=Strict ignores ports), and a client that
+    // sends neither header is precisely the one that would slip past it. A
+    // scripted client declares `Origin` (see the case above) like any browser.
+    expect(isTrustedWrite("POST", headers({ host: "127.0.0.1:3000" }))).toBe(false);
+    expect(isTrustedWrite("DELETE", headers({ host: "127.0.0.1:3000" }))).toBe(false);
+    // Safe methods are unaffected — they change nothing.
+    expect(isTrustedWrite("GET", headers({ host: "127.0.0.1:3000" }))).toBe(true);
   });
 });
 
@@ -75,9 +82,41 @@ describe("hostnameOf", () => {
   });
 });
 
+describe("hostnameOf rejects a malformed Host", () => {
+  it("refuses a header carrying userinfo, a path, or a second host", () => {
+    // `127.0.0.1:3000@evil.example` has ONE colon, so a naive split reports a
+    // loopback hostname — while the same raw header used as a URL base resolves
+    // to `http://evil.example`, which is how the gate's `?token=` strip redirect
+    // could be aimed off-origin. Refuse the header instead.
+    expect(hostnameOf("127.0.0.1:3000@evil.example")).toBeNull();
+    expect(hostnameOf("[::1]:3000@evil.example")).toBeNull();
+    expect(hostnameOf("127.0.0.1/../evil.example")).toBeNull();
+    expect(hostnameOf("127.0.0.1 evil.example")).toBeNull();
+    expect(hostnameOf("127.0.0.1\\evil.example")).toBeNull();
+    // A bracketed host must match WHOLE. Stripping brackets by character would
+    // accept these and report the loopback half.
+    expect(hostnameOf("[::1]evil]")).toBeNull();
+    expect(hostnameOf("[127.0.0.1]:80]")).toBeNull();
+    expect(hostnameOf("localhost:80]")).toBeNull();
+    expect(hostnameOf("[::1")).toBeNull();
+    expect(hostnameOf("[]")).toBeNull();
+    // ...and the well-formed ones still parse.
+    expect(hostnameOf("127.0.0.1:3000")).toBe("127.0.0.1");
+    expect(hostnameOf("[::1]:3000")).toBe("::1");
+    expect(hostnameOf("[::1]")).toBe("::1");
+    // RFC 6874 zone id, and the underscore Docker/Windows host names use.
+    expect(hostnameOf("[fe80::1%25eth0]:3000")).toBe("fe80::1%25eth0");
+    expect(hostnameOf("my_host:3000")).toBe("my_host");
+  });
+
+  it("refuses a malformed Host at the allow-list, before any route runs", () => {
+    expect(isAllowedHost("127.0.0.1:3000@evil.example", undefined)).toBe(false);
+  });
+});
+
 describe("isLoopbackHostname", () => {
   it("accepts the loopback family", () => {
-    for (const host of ["localhost", "127.0.0.1", "127.1.2.3", "::1", "0.0.0.0", "app.localhost"]) {
+    for (const host of ["localhost", "127.0.0.1", "127.1.2.3", "::1", "app.localhost"]) {
       expect(isLoopbackHostname(host), host).toBe(true);
     }
   });
@@ -86,6 +125,12 @@ describe("isLoopbackHostname", () => {
     for (const host of ["example.com", "localhost.example.com", "128.0.0.1", "10.0.0.1"]) {
       expect(isLoopbackHostname(host), host).toBe(false);
     }
+  });
+
+  it("rejects 0.0.0.0, the wildcard bind that is not a name for this machine", () => {
+    // Browsers only stopped treating it as a route to local servers in 2024;
+    // the allow-list must not depend on that.
+    expect(isLoopbackHostname("0.0.0.0")).toBe(false);
   });
 });
 

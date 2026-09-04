@@ -111,7 +111,7 @@ describe("write origin", () => {
     expect(viaOrigin.status).toBe(403);
   });
 
-  it("accepts the app's own pages and non-browser clients", () => {
+  it("accepts the app's own pages", () => {
     expect(
       passedThrough(
         proxy(
@@ -122,9 +122,23 @@ describe("write origin", () => {
         ),
       ),
     ).toBe(true);
+    // A scripted client declares its origin the same way, and is accepted.
     expect(
-      passedThrough(proxy(request("/api/audits", { method: "POST", headers: cookie }))),
+      passedThrough(
+        proxy(
+          request("/api/audits", {
+            method: "POST",
+            headers: { ...cookie, origin: "http://127.0.0.1:3000" },
+          }),
+        ),
+      ),
     ).toBe(true);
+  });
+
+  it("refuses a write that declares no origin at all", () => {
+    // Fail closed rather than assuming "no headers means not a browser".
+    const response = proxy(request("/api/audits", { method: "POST", headers: cookie }));
+    expect(response.status).toBe(403);
   });
 
   it("applies even when no token is configured (a bare dev server)", () => {
@@ -211,7 +225,14 @@ describe("session token", () => {
   });
 
   it("sets the cookie without redirecting for a non-navigation request", () => {
-    const response = proxy(request(`/api/history?token=${TOKEN}`, { method: "POST" }));
+    // Same-origin, since the write-origin check now refuses a POST that
+    // declares nothing — the token in the query is not a way around it.
+    const response = proxy(
+      request(`/api/history?token=${TOKEN}`, {
+        method: "POST",
+        headers: { "sec-fetch-site": "same-origin" },
+      }),
+    );
 
     expect(passedThrough(response)).toBe(true);
     expect(response.headers.get("set-cookie")).toContain("lh_session=");

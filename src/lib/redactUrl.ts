@@ -47,6 +47,45 @@ export function redactUrl(raw: string | null | undefined): string | null {
 }
 
 /**
+ * The one safe-to-render form of a URL a MODEL produced — a citation, a link in
+ * the streamed diagnosis — or `null` when there isn't one.
+ *
+ * Model output is not author-controlled: it is shaped by the audit report, which
+ * carries text from the audited page. So a URL arriving here can be anything,
+ * including `javascript:` / `data:` — which, rendered into an `href` the user
+ * clicks, would execute on the app's own origin, inside the session the request
+ * gate exists to protect. Only absolute `http:`/`https:` survive, matching the
+ * protocol rule the audit and discovery schemas already enforce on input.
+ *
+ * Returning `null` (rather than a scrubbed string) is deliberate: a caller must
+ * render plain text instead of a link, never fall back to the raw value.
+ */
+export function safeHttpHref(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  // The scheme must be written out in full. Checking only `url.protocol` would
+  // not be enough: `new URL("http:settings")` — no base — yields the ABSOLUTE
+  // `http://settings/`, while the same string in an `href` resolves against the
+  // page and navigates to a path on THIS origin. That gap turns a citation
+  // rendered as an outside source into a link back into the gated app.
+  if (!/^https?:\/\//i.test(trimmed)) return null;
+  try {
+    // Parse to reject what only looks like a URL. The ORIGINAL string is what
+    // we hand back, so a source keeps the exact form the model cited (no added
+    // trailing slash, no re-encoding); with an explicit scheme and no base, the
+    // browser resolves the href exactly as `URL` just parsed it.
+    const url = new URL(trimmed);
+    // No `user:pass@host`. A real citation never carries userinfo, and it is
+    // the one remaining way a URL can read as one host while resolving to
+    // another — the same reason `redactUrl` strips it.
+    if (url.username || url.password) return null;
+    return trimmed;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Redact every URL embedded in a free-text string.
  *
  * For messages we did not compose ourselves — an SDK's transport error, say,

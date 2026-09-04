@@ -10,6 +10,7 @@
 
 import { ExternalLink } from "lucide-react";
 
+import { safeHttpHref } from "@/lib/redactUrl";
 import { cn } from "@/lib/utils";
 import type { AnalysisCitation, Fix, FixPriority } from "@/lib/analysis/types";
 
@@ -36,10 +37,17 @@ function hostname(url: string): string {
 }
 
 function Citations({ citations }: { citations: AnalysisCitation[] }) {
-  if (citations.length === 0) return null;
+  // Citations are model output. `parseFixes` drops non-http(s) URLs before they
+  // are persisted; this repeats the check for analyses saved before it did, so
+  // no stored "source" can become a `javascript:` link on this app's origin.
+  const linkable = citations.flatMap((citation) => {
+    const url = safeHttpHref(citation.url);
+    return url ? [{ ...citation, url }] : [];
+  });
+  if (linkable.length === 0) return null;
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-0.5">
-      {citations.map((citation, idx) => (
+      {linkable.map((citation, idx) => (
         <a
           key={`${citation.url}-${idx}`}
           href={citation.url}

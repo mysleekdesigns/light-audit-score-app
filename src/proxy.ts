@@ -80,9 +80,17 @@ const LOCKED_PAGE = `<!doctype html>
 </html>
 `;
 
-/** Stamp the gate marker (and no-store) on a response the gate produced. */
+/**
+ * Stamp the gate marker on a response the gate produced.
+ *
+ * The baseline headers from `next.config.ts` are applied to ROUTE responses; a
+ * response the proxy short-circuits never reaches them, so the two that matter
+ * for a refusal page are set here too.
+ */
 function stamped(response: NextResponse): NextResponse {
   response.headers.set(GATE_HEADER, "1");
+  response.headers.set("X-Content-Type-Options", "nosniff");
+  response.headers.set("X-Frame-Options", "DENY");
   return response;
 }
 
@@ -208,8 +216,20 @@ export function proxy(request: NextRequest): NextResponse {
 }
 
 export const config = {
-  // Apply to all routes except Next.js internals
+  /**
+   * Every route except the build's own static output.
+   *
+   * `_next/static` is excluded so the gate doesn't run for each hashed asset;
+   * those files are this app's own client bundle and hold nothing private.
+   *
+   * `_next/image` is NOT excluded, unlike Next's stock matcher. This app never
+   * renders `next/image` — nothing requests that endpoint — so gating it costs
+   * nothing, while leaving it open would keep an image optimizer (and the
+   * `sharp`/libvips decoders behind it) reachable on the loopback port by any
+   * page in the user's browser, and would quietly become a real hole the day
+   * someone configured `images.remotePatterns`.
+   */
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico).*)",
+    "/((?!_next/static|favicon.ico).*)",
   ],
 };

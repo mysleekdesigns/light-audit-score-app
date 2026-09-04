@@ -70,11 +70,17 @@ export const OLLAMA_API_KEY_ENV = "OLLAMA_API_KEY";
 /** Longest model id accepted from a request body or saved from Settings. */
 export const MAX_MODEL_ID_LENGTH = 200;
 /**
- * What a model id may look like: printable ASCII with no whitespace. Every
- * Ollama tag, Hugging Face id and vendor model id fits; control characters and
- * newlines — which would otherwise reach SQLite and the analysis badge — do not.
+ * What a model id may look like: printable ASCII, no whitespace, and never
+ * starting with `-`. Every Ollama tag, Hugging Face id and vendor model id fits.
+ *
+ * The two exclusions are the point. Control characters and newlines would reach
+ * SQLite and the analysis badge. A LEADING DASH would reach an argument vector:
+ * the Claude driver hands this id to the Agent SDK, which spawns the `claude`
+ * CLI with it, so `-`-prefixed text is a flag the CLI might honour rather than a
+ * model to load — and the settings/analyze routes accept this id from a request
+ * body. Requiring the first character to be alphanumeric closes that off.
  */
-export const MODEL_ID_PATTERN = /^[\x21-\x7e]+$/;
+export const MODEL_ID_PATTERN = /^[0-9A-Za-z][\x21-\x7e]*$/;
 
 /** Spellings we accept for each provider, so a reasonable guess just works. */
 const PROVIDER_ALIASES: Record<string, AnalysisProviderId> = {

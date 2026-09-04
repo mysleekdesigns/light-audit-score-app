@@ -97,6 +97,7 @@ import {
   timestampSlug,
 } from "@/lib/export/download";
 import { collapseRuns, type CollapsedRun } from "@/lib/history/collapse";
+import { safeHttpHref } from "@/lib/redactUrl";
 import type { DevicePair } from "@/lib/pairing/devicePairs";
 import { hasBothDevices, pairByDevice } from "@/lib/pairing/devicePairs";
 import { rowsToCsv, rowsToJson } from "@/lib/export/exporters";
@@ -842,10 +843,24 @@ function ScoreTrendStrip({
   );
 }
 
+/**
+ * The outbound link for one audited page: where the audit actually ended up,
+ * falling back to the URL we asked for.
+ *
+ * `finalUrl` is page-derived — it is wherever the site redirected Chrome — so it
+ * goes through `safeHttpHref` like every other URL this app didn't author. A
+ * top-level navigation can't commit a `javascript:`/`data:` document, so this is
+ * belt-and-braces rather than a live hole; `undefined` renders the label as
+ * plain text instead of a link.
+ */
+function runHref(run: { finalUrl: string | null; url: string }): string | undefined {
+  return safeHttpHref(run.finalUrl) ?? safeHttpHref(run.url) ?? undefined;
+}
+
 /** A single ring-card for the cards view — the latest run of one page, with its trend. */
 function HistoryRunCard({ entry }: { entry: CollapsedRun }) {
   const { latest } = entry;
-  const href = latest.finalUrl ?? latest.url;
+  const href = runHref(latest);
   const isError = latest.status === "error";
   const diffs = entryScoreDiffs(entry);
   const pending = useRerunPending(latest.id);
@@ -1037,7 +1052,7 @@ function HistoryDeviceSection({
 /** A paired ring-card: one card per URL carrying both device ring-sets, stacked. */
 function PairedHistoryCard({ pair }: { pair: DevicePair<CollapsedRun> }) {
   const primary = pair.primary.latest;
-  const href = primary.finalUrl ?? primary.url;
+  const href = runHref(primary);
   // The card covers both devices, so its timestamp is the pair's most recent run
   // — not `primary`'s, which is the mobile side and can predate a desktop re-run.
   const lastRun = pairRunTime(pair);
@@ -1292,7 +1307,7 @@ function PairedTableBody({
         <TableBody>
           {pairs.map((pair) => {
             const primary = pair.primary.latest;
-            const href = primary.finalUrl ?? primary.url;
+            const href = runHref(primary);
             // Row-level "Run at" covers both halves: show the later of the two so
             // the column reads in the same order the rows are sorted.
             const lastRun = pairRunTime(pair);
@@ -1405,7 +1420,7 @@ function FlatTableBody({
         <TableBody>
           {entries.map((entry) => {
             const row = entry.latest;
-            const href = row.finalUrl ?? row.url;
+            const href = runHref(row);
             const diffs = entryScoreDiffs(entry);
             const rerunning = pending.has(row.id);
             return (

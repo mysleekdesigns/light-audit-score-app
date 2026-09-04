@@ -24,10 +24,25 @@ import { promises as fs } from "node:fs";
 
 import { notFound, serverError } from "@/lib/api/errors";
 import { getRunReport } from "@/lib/db/persistence";
+import { HTML_REPORT_CSP } from "@/lib/http/reportCsp";
 import { getAuditQueue } from "@/lib/queue/AuditQueue";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/**
+ * Response headers for the standalone Lighthouse HTML report.
+ *
+ * The CSP is the important one and its rationale lives with the constant in
+ * `@/lib/http/reportCsp` — which `next.config.ts` also applies to this path,
+ * because a header set in the Next config overrides one set here. Both read the
+ * same constant, so they cannot drift.
+ */
+const HTML_REPORT_HEADERS = {
+  "Content-Type": "text/html; charset=utf-8",
+  "Content-Security-Policy": HTML_REPORT_CSP,
+  "X-Content-Type-Options": "nosniff",
+} as const;
 
 /**
  * Read a persisted report file, returning `null` (rather than throwing) when the
@@ -58,7 +73,7 @@ export async function GET(
       if (html !== null) {
         return new Response(html, {
           status: 200,
-          headers: { "Content-Type": "text/html; charset=utf-8" },
+          headers: HTML_REPORT_HEADERS,
         });
       }
     }
@@ -90,7 +105,7 @@ export async function GET(
       ) as string;
       return new Response(html, {
         status: 200,
-        headers: { "Content-Type": "text/html; charset=utf-8" },
+        headers: HTML_REPORT_HEADERS,
       });
     } catch {
       return serverError(

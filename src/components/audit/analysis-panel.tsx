@@ -51,6 +51,7 @@ import { useAnalysisStream } from "@/hooks/useAnalysisStream";
 import { getAiProviderStatus } from "@/lib/client/aiProvider";
 import { getAnalysis } from "@/lib/client/auditClient";
 import type { AiProviderStatus } from "@/lib/analysis/providerStatus";
+import { safeHttpHref } from "@/lib/redactUrl";
 import { CATEGORY_LABELS, formatScore, scoreColorClass } from "@/lib/scores";
 import { cn } from "@/lib/utils";
 import type { AnalysisCategory, AnalysisResult, Fix } from "@/lib/analysis/types";
@@ -129,12 +130,19 @@ function WarningsAlert({ warnings }: { warnings: string[] }) {
 }
 
 function SourcesList({ result }: { result: AnalysisResult }) {
-  if (result.sources.length === 0) return null;
+  // Same check the fixes list makes: these URLs are model output, and an
+  // analysis persisted before `parseFixes` validated them may still hold one
+  // that isn't http(s). See `safeHttpHref`.
+  const sources = result.sources.flatMap((source) => {
+    const url = safeHttpHref(source.url);
+    return url ? [{ ...source, url }] : [];
+  });
+  if (sources.length === 0) return null;
   return (
     <section className="flex flex-col gap-3">
       <SectionLabel>Sources</SectionLabel>
       <ul className="flex flex-col gap-1.5">
-        {result.sources.map((source, i) => (
+        {sources.map((source, i) => (
           <li key={`${source.url}-${i}`}>
             <a
               href={source.url}

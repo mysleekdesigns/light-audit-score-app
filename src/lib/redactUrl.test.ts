@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { redactUrl, redactUrlsInText } from "@/lib/redactUrl";
+import { redactUrl, redactUrlsInText, safeHttpHref } from "@/lib/redactUrl";
 
 describe("redactUrl", () => {
   it("strips userinfo", () => {
@@ -88,5 +88,63 @@ describe("redactUrlsInText", () => {
 
   it("leaves text with no URL untouched", () => {
     expect(redactUrlsInText("Model not found.")).toBe("Model not found.");
+  });
+});
+
+/**
+ * `safeHttpHref` guards the other direction: a URL a MODEL produced, on its way
+ * into an `href` the user clicks. Model output is shaped by the audit report,
+ * which carries text from the audited page, so a scripting scheme reaching a
+ * link would run on the app's own origin inside the gated session.
+ */
+describe("safeHttpHref", () => {
+  it("passes an http(s) URL through unchanged", () => {
+    // Unchanged matters: a citation should read as the model wrote it, with no
+    // trailing slash or re-encoding introduced by validating it.
+    expect(safeHttpHref("https://web.dev/lcp")).toBe("https://web.dev/lcp");
+    expect(safeHttpHref("http://localhost:3000/x?a=1#b")).toBe(
+      "http://localhost:3000/x?a=1#b",
+    );
+    expect(safeHttpHref("  https://web.dev/cls  ")).toBe("https://web.dev/cls");
+  });
+
+  it("refuses a scripting scheme", () => {
+    expect(safeHttpHref("javascript:alert(1)")).toBeNull();
+    expect(safeHttpHref("  JavaScript:alert(1)")).toBeNull();
+    // The URL parser strips tab/newline exactly as a browser would, so an
+    // obfuscated scheme is still recognised as `javascript:` and refused.
+    expect(safeHttpHref("java\nscript:alert(1)")).toBeNull();
+    expect(safeHttpHref("data:text/html,<script>alert(1)</script>")).toBeNull();
+    expect(safeHttpHref("vbscript:msgbox(1)")).toBeNull();
+  });
+
+  it("refuses a scheme-relative form the browser would resolve differently", () => {
+    // `new URL("http:settings")` with no base yields the absolute
+    // `http://settings/` — but the same string in an `href` resolves against the
+    // page and navigates into THIS app. Requiring the full `scheme://` closes
+    // the gap between what we validate and what the browser will do.
+    expect(safeHttpHref("http:settings")).toBeNull();
+    expect(safeHttpHref("http:foo/bar")).toBeNull();
+    expect(safeHttpHref("http:/example.com")).toBeNull();
+    expect(safeHttpHref("//example.com/x")).toBeNull();
+  });
+
+  it("refuses a URL carrying userinfo", () => {
+    // A real citation never has credentials in it, and `user@host` is the last
+    // way a URL can read as one host while resolving to another.
+    expect(safeHttpHref("https://web.dev@evil.example/lcp")).toBeNull();
+    expect(safeHttpHref("https://user:pass@example.com/x")).toBeNull();
+  });
+
+  it("refuses anything that is not an absolute URL", () => {
+    expect(safeHttpHref("/api/history")).toBeNull();
+    expect(safeHttpHref("web.dev/lcp")).toBeNull();
+    expect(safeHttpHref("")).toBeNull();
+    expect(safeHttpHref(null)).toBeNull();
+    expect(safeHttpHref(undefined)).toBeNull();
+  });
+
+  it("refuses a non-web scheme that would still parse", () => {
+    expect(safeHttpHref("file:///Users/someone/.env")).toBeNull();
   });
 });

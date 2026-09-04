@@ -100,6 +100,22 @@ describe("claudeDriver research tool gating", () => {
     expect(options.mcpServers).toEqual({ research: { type: "stdio", command: "server" } });
   });
 
+  it("hands the agent no built-in tool at all", async () => {
+    // The prompt is assembled from an audited page's report, so a successful
+    // prompt injection must have nothing to reach for: no filesystem, no shell,
+    // no web of its own. Research comes from the MCP server, never from these.
+    resolveServer.mockReturnValue(null);
+    mockSession([]);
+
+    await run(false);
+
+    const options = sdkQuery.mock.calls[0][0].options;
+    expect(options.tools).toEqual([]);
+    for (const tool of ["Read", "Glob", "Grep", "Bash", "Write", "Edit", "WebFetch"]) {
+      expect(options.disallowedTools).toContain(tool);
+    }
+  });
+
   it("registers no MCP server when nothing resolves", async () => {
     resolveServer.mockReturnValue(null);
     mockSession([]);
