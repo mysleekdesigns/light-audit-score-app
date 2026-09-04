@@ -15,6 +15,7 @@
  */
 
 import { useId, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { CalendarPlus, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -79,6 +80,7 @@ export function SaveScheduleDialog({
   const nameId = useId();
   const timeId = useId();
 
+  const router = useRouter();
   const [name, setName] = useState("");
   const [time, setTime] = useState(DEFAULT_TIME);
   const [submitting, setSubmitting] = useState(false);
@@ -123,9 +125,7 @@ export function SaveScheduleDialog({
       toast.success("Daily schedule saved.", {
         action: {
           label: "View",
-          onClick: () => {
-            if (typeof window !== "undefined") window.location.href = "/schedule";
-          },
+          onClick: () => router.push("/schedule"),
         },
       });
       onCreated?.(body.id);
