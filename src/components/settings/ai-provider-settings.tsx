@@ -605,9 +605,11 @@ function OllamaCard({
         ollama.models.length > 0 ? (
           <>
             <p className="text-xs text-muted-foreground">
-              {ollama.models.length} {ollama.models.length === 1 ? "model" : "models"}{" "}
-              installed at <Mono>{ollama.baseUrl}</Mono>. Click one to run analyses on
-              it — private, but no web research:
+              Click a model to switch analyses to it.{" "}
+              {ollama.models.length}{" "}
+              {ollama.models.length === 1 ? "model" : "models"} installed at{" "}
+              <Mono>{ollama.baseUrl}</Mono> — local and private, but no web
+              research.
             </p>
             <ul className="flex flex-wrap gap-1.5" aria-label="Installed Ollama models">
               {ollama.models.map((model) => (
@@ -663,18 +665,28 @@ function ModelButton({
       title={active ? `${model.name} runs the next analysis` : `Run analyses on ${model.name}`}
       translate="no"
       className={cn(
-        "inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-left font-mono text-[0.7rem] break-all transition-colors outline-none touch-manipulation",
+        // `group/model` so the empty marker below can react to hovering the chip.
+        "group/model inline-flex max-w-full cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-left font-mono text-[0.7rem] break-all transition-all outline-none touch-manipulation",
         "focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-wait disabled:opacity-70",
         active
           ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-300"
-          : "border-border/60 bg-muted/40 text-foreground hover:border-primary/60 hover:bg-muted/70",
+          : "border-border/60 bg-muted/40 text-foreground hover:-translate-y-px hover:border-primary/70 hover:bg-primary/10 hover:text-primary motion-reduce:hover:translate-y-0",
       )}
     >
       {pending ? (
         <Loader2 className="size-3 animate-spin" aria-hidden="true" />
       ) : active ? (
-        <Check className="size-3" aria-hidden="true" />
-      ) : null}
+        <Check className="size-3 shrink-0" aria-hidden="true" />
+      ) : (
+        // An empty marker on every other chip is what makes the row read as one
+        // set of options to choose between. Without it each chip is shaped
+        // exactly like the static "detected" badge in the corner, and nothing
+        // says the list is interactive at all.
+        <span
+          aria-hidden="true"
+          className="size-3 shrink-0 rounded-full border border-current opacity-35 transition-opacity group-hover/model:opacity-100"
+        />
+      )}
       {model.name}
       {model.parameterSize ? (
         <span className={active ? "text-emerald-400/70" : "text-muted-foreground"}>
