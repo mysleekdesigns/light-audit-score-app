@@ -30,7 +30,7 @@ export default function HistoryPage() {
       <PageHeader
         kicker="02 — Archive"
         title="History"
-        description="Grouped by website into collapsible sections — open a site to see one row per URL, its latest run and the trend versus the previous run. Every run stays persisted to local SQLite and report files on disk for before/after comparison."
+        description="Newest run first, grouped by website into collapsible sections — open a site to see one row per URL, its latest run and the trend versus the previous run. Every run stays persisted to local SQLite and report files on disk for before/after comparison."
       >
         <div className="flex items-center gap-2">
           <Badge

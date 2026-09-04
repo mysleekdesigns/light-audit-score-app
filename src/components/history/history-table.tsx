@@ -965,6 +965,19 @@ function pairCollapsedRuns(entries: CollapsedRun[]): DevicePair<CollapsedRun>[] 
 }
 
 /**
+ * A pair's recency: the newer of its two device sides' latest runs. `primary` is
+ * whichever side exists (mobile preferred), so reading its timestamp alone would
+ * date a pair by mobile even when the desktop half ran later — the two sides are
+ * separate queue jobs and finish at different times. Absent sides compare as `""`,
+ * which sorts below every ISO timestamp.
+ */
+function pairRunTime(pair: DevicePair<CollapsedRun>): string {
+  const mobile = pair.mobile?.latest.createdAt ?? "";
+  const desktop = pair.desktop?.latest.createdAt ?? "";
+  return mobile.localeCompare(desktop) >= 0 ? mobile : desktop;
+}
+
+/**
  * One device's section within a {@link PairedHistoryCard}: a device caption (with
  * a run-count marker), then the rings + trend + CWV + environment (done), the
  * failure line (error), or an em-dash note when this URL wasn't audited on this
@@ -1025,6 +1038,9 @@ function HistoryDeviceSection({
 function PairedHistoryCard({ pair }: { pair: DevicePair<CollapsedRun> }) {
   const primary = pair.primary.latest;
   const href = primary.finalUrl ?? primary.url;
+  // The card covers both devices, so its timestamp is the pair's most recent run
+  // — not `primary`'s, which is the mobile side and can predate a desktop re-run.
+  const lastRun = pairRunTime(pair);
   return (
     <Card size="sm" className="ring-foreground/10">
       <CardHeader className="gap-2">
@@ -1044,10 +1060,10 @@ function PairedHistoryCard({ pair }: { pair: DevicePair<CollapsedRun> }) {
         <div className="flex flex-wrap items-center gap-2">
           <SourceBadge source={primary.source} />
           <span
-            title={primary.createdAt}
+            title={lastRun}
             className="font-mono text-[0.65rem] tabular-nums text-muted-foreground"
           >
-            {formatRunAt(primary.createdAt)}
+            {formatRunAt(lastRun)}
           </span>
         </div>
       </CardHeader>
@@ -1277,6 +1293,9 @@ function PairedTableBody({
           {pairs.map((pair) => {
             const primary = pair.primary.latest;
             const href = primary.finalUrl ?? primary.url;
+            // Row-level "Run at" covers both halves: show the later of the two so
+            // the column reads in the same order the rows are sorted.
+            const lastRun = pairRunTime(pair);
               return (
                 <TableRow key={primary.id} className="hover:bg-muted/40">
                   {/* `max-w-0` is what lets the URL truncate inside a table
@@ -1318,10 +1337,10 @@ function PairedTableBody({
                   <HistoryDeviceHalf entry={pair.desktop} stowed={stowDesktop} />
                   <TableCell className={cn(COMPACT_CELL, "hidden xl:table-cell")}>
                     <span
-                      title={primary.createdAt}
+                      title={lastRun}
                       className="font-mono text-xs tabular-nums text-muted-foreground"
                     >
-                      {formatRunAt(primary.createdAt)}
+                      {formatRunAt(lastRun)}
                     </span>
                   </TableCell>
                 </TableRow>
@@ -1535,9 +1554,10 @@ interface HistoryTableProps {
 /**
  * Sortable + filterable archive of every persisted run. All sorting/filtering
  * happens in-browser over the rows passed from the server (no fetching). Defaults
- * to a grouped "by URL" order (site root → other public pages → blog and its
- * sub-pages, alphabetical within each); the headers still re-sort by URL, any of
- * the four category scores (nulls last), or run time. Filter by URL substring,
+ * to newest run first — the audit you just finished is the top row of the top
+ * website section — and the headers re-sort by the grouped "by URL" order (site
+ * root → other public pages → blog and its sub-pages, alphabetical within each),
+ * any of the four category scores (nulls last), or run time. Filter by URL substring,
  * and/or flip the Needs-work toggle to hide everything that already scores 90+.
  */
 function HistoryTableView({ rows }: HistoryTableProps) {
@@ -1549,10 +1569,13 @@ function HistoryTableView({ rows }: HistoryTableProps) {
   const [needsWorkOnly, setNeedsWorkOnly] = useState(false);
   // Which device half the paired table shows on a phone (see PairedDevice).
   const [pairedDevice, setPairedDevice] = useState<PairedDevice>("mobile");
-  // Default order groups by URL (root → pages → blog) rather than by run time.
+  // Default order is newest run first, so the audit you just finished is the top
+  // row of the top website section every time you land here. The column headers
+  // still switch to the grouped "by URL" order (root → pages → blog) or any of
+  // the four score columns.
   const [sort, setSort] = useState<SortState>({
-    key: "url",
-    direction: "asc",
+    key: "createdAt",
+    direction: "desc",
   });
 
   const handleSort = useCallback((key: SortKey) => {
@@ -1588,7 +1611,12 @@ function HistoryTableView({ rows }: HistoryTableProps) {
         return rb.createdAt.localeCompare(ra.createdAt);
       }
       if (sort.key === "createdAt") {
-        return ra.createdAt.localeCompare(rb.createdAt) * dir;
+        // Ties are common — a batch persists many runs inside the same second —
+        // so fall back to the grouped URL order rather than leaving the rows in
+        // whatever order they came back in.
+        const byTime = ra.createdAt.localeCompare(rb.createdAt) * dir;
+        if (byTime !== 0) return byTime;
+        return compareUrlGroup(ra.url, rb.url);
       }
       // Score columns. Nulls always sink to the bottom regardless of sort
       // direction; only the non-null vs non-null comparison is reversed.
@@ -1605,19 +1633,28 @@ function HistoryTableView({ rows }: HistoryTableProps) {
   // URL's mobile + desktop series into one paired entry. Single-device archives
   // keep the sortable one-row-per-page layout. The layout is decided from the full
   // dataset (not the filtered `visible` set) so it doesn't flip mid-filter. Paired
-  // rows are re-sorted by the same grouped "by URL" rule as the flat table.
+  // rows follow the same sort as the flat table, dated by whichever device side
+  // ran last.
   const paired = useMemo(
     () => hasBothDevices(rows, (row) => row.formFactor),
     [rows],
   );
   const basePairs = useMemo(() => {
     if (!paired) return [];
+    const dir = sort.direction === "asc" ? 1 : -1;
     return pairCollapsedRuns(visible).toSorted((a, b) => {
+      if (sort.key === "createdAt") {
+        const byTime = pairRunTime(a).localeCompare(pairRunTime(b)) * dir;
+        if (byTime !== 0) return byTime;
+        return compareUrlGroup(a.url, b.url);
+      }
+      // The paired table has no sort headers of its own, so every other key
+      // keeps the grouped "by URL" order, newest side first within a URL.
       const grouped = compareUrlGroup(a.url, b.url);
       if (grouped !== 0) return grouped;
-      return b.primary.latest.createdAt.localeCompare(a.primary.latest.createdAt);
+      return pairRunTime(b).localeCompare(pairRunTime(a));
     });
-  }, [paired, visible]);
+  }, [paired, visible, sort]);
 
   // "Needs work" gate: drop everything that passed every category at 90+, leaving
   // only the pages that still need attention. Applied per-page in the flat layout
@@ -1742,7 +1779,7 @@ function HistoryTableView({ rows }: HistoryTableProps) {
                 Archive
               </h2>
               <p className="font-mono text-[0.65rem] uppercase tracking-[0.18em] text-muted-foreground">
-                Grouped by website · latest run per URL · trend vs previous
+                Newest run first · grouped by website · trend vs previous
               </p>
             </header>
 
@@ -1936,9 +1973,9 @@ function HistoryTableView({ rows }: HistoryTableProps) {
           </Card>
         ) : paired ? (
           // One collapsible section per website, the most recently audited site
-          // open and the rest closed; the user expands the others they care
-          // about. Uncontrolled so an opened section stays open across filtering
-          // (Radix keeps its own open-state).
+          // first and open, the rest below it and closed; the user expands the
+          // others they care about. Uncontrolled so an opened section stays open
+          // across filtering (Radix keeps its own open-state).
           <Accordion
             type="multiple"
             defaultValue={defaultOpenHosts}
