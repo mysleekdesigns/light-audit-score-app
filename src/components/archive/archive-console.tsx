@@ -4,25 +4,21 @@
  * Archive console (PRD §6 Phase 14 — Scheduled daily archive).
  *
  * Renders one card per persisted schedule. Each card shows the schedule's
- * cadence + target + last/next fire, lets the user delete it or drive it with a
- * single Run now / Pause button (Run now fires it, resuming a paused run where
- * it left off; Pause stops the run in flight), and lists the batches the schedule
- * has actually produced (latest first) with category-score pills. Mutations
- * hit Agent A's `/api/schedules/**` routes and then `router.refresh()` so the
- * server page re-reads SQLite and the UI reflects truth — same pattern as
- * `RerunBatchButton`.
+ * cadence + target + last/next fire, lets the user edit it (name, fire time,
+ * armed) or delete it, drives it with a single Run now / Pause button (Run now
+ * fires it, resuming a paused run where it left off; Pause stops the run in
+ * flight), and lists the batches the schedule has actually produced (latest
+ * first) with category-score pills. Mutations hit Agent A's `/api/schedules/**`
+ * routes and then `router.refresh()` so the server page re-reads SQLite and the
+ * UI reflects truth — same pattern as `RerunBatchButton`.
  *
- * All cadence math is computed on the client via the shared `nextFireAt` so
- * the "Next run" tick is wall-clock fresh on every render without server work.
+ * All cadence math is computed on the client via the shared `nextFireAt`, off
+ * the `useMinuteTick` wall clock, so the "Next run" tick stays fresh without
+ * server work and without a hydration mismatch. The Edit dialog reads the same
+ * clock, so its preview and the card's cell can never disagree.
  */
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -33,12 +29,14 @@ import {
   Globe,
   Loader2,
   PauseCircle,
+  Pencil,
   RotateCw,
   Trash2,
   TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { EditScheduleDialog } from "@/components/archive/edit-schedule-dialog";
 import { ScorePill } from "@/components/audit/score-pill";
 import {
   AlertDialog,
@@ -70,10 +68,16 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useBatchStream } from "@/hooks/useBatchStream";
+import { useMinuteTick } from "@/hooks/useMinuteTick";
 import { deleteBatch } from "@/lib/client/auditClient";
 import type { BatchInfo, HistoryRow } from "@/lib/db/persistence";
 import { nextFireAt } from "@/lib/schedules/cadence";
-import type { Schedule, ScheduleTarget } from "@/lib/schedules/types";
+import {
+  describeTarget,
+  formatCountdown,
+  formatTimestamp,
+} from "@/lib/schedules/format";
+import type { Schedule } from "@/lib/schedules/types";
 import { LIGHTHOUSE_CATEGORIES } from "@/lib/lighthouse/types";
 import { CATEGORY_SHORT_LABELS } from "@/lib/scores";
 import { cn } from "@/lib/utils";
@@ -81,46 +85,6 @@ import { cn } from "@/lib/utils";
 /** Mono uppercase tracked section label — the house "telemetry" label style. */
 const SECTION_LABEL =
   "font-mono text-[0.625rem] uppercase tracking-[0.18em] text-muted-foreground";
-
-// --- Wall-clock tick (useSyncExternalStore source) -------------------------
-// One subscription serves every ScheduleCard on the page; the store returns a
-// stable `Date` reference until the next minute boundary so React's bailout
-// works on re-renders that don't change the tick.
-let _currentTick: Date | null = null;
-const _listeners = new Set<() => void>();
-let _intervalId: ReturnType<typeof setInterval> | null = null;
-
-function subscribeMinuteTick(notify: () => void): () => void {
-  _listeners.add(notify);
-  // First subscriber kicks off the interval; subsequent subscribers reuse it.
-  if (_intervalId === null) {
-    _currentTick = new Date();
-    _intervalId = setInterval(() => {
-      _currentTick = new Date();
-      for (const listener of _listeners) listener();
-    }, 60_000);
-    // Notify the just-subscribed caller so the first paint adopts wall-clock
-    // without waiting a full minute.
-    queueMicrotask(notify);
-  }
-  return () => {
-    _listeners.delete(notify);
-    if (_listeners.size === 0 && _intervalId !== null) {
-      clearInterval(_intervalId);
-      _intervalId = null;
-      _currentTick = null;
-    }
-  };
-}
-
-function getClientNow(): Date | null {
-  return _currentTick;
-}
-
-function getServerNow(): null {
-  // SSR snapshot — never compute `Date.now()` here or hydration will diverge.
-  return null;
-}
 
 interface ArchiveConsoleProps {
   schedules: Schedule[];
@@ -189,56 +153,6 @@ export function ArchiveConsole({ schedules, batches }: ArchiveConsoleProps) {
   );
 }
 
-/** Format an ISO timestamp into a readable local datetime; falls back to "—". */
-function formatTimestamp(iso: string | null): string {
-  if (!iso) return "—";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return new Intl.DateTimeFormat(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
-
-/** Compact relative-ish "in 4h 12m" / "in 2d" label for a future Date. */
-function formatCountdown(then: Date, now: Date): string {
-  const diffMs = then.getTime() - now.getTime();
-  if (diffMs <= 0) return "due";
-  const minutes = Math.floor(diffMs / 60_000);
-  if (minutes < 60) return `in ${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `in ${hours}h ${minutes % 60}m`;
-  const days = Math.floor(hours / 24);
-  return `in ${days}d ${hours % 24}h`;
-}
-
-/** Human label for a schedule's target — strips scheme and adds a kind chip. */
-function describeTarget(target: ScheduleTarget): {
-  label: string;
-  kind: "URLs" | "Crawl";
-  detail: string;
-} {
-  if (target.kind === "urls") {
-    const first = target.urls[0] ?? "";
-    const more = target.urls.length - 1;
-    const label =
-      first.replace(/^https?:\/\//, "") + (more > 0 ? ` +${more} more` : "");
-    return {
-      label,
-      kind: "URLs",
-      detail: `${target.urls.length} URL${target.urls.length === 1 ? "" : "s"}`,
-    };
-  }
-  return {
-    label: target.spec.url.replace(/^https?:\/\//, ""),
-    kind: "Crawl",
-    detail: `depth ${target.spec.maxDepth} · ≤${target.spec.maxPages} pages`,
-  };
-}
-
 interface ScheduleCardProps {
   schedule: Schedule;
   batches: BatchInfo[];
@@ -250,17 +164,16 @@ function ScheduleCard({ schedule, batches }: ScheduleCardProps) {
     "delete" | "run" | "pause" | null
   >(null);
   const submitting = pendingAction !== null;
+  const [editing, setEditing] = useState(false);
+  // Closing the dialog hands focus back here — see `restoreFocusRef`.
+  const editButtonRef = useRef<HTMLButtonElement>(null);
 
   // Cadence math runs client-side: SSR can't render a stable "in 4h 12m"
-  // against `Date.now()` without churning hydration. `useSyncExternalStore`
-  // subscribes to a once-a-minute tick; the server snapshot is `null` (so SSR
-  // renders a hydration-safe placeholder) and the real wall-clock swaps in on
-  // mount. This avoids the cascading-render setState-in-effect anti-pattern.
-  const nowTick = useSyncExternalStore(
-    subscribeMinuteTick,
-    getClientNow,
-    getServerNow,
-  );
+  // against `Date.now()` without churning hydration. `useMinuteTick` is the
+  // shared once-a-minute store — `null` during SSR and the first frame (so the
+  // render is hydration-safe), real wall clock from mount on. The Edit dialog
+  // subscribes to the same store, so its preview matches this card exactly.
+  const nowTick = useMinuteTick();
 
   const nextFire = useMemo(
     () =>
@@ -269,6 +182,15 @@ function ScheduleCard({ schedule, batches }: ScheduleCardProps) {
   );
 
   const target = useMemo(() => describeTarget(schedule.target), [schedule.target]);
+  // A schedule with no name is titled by its target instead, so the line under
+  // the title carries only what the title does not: the target when a real name
+  // owns the title, and the count when there is more than one URL. For an
+  // unnamed single-URL schedule that leaves nothing, and the line is dropped
+  // rather than restating the title in different words.
+  const named = schedule.name.trim().length > 0;
+  const subtitle = [named ? target.label : "", target.detail]
+    .filter((part) => part.length > 0)
+    .join(" · ");
 
   const totalRuns = batches.length;
   const lastBatch = batches[0] ?? null;
@@ -422,7 +344,7 @@ function ScheduleCard({ schedule, batches }: ScheduleCardProps) {
           <div className="flex min-w-0 flex-col gap-1.5">
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="font-heading text-base font-medium leading-snug text-foreground">
-                {schedule.name || target.label}
+                {named ? schedule.name : target.label}
               </h3>
               <Badge
                 variant="outline"
@@ -434,10 +356,11 @@ function ScheduleCard({ schedule, batches }: ScheduleCardProps) {
                 {target.kind}
               </Badge>
             </div>
-            <p className="truncate font-mono text-xs text-muted-foreground tabular-nums">
-              {target.label}
-              <span className="ml-2 opacity-70">· {target.detail}</span>
-            </p>
+            {subtitle ? (
+              <p className="truncate font-mono text-xs text-muted-foreground tabular-nums">
+                {subtitle}
+              </p>
+            ) : null}
           </div>
 
           <div className="flex items-center gap-1">
@@ -471,6 +394,25 @@ function ScheduleCard({ schedule, batches }: ScheduleCardProps) {
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
+                  ref={editButtonRef}
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => setEditing(true)}
+                  disabled={submitting}
+                  aria-label="Edit schedule"
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <Pencil />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                Edit name, fire time, or whether it is armed
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
                   type="button"
                   variant="ghost"
                   size="icon-sm"
@@ -489,6 +431,17 @@ function ScheduleCard({ schedule, batches }: ScheduleCardProps) {
               <TooltipContent>Delete schedule</TooltipContent>
             </Tooltip>
           </div>
+
+          {/* Portalled by Radix, so it sits here only for co-location with the
+              button that opens it. Saving re-reads the server page, which is
+              what re-renders this card's cadence cells with the new time. */}
+          <EditScheduleDialog
+            open={editing}
+            restoreFocusRef={editButtonRef}
+            onOpenChange={setEditing}
+            schedule={schedule}
+            onSaved={() => router.refresh()}
+          />
         </div>
       </CardHeader>
 

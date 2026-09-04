@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isDueAt,
   lastDueMoment,
   nextFireAt,
   shouldFireNow,
@@ -110,5 +111,45 @@ describe("shouldFireNow", () => {
     const s = makeSchedule({ lastFiredAt: "not-a-date" });
     const now = new Date(2026, 4, 28, 10, 0);
     expect(shouldFireNow(s, now)).toBe(true);
+  });
+});
+
+// `isDueAt` is what the Edit-schedule dialog asks before saving a new time, so
+// that the warning it shows is the scheduler's own answer rather than a second
+// copy of the rule. These cover the case the dialog exists to catch: moving the
+// time backwards past a moment that has already gone by today.
+describe("isDueAt", () => {
+  it("is due when the new time has already passed today and the last fire predates it", () => {
+    // Fired at 09:00, now 14:00, moved to 13:00 — 13:00 has gone by unfired.
+    const fired = new Date(2026, 4, 28, 9, 0).toISOString();
+    const now = new Date(2026, 4, 28, 14, 0);
+    expect(isDueAt("13:00", fired, now)).toBe(true);
+  });
+
+  it("is not due when the new time is still ahead today and today's fire covers the cutoff", () => {
+    // Fired at 09:00, now 14:00, moved to 20:00 — cutoff rolls to yesterday
+    // 20:00, which today's fire is already past.
+    const fired = new Date(2026, 4, 28, 9, 0).toISOString();
+    const now = new Date(2026, 4, 28, 14, 0);
+    expect(isDueAt("20:00", fired, now)).toBe(false);
+  });
+
+  it("is due for a schedule that has never fired", () => {
+    const now = new Date(2026, 4, 28, 14, 0);
+    expect(isDueAt("13:00", null, now)).toBe(true);
+  });
+
+  it("is not due for a malformed time", () => {
+    const now = new Date(2026, 4, 28, 14, 0);
+    expect(isDueAt("25:99", null, now)).toBe(false);
+  });
+
+  it("agrees with shouldFireNow for an enabled daily schedule", () => {
+    const fired = new Date(2026, 4, 28, 9, 0).toISOString();
+    const now = new Date(2026, 4, 28, 14, 0);
+    for (const time of ["08:00", "09:00", "13:00", "14:00", "20:00"]) {
+      const schedule = makeSchedule({ time, lastFiredAt: fired });
+      expect(isDueAt(time, fired, now)).toBe(shouldFireNow(schedule, now));
+    }
   });
 });

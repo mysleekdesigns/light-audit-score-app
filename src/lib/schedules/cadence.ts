@@ -53,6 +53,38 @@ export function nextFireAt(time: string, now: Date): Date {
 }
 
 /**
+ * Whether a daily `time` has an occurrence that `lastFiredAt` has not covered
+ * yet, as of `now` — the cadence half of "is this due?", with the enabled and
+ * cadence guards left to the caller.
+ *
+ * Split out of {@link shouldFireNow} so the Edit-schedule dialog can warn that a
+ * time change will fire the schedule immediately using the very predicate the
+ * scheduler will evaluate a minute later, instead of a second copy of the rule
+ * that could drift from it. Moving a schedule's time *backwards* past a moment
+ * that has already gone by today is exactly the case that trips people up: the
+ * new cutoff is in the past and the last fire predates it, so the schedule is
+ * due at once.
+ *
+ * A malformed time never fires, and an unparseable `lastFiredAt` is treated as
+ * "never fired" — the same defensive reading the scheduler has always used.
+ */
+export function isDueAt(
+  time: string,
+  lastFiredAt: string | null,
+  now: Date,
+): boolean {
+  if (!isValidTime(time)) return false;
+
+  const cutoff = lastDueMoment(time, now);
+  if (now.getTime() < cutoff.getTime()) return false;
+
+  if (lastFiredAt === null) return true;
+  const lastFired = new Date(lastFiredAt);
+  if (Number.isNaN(lastFired.getTime())) return true;
+  return lastFired.getTime() < cutoff.getTime();
+}
+
+/**
  * Decide whether `schedule` is due to fire at `now`.
  *
  * A schedule is due iff:
@@ -68,13 +100,5 @@ export function nextFireAt(time: string, now: Date): Date {
 export function shouldFireNow(schedule: Schedule, now: Date): boolean {
   if (!schedule.enabled) return false;
   if (schedule.cadence !== "daily") return false;
-  if (!isValidTime(schedule.time)) return false;
-
-  const cutoff = lastDueMoment(schedule.time, now);
-  if (now.getTime() < cutoff.getTime()) return false;
-
-  if (schedule.lastFiredAt === null) return true;
-  const lastFired = new Date(schedule.lastFiredAt);
-  if (Number.isNaN(lastFired.getTime())) return true;
-  return lastFired.getTime() < cutoff.getTime();
+  return isDueAt(schedule.time, schedule.lastFiredAt, now);
 }
