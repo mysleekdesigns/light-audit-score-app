@@ -9,7 +9,7 @@ paths:
 
 - `AnalysisStreamEvent` (`src/lib/analysis/types.ts`) is a frozen contract: extend only
   additively; every provider/driver adapts to it; `useAnalysisStream` and the analysis UI
-  panels must not require changes when providers are added (SAAS_PLAN.md Phase D).
+  panels must not require changes when providers are added. See the `byo-ai-providers` skill.
 - AI auth is always the **user's own**: Claude Code/Max login, BYO provider key, or local
   Ollama. Never introduce an API credential owned by LightAudit Score.
 - Record provider/model on every analysis (`analyses.model`); analyses persist keyed

@@ -77,7 +77,7 @@ Rules of thumb:
 Prefer delegating matching work to these instead of generic agents — they carry the project's
 invariants and preload the right skill:
 
-- **ai-provider-engineer** — Phase D: AnalysisProvider seam, Claude/Ollama/OpenAI-compatible drivers.
+- **ai-provider-engineer** — AnalysisProvider seam, Claude/Ollama/OpenAI-compatible drivers.
 - **security-reviewer** (read-only) — run it after any change touching auth, secret handling,
   the PSI or AI-provider key paths, the proxy (request gate)/session token, or the local HTTP server.
 
@@ -97,7 +97,10 @@ invariants and preload the right skill:
   | `lint-fix.mjs` | `PostToolUse(Edit\|Write)` | Runs `eslint --fix` on touched TS, then blocks on any residual lint error |
 
   (`test-hooks.mjs` is a local test harness for the guards — it is **not** wired into
-  `settings.json`, so it never runs as a hook.)
+  `settings.json`, so it never runs as a hook. After editing any guard, run
+  `node .claude/hooks/test-hooks.mjs`; all cases must pass. The hooks are wired in exec form
+  — `"command": "node"` plus an `args` array — so the `${CLAUDE_PROJECT_DIR}` path needs no
+  shell quoting.)
 
 ## How it fits together
 

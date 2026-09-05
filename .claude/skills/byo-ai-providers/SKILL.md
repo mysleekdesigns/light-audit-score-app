@@ -1,13 +1,14 @@
 ---
 name: byo-ai-providers
-description: The BYO-AI provider seam for LightAudit Score's analysis engine — AnalysisProvider interface over src/lib/analysis/runAnalysis.ts via the Vercel AI SDK, Claude Agent-SDK / Ollama / OpenAI-compatible drivers, capability tiers and honest degradation, app-side web-search tool, structured-output repair, provider badging and settings UX. Use for SAAS_PLAN.md Phase D work or any change under src/lib/analysis/.
+description: The BYO-AI provider seam for LightAudit Score's analysis engine — AnalysisProvider interface over src/lib/analysis/runAnalysis.ts via the Vercel AI SDK, Claude Agent-SDK / Ollama / OpenAI-compatible drivers, capability tiers and honest degradation, app-side web-search tool, structured-output repair, provider badging and settings UX. Use for any BYO-AI provider work or change under src/lib/analysis/.
 ---
 
 # BYO AI providers for LightAudit Score
 
-Authoritative plan: `SAAS_PLAN.md` §4 ("BYO AI") + Phase D. Goal: analysis runs on the
-**user's** AI — Claude plan, any provider key, or local Ollama — with **zero AI credentials owned by
-LightAudit Score** shipped in or reachable from the app.
+This skill is the authoritative spec for the provider seam; `PRD.md` carries product intent.
+(`SAAS_PLAN.md` was removed from the repo on 2026-09-02 — don't look for it.) Goal: analysis
+runs on the **user's** AI — Claude plan, any provider key, or local Ollama — with **zero AI
+credentials owned by LightAudit Score** anywhere in or reachable from the app.
 
 ## The frozen contract
 
@@ -53,7 +54,10 @@ repair/retry pass for weaker models → degrade to prose-only. Never crash the s
 ## Settings & UX rules
 
 - Provider settings: Claude / Ollama / Custom; "test connection" button; per-analysis
-  override. Keys go to the OS keychain — never SQLite, never JSON on disk, never logged.
+  override. Settings panels are **read-only status plus guidance** — they never accept, write,
+  or echo a key, and status endpoints report presence as a boolean only. Keys are read from
+  `process.env` (a gitignored `.env`) — never SQLite, never JSON on disk, never logged, never
+  in the client bundle.
 - Detection-first auth UX: existing Claude Code login → one-click connect; running Ollama →
   suggest it; else offer sign-in / key / custom endpoint.
 - No AI configured = a feature card explaining the options (not an error). User rate limits

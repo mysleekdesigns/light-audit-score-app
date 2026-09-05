@@ -49,7 +49,8 @@ process.stdin.on("end", () => {
     if (re.test(cmd)) {
       console.error(
         `Blocked: this command contains what looks like a real ${label}. ` +
-          `Never inline credentials in shell commands — read them from the environment or keychain.`
+          `Never inline credentials in shell commands — read them from the environment ` +
+          `(process.env, via the gitignored .env).`
       );
       process.exit(2);
     }

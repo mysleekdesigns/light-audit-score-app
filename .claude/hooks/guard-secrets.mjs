@@ -28,9 +28,10 @@ process.stdin.on("end", () => {
     if (re.test(text)) {
       console.error(
         `Blocked: the content being written matches a ${label} pattern. ` +
-          `Real credentials must never be written into this repo — use the OS keychain at runtime ` +
-          `and env vars locally (see .claude/rules/security.md). If this is a deliberately fake ` +
-          `fixture, truncate it so it no longer matches a live-key pattern.`
+          `Real credentials must never be written into this repo. Runtime secrets are read from ` +
+          `process.env — put the value in the gitignored .env, and keep .env.example free of ` +
+          `real values (see .claude/rules/security.md). If this is a deliberately fake fixture, ` +
+          `truncate it so it no longer matches a live-key pattern.`
       );
       process.exit(2);
     }
