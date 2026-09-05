@@ -1,5 +1,5 @@
 /**
- * Manual chapters 16–20: the Settings panels, where files live, what the local
+ * Manual chapters 17–21: the Settings panels, where files live, what the local
  * server does to stay private, and the two lists a stuck user reaches for.
  */
 

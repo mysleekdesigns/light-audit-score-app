@@ -607,10 +607,13 @@ export function PsiAuditForm({
 
               <Separator />
 
-              {/* Scope band — what each run measures. The four categories used
-                  to wrap as small chips beside a far-right orphaned action; as
-                  full-width pills the whole cell is the tap target (2×2 on a
-                  phone) and the band fills the section instead of trailing off. */}
+              {/* Scope band — what each run measures. The categories used to
+                  wrap as small chips beside a far-right orphaned action; as
+                  full-width pills the whole cell is the tap target and the band
+                  fills the section instead of trailing off. The column count
+                  climbs 1 → 2 → 3 → one-per-category, so five pills never get
+                  crammed into a phone-width row and the widest label ("Agentic
+                  Browsing") always has room to sit on one line. */}
               <FieldSet className="gap-2">
                 <FieldLegend variant="label">Categories</FieldLegend>
                 <ToggleGroup
@@ -620,7 +623,10 @@ export function PsiAuditForm({
                   value={categories}
                   onValueChange={handleCategoriesChange}
                   disabled={isRunning}
-                  className="grid w-full grid-cols-1 gap-2 @2xs:grid-cols-2 @lg:grid-cols-4"
+                  style={
+                    { "--cat-cols": LIGHTHOUSE_CATEGORIES.length } as React.CSSProperties
+                  }
+                  className="grid w-full grid-cols-1 gap-2 @xs:grid-cols-2 @lg:grid-cols-3 @3xl:grid-cols-[repeat(var(--cat-cols),minmax(0,1fr))]"
                 >
                   {LIGHTHOUSE_CATEGORIES.map((category) => (
                     <ToggleGroupItem

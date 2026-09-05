@@ -2,7 +2,7 @@
  * Shared contract for the AI score-analysis feature.
  *
  * A user clicks a Lighthouse category score (Performance / Accessibility /
- * Best Practices / SEO) and the app runs the Claude Agent SDK — reusing the
+ * Best Practices / SEO / Agentic Browsing) and the app runs the Claude Agent SDK — reusing the
  * user's configured research MCP server for web research — to (1) diagnose why that category
  * scored low from the audit data and (2) propose prioritized, source-cited fixes.
  *
@@ -18,7 +18,12 @@
 
 import type { LighthouseCategory } from "@/lib/lighthouse/types";
 
-/** The score a user can analyze — one of the four Lighthouse categories. */
+/**
+ * The score a user can analyze — any member of `LIGHTHOUSE_CATEGORIES`. It
+ * tracks that list by definition, so Lighthouse 13.3's fifth category (Agentic
+ * Browsing) is analysable with no change here or at the API seam (the analyze
+ * route validates against the same list).
+ */
 export type AnalysisCategory = LighthouseCategory;
 
 /**

@@ -102,6 +102,7 @@ export const CATEGORY_LABELS: Record<LighthouseCategory, string> = {
   accessibility: "Accessibility",
   "best-practices": "Best Practices",
   seo: "SEO",
+  "agentic-browsing": "Agentic Browsing",
 };
 
 /** Short label (for compact ring captions). */
@@ -110,6 +111,7 @@ export const CATEGORY_SHORT_LABELS: Record<LighthouseCategory, string> = {
   accessibility: "A11y",
   "best-practices": "BP",
   seo: "SEO",
+  "agentic-browsing": "Agent",
 };
 
 /**

@@ -251,6 +251,10 @@ export async function recordRun(
         scoreAccessibility: toScoreInt(scores.accessibility),
         scoreBestPractices: toScoreInt(scores["best-practices"]),
         scoreSeo: toScoreInt(scores.seo),
+        // Lighthouse 13.3's fifth category. `toScoreInt` maps an absent/unscored
+        // value to null (never 0), so a run that didn't select Agentic Browsing
+        // persists as unscored rather than as a zero score.
+        scoreAgenticBrowsing: toScoreInt(scores["agentic-browsing"]),
         options: JSON.stringify(result.options),
         metrics: JSON.stringify(result.median.metrics),
         field: result.field ? JSON.stringify(result.field) : null,
@@ -296,6 +300,7 @@ export function recordFailedRun(batch: Batch, job: AuditJob): void {
         scoreAccessibility: null,
         scoreBestPractices: null,
         scoreSeo: null,
+        scoreAgenticBrowsing: null,
         options: JSON.stringify(batch.options),
         metrics: null,
         field: null,
@@ -614,6 +619,10 @@ function rowToHistory(row: RunRow): HistoryRow {
     accessibility: row.scoreAccessibility,
     "best-practices": row.scoreBestPractices,
     seo: row.scoreSeo,
+    // Null on legacy rows (written before the 0007 migration) and on runs that
+    // didn't select the category — the same "unscored" state the four above use
+    // for a failed run. Deliberately not coalesced to 0.
+    "agentic-browsing": row.scoreAgenticBrowsing,
   };
   return {
     id: row.id,
@@ -748,6 +757,7 @@ function rowToResultLite(row: RunRow, device: FormFactor): AuditResultLite {
     accessibility: row.scoreAccessibility,
     "best-practices": row.scoreBestPractices,
     seo: row.scoreSeo,
+    "agentic-browsing": row.scoreAgenticBrowsing,
   };
   return {
     requestedUrl: row.url,

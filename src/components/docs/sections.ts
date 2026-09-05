@@ -38,6 +38,7 @@ export const DOCS_GROUPS: readonly DocsGroupMeta[] = [
       { id: "accuracy", label: "Trustworthy numbers" },
       { id: "discovery", label: "Finding pages" },
       { id: "pagespeed", label: "PageSpeed Insights" },
+      { id: "agentic-browsing", label: "Agentic Browsing" },
     ],
   },
   {

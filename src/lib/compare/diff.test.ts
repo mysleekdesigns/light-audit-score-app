@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { HistoryRow } from "@/lib/db/persistence";
-import type {
-  CategoryScores,
-  CoreWebVitals,
-  MetricValue,
+import {
+  type CategoryScores,
+  type CoreWebVitals,
+  LIGHTHOUSE_CATEGORIES,
+  type MetricValue,
 } from "@/lib/lighthouse/types";
 
 import {
@@ -138,12 +139,24 @@ describe("diffScores", () => {
 
   it("returns one diff per category in canonical order", () => {
     const diffs = diffScores(baseline, comparison);
-    expect(diffs.map((d) => d.category)).toEqual([
-      "performance",
-      "accessibility",
-      "best-practices",
-      "seo",
-    ]);
+    // Assert against the canonical list itself rather than a literal copy: the
+    // contract is "one diff per LIGHTHOUSE_CATEGORY, in that order", so adding a
+    // category (13.3's agentic-browsing) must not require editing this test.
+    expect(diffs.map((d) => d.category)).toEqual([...LIGHTHOUSE_CATEGORIES]);
+    expect(diffs[0].category).toBe("performance");
+  });
+
+  it("emits a diff for a category neither side scored, as a flat null", () => {
+    // agentic-browsing is absent from both fixtures above — the legacy-row case
+    // for every run persisted before Lighthouse 13.3 existed.
+    const agentic = diffScores(baseline, comparison).find(
+      (d) => d.category === "agentic-browsing",
+    );
+    expect(agentic).toMatchObject({
+      baseline: null,
+      comparison: null,
+      delta: null,
+    });
   });
 
   it("marks higher scores as improvements (up)", () => {
@@ -242,7 +255,7 @@ describe("buildScoreTrend", () => {
     expect(trend.map((p) => p.performance)).toEqual([50, 60, 70]);
   });
 
-  it("projects all four category scores, normalising missing to null", () => {
+  it("projects every category score, normalising missing to null", () => {
     const trend = buildScoreTrend([
       makeRow({ id: "x", scores: { performance: 80, accessibility: 90 } }),
     ]);
@@ -252,7 +265,15 @@ describe("buildScoreTrend", () => {
       accessibility: 90,
       "best-practices": null,
       seo: null,
+      // A run persisted before Lighthouse 13.3 existed carries no agentic score;
+      // the trend must emit an explicit null so the chart draws no line for it,
+      // rather than omitting the key and leaving recharts to plot undefined.
+      "agentic-browsing": null,
     });
+    // Every category is a key, so a new one cannot silently go unprojected.
+    for (const category of LIGHTHOUSE_CATEGORIES) {
+      expect(trend[0]).toHaveProperty(category);
+    }
   });
 
   it("uses the run's effective time as the x dataKey", () => {

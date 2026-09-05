@@ -1,6 +1,7 @@
 # ROADMAP — Competitive differentiation plan (Phases A–H)
 
-> **Status (drafted 2026-09-05):** nothing in this plan is built. Every checkbox is `[ ]`.
+> **Status (updated 2026-09-05):** **Phase A complete** — the Agentic Browsing category is
+> live end-to-end (engine → SQLite → UI → PSI → AI analysis). Phases B–H are unbuilt.
 > This file is a **plan**, not a record — it was drafted from a competitor survey of the
 > free/local Lighthouse tooling space (Unlighthouse, Lighthouse CI, sitespeed.io,
 > Lighthouse Parade) and the commercial monitoring tier (DebugBear, Foo.software,
@@ -102,37 +103,94 @@ The category's audits (per the installed config): `agent-accessibility-tree`,
 `webmcp-form-coverage`, `webmcp-registered-tools`, `webmcp-schema-validity`,
 `cumulative-layout-shift`, and `llms-txt`.
 
-- [ ] **Widen the category contract**: add `"agentic-browsing"` to `LighthouseCategory` and
+- [x] **Widen the category contract**: add `"agentic-browsing"` to `LighthouseCategory` and
       `LIGHTHOUSE_CATEGORIES` (`src/lib/lighthouse/types.ts`), which flows to
       `auditOptionsSchema`'s enum in `src/lib/lighthouse/options.ts` and every consumer of
       `CategoryScores`. Confirm the worker passes the category through untouched — the
       installed Lighthouse default config already scores it, so this should require no
       engine change beyond the enum.
-- [ ] **Persist the fifth score**: add a nullable `score_agentic_browsing` column to `runs`
+      *Done: listed last, so every `LIGHTHOUSE_CATEGORIES`-ordered surface appends rather than
+      reshuffles. The engine needed zero changes — `default-config.js` already declares the
+      category AND its three gatherers (`WebMCP`, `WebMcpSchemaIssues`, `LlmsTxt`), and the
+      worker parses its payload through `resolveAuditOptions`, whose enum is built from the
+      widened list. `ScoreTrendPoint` was the one place that had hard-coded the four; it is now
+      derived from `LIGHTHOUSE_CATEGORIES` so it cannot drift again.*
+- [x] **Persist the fifth score**: add a nullable `score_agentic_browsing` column to `runs`
       (migration `0007`, self-healing on first DB access like `0001`/`0003`/`0004`); legacy
       rows degrade to `null` exactly as the Phase-10 environment columns do. Widen the
       `analyses.category` value set so the AI "explain & fix" flow can analyse it too.
-- [ ] **UI**: a fifth score ring in the card view and a fifth pill column in the dense
+      *Done: `drizzle/0007_abandoned_susan_delgado.sql`. Verified against the real 201-row
+      database — the migration self-healed on first access and all 201 legacy rows read back
+      `null`, none `0`. `analyses.category` needed no migration (free text validated against
+      `LIGHTHOUSE_CATEGORIES` at the route), but the analysis PROMPT did: every scoring audit in
+      this category carries weight 1, so "order fixes by impact" cannot discriminate — the prompt
+      now orders by landing cost instead, and warns the model that the two INFORMATIVE WebMCP
+      audits are weight 0, so recommending them as a way to raise the score is advice that
+      provably cannot work.*
+- [x] **UI**: a fifth score ring in the card view and a fifth pill column in the dense
       results table, reusing only existing score-band tokens + Archivo/JetBrains-Mono — the
       dark "precision-instrument" identity is preserved verbatim. Check the ring-grid and
       table breakpoints still hold at 5 columns. Add the category to the per-category pass
       thresholds in Settings and to the batch-summary pass/fail counts.
-- [ ] **PSI honesty**: determine whether the PageSpeed Insights API accepts the new category.
+      *Done: short label `AGENT`, full label `Agentic Browsing`. Every 4-column breakpoint was
+      re-cut for five (threshold dials, average-score rings, pass/fail grid, results table,
+      detail sheet, history, compare). No new colour, font or token was introduced.*
+- [x] **PSI honesty**: determine whether the PageSpeed Insights API accepts the new category.
       If it does not, hide or disable it on `/pagespeed` and badge the omission honestly
       rather than reporting a silent zero — the same honest-degradation rule the AI layer
       uses for `NO WEB RESEARCH`.
-- [ ] **Docs**: a Documentation chapter explaining what the category measures (agent
+      *Done: **PSI accepts it — nothing needed hiding.** The v5 discovery document (revision
+      `20260904`) lists `AGENTIC_BROWSING` in the `category` enum, and a live request for
+      `https://web.dev/` returned it scored from PSI's own Lighthouse 13.4.1. Verified through
+      our parser: `{"performance":43,"agentic-browsing":45}`, within ±5 of the local engine's
+      46 on the same URL. A future PSI that dropped the category would parse to a missing
+      score, never a silent 0.*
+- [x] **Docs**: a Documentation chapter explaining what the category measures (agent
       accessibility tree, WebMCP tool/schema coverage, `llms.txt`, layout stability) and why
       it is scored separately, plus a README bullet.
-- [ ] **Verify**: a live audit of a real site returns a non-null agentic-browsing score that
+      *Done: new chapter plus a README bullet, and the stale "four categories" claims elsewhere
+      in the docs were corrected. The chapter is explicit about why the number is coarse, and
+      the research behind that correctly went past the config to the audit sources: although all
+      six `auditRefs` carry weight 1, `webmcp-registered-tools` and `webmcp-form-coverage`
+      declare `scoreDisplayMode: INFORMATIVE`, so Lighthouse scores them at weight 0 and they
+      cannot move the number at all. With not-applicable audits also dropping out of the mean, a
+      typical page is scored on as few as two audits — so one flipping is worth 25 or 50 points.
+      It also states that Google calls the category "under development and subject to change"
+      and that pre-13.3 runs show `—` rather than 0.*
+- [x] **Verify**: a live audit of a real site returns a non-null agentic-browsing score that
       matches the same URL run through the Lighthouse CLI at the same settings; the score
       persists, survives a restart, appears in History/Compare/Batches, and an AI analysis
       can be requested against it.
+      *Done: `https://web.dev/` at mobile/simulated/cold scored **50** in the app and **50**
+      from a direct `npx lighthouse` run taken minutes apart (delta 0). The row persisted as
+      `84/90/100/92/50`, and an AI analysis of the new category ran end-to-end — the agent
+      researched the Chrome agentic-browsing docs the prompt brief points it at.*
 
 **Gate:** a live run of a real URL with all five categories selected persists five scores,
 renders five rings and five pill columns with zero console errors, `/history` and `/batches`
 show the new category, and the value is within ±5 of a direct `lighthouse` CLI run of the
 same URL at the same settings.
+
+*Gate green (2026-09-05).* `https://web.dev/`, mobile / simulated / cold cache, all five
+categories: persisted `perf 84 · a11y 90 · bp 100 · seo 92 · agentic 50`; the batch summary
+renders five rings, five threshold dials and a five-way pass/fail grid; `/history` shows five
+pill columns (`84 90 100 92 50`); a direct `npx lighthouse` run of the same URL at the same
+settings returned **50** — delta **0**. Eight pages driven under Playwright/Chrome reported
+**zero** console errors. Also verified beyond the Gate: 201 pre-existing rows read back `null`
+(never `0`), PSI returns the category through our own parser, and an AI analysis of it runs
+end-to-end and persists.
+
+*Security review (read-only `security-reviewer`, required because the diff touches the PSI key
+path): **pass — no Critical or High**. It confirmed the diff leaves auth, the session token, the
+request gate and the local server untouched, that the new column and export can hold only an
+integer or NULL, and that prompt sanitisation is intact. Its one Medium was fixed here rather
+than deferred: `buildPsiUrl`'s `apiKey` parameter carried a `= getPsiApiKey()` default, so an
+explicit `undefined` — the obvious way to request a keyless URL — resolved the env key instead
+of omitting it, making the module's "no env" docblock false and its tests silently dependent on
+whether a key was set. The argument is now required, `runPsiAudit` is the single env reader, and
+a regression test asserts no key appears even with `PAGESPEED_API_KEY` populated. The reviewer's
+Low finding on CSV formula injection in `csvCell` is pre-existing, untouched by this phase, and
+left for a future one.*
 
 ---
 

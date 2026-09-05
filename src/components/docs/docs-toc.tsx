@@ -21,7 +21,7 @@ function TocList({
             {group.title}
           </span>
           {/* `role="list"` because `list-style: none` strips list semantics in
-              Safari/VoiceOver, taking the "20 items" count with it. */}
+              Safari/VoiceOver, taking the "N items" count with it. */}
           <ul role="list" className="flex list-none flex-col p-0">
             {group.sections.map((section) => {
               const current = active === section.id;

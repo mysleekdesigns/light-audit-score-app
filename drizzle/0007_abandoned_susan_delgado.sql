@@ -1,0 +1,1 @@
+ALTER TABLE `runs` ADD `score_agentic_browsing` integer;

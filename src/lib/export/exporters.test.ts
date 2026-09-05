@@ -80,6 +80,37 @@ describe("toExportRecord", () => {
   });
 });
 
+describe("toExportRecord — agentic-browsing (Lighthouse 13.3's fifth category)", () => {
+  it("exports the fifth score when the run has one", () => {
+    const record = toExportRecord(
+      makeRow({
+        scores: {
+          performance: 100,
+          accessibility: 96,
+          "best-practices": 92,
+          seo: 80,
+          "agentic-browsing": 67,
+        },
+      }),
+    );
+    expect(record["agentic-browsing"]).toBe(67);
+  });
+
+  it("exports null — never 0 — for a run that didn't score it", () => {
+    // makeRow()'s default scores carry only the four weighted categories, which
+    // is exactly what a legacy row (or a run that didn't select it) reads back as.
+    const record = toExportRecord(makeRow());
+    expect(record["agentic-browsing"]).toBeNull();
+    expect(record["agentic-browsing"]).not.toBe(0);
+    // An explicit null score behaves the same way.
+    expect(
+      toExportRecord(makeRow({ scores: { "agentic-browsing": null } }))[
+        "agentic-browsing"
+      ],
+    ).toBeNull();
+  });
+});
+
 describe("rowsToJson", () => {
   it("produces a pretty JSON array of export records", () => {
     const json = rowsToJson([makeRow()]);
@@ -117,6 +148,29 @@ describe("rowsToCsv", () => {
     expect(lines[0]).toContain("lcp");
     expect(lines[1]).toContain("https://example.com/");
     expect(lines[1]).toContain("100");
+  });
+
+  it("appends the agentic-browsing column after seo, empty when unscored", () => {
+    const csv = rowsToCsv([
+      makeRow({
+        scores: {
+          performance: 100,
+          accessibility: 96,
+          "best-practices": 92,
+          seo: 80,
+          "agentic-browsing": 67,
+        },
+      }),
+      makeRow({ id: "run-2" }), // default row: no fifth score
+    ]);
+    const [header, scored, unscored] = csv.split("\r\n");
+    const columns = header.split(",");
+    // Canonical LIGHTHOUSE_CATEGORIES order: the fifth follows seo, so every
+    // pre-existing column keeps its position.
+    expect(columns.indexOf("agentic-browsing")).toBe(columns.indexOf("seo") + 1);
+    expect(scored.split(",")[columns.indexOf("agentic-browsing")]).toBe("67");
+    // Unscored → an empty cell, not a "0".
+    expect(unscored.split(",")[columns.indexOf("agentic-browsing")]).toBe("");
   });
 
   it("escapes a URL containing a comma", () => {

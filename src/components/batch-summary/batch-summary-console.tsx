@@ -257,11 +257,13 @@ interface ThresholdControlsProps {
  * The configurable per-category pass-threshold console (defaults to 90 /
  * GOOD_THRESHOLD).
  *
- * An instrument band: heading + state-aware caption, a dial grid of the four
+ * An instrument band: heading + state-aware caption, a dial grid of the five
  * bars, and a footer bezel reporting what those bars cost across the whole
  * archive — a derived number, not an echo of the dials — with the reset action
- * inside the same bezel. The dials cap at 24rem from `@3xl` so the readout
- * takes the slack instead of four number inputs stretching to a desk width.
+ * inside the same bezel. The dials cap at 28rem from `@3xl` so the readout
+ * takes the slack instead of five number inputs stretching to a desk width; the
+ * cap grew with the fifth dial so each stays ~80px rather than five sharing the
+ * width four used to have.
  */
 function ThresholdControls({
   thresholds,
@@ -300,9 +302,12 @@ function ThresholdControls({
         </div>
 
         {/* Dial grid beside the readout from `@3xl`; stacked below it, where the
-            four bars pair off 2×2 rather than shrinking to four 70px inputs. */}
-        <div className="grid gap-4 @3xl:grid-cols-[minmax(0,24rem)_minmax(0,1fr)] @3xl:items-start @3xl:gap-6">
-          <FieldGroup className="grid grid-cols-2 gap-3 @sm:grid-cols-4">
+            five bars sit 3-then-2 rather than shrinking to five 45px inputs.
+            Three columns, not two: five cells in a 2-wide grid strand the last
+            one alone on a row of its own, and a 320px card still gives each of
+            three ~72px — room for "100" and its spinner. */}
+        <div className="grid gap-4 @3xl:grid-cols-[minmax(0,28rem)_minmax(0,1fr)] @3xl:items-start @3xl:gap-6">
+          <FieldGroup className="grid grid-cols-3 gap-3 @md:grid-cols-5">
             {LIGHTHOUSE_CATEGORIES.map((category) => {
               const inputId = `${groupId}-${category}`;
               return (
@@ -553,8 +558,11 @@ function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
         ) : (
           <>
             {/* Dial grid — one gauge per category, spread evenly across the card
-                rather than packed left. Four rings pair off 2×2 on the narrowest
-                card and go four-across as soon as they each clear ~80px. */}
+                rather than packed left. Five rings sit 3-then-2 on the narrowest
+                card and go five-across from `@md`, the width at which each cell
+                clears the 60px gauge plus its caption with room to spare. Three
+                columns rather than two: at two, the fifth ring is stranded alone
+                on a row, and a 320px card still gives each of three ~75px. */}
             <section className="flex flex-col gap-3" aria-label="Average scores">
               <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                 <span className={SECTION_LABEL}>Average scores</span>
@@ -569,7 +577,7 @@ function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
                   </span>
                 ) : null}
               </div>
-              <div className="grid grid-cols-2 items-start gap-x-2 gap-y-4 @xs:grid-cols-4">
+              <div className="grid grid-cols-3 items-start gap-x-2 gap-y-4 @md:grid-cols-5">
                 {LIGHTHOUSE_CATEGORIES.map((category) => (
                   <ScoreRing
                     key={category}
@@ -899,7 +907,11 @@ function PassFailGrid({ passFail, thresholds }: PassFailGridProps) {
   return (
     <section className="flex flex-col gap-3" aria-label="Pass / fail vs thresholds">
       <span className={SECTION_LABEL}>Pass / fail vs thresholds</span>
-      <div className="grid grid-cols-2 gap-2 @lg:grid-cols-4">
+      {/* Three across, then five from `@lg` — the width at which a tile can hold
+          "Perf" and "≥90" on one line. Two columns would strand the fifth tile
+          alone on a row; three keeps the block square-edged at every width, and
+          the label row below wraps to carry the narrower tile. */}
+      <div className="grid grid-cols-3 gap-2 @lg:grid-cols-5">
         {LIGHTHOUSE_CATEGORIES.map((category) => {
           const { pass, fail, total } = passFail[category];
           const allPass = total > 0 && fail === 0;
@@ -915,7 +927,10 @@ function PassFailGrid({ passFail, thresholds }: PassFailGridProps) {
               key={category}
               className="flex min-w-0 flex-col gap-1 rounded-md border border-border/60 bg-card/30 p-3"
             >
-              <div className="flex items-baseline justify-between gap-1">
+              {/* `flex-wrap` for the same reason the tally below carries it: at
+                  three columns on a 320px card the label and its bar are wider
+                  than the tile, and as one unwrappable row they spilled it. */}
+              <div className="flex flex-wrap items-baseline justify-between gap-x-1">
                 <span className={SECTION_LABEL}>
                   {CATEGORY_SHORT_LABELS[category]}
                 </span>

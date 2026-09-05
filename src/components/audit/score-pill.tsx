@@ -4,8 +4,9 @@
  * A small, rounded, monospace chip showing a single 0–100 Lighthouse score,
  * colour-banded from the *same* band → token source of truth as the ring
  * ({@link scoreChipClass} → {@link scoreBand}), so the two can never disagree.
- * Built for the dense results table where a row of four pills replaces a row of
- * gauges. Pure presentational and server-safe (no hooks/state).
+ * Built for the dense results table where a row of pills — one per Lighthouse
+ * category — replaces a row of gauges. Pure presentational and server-safe (no
+ * hooks/state).
  */
 
 import { cn } from "@/lib/utils";

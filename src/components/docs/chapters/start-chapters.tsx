@@ -31,10 +31,10 @@ export function StartChapters() {
       >
         <P>
           Lighthouse is Google’s page-quality tool. It loads a page in a real browser and grades it
-          out of 100 in four areas: how fast it feels, how usable it is for people with
-          disabilities, whether it follows modern web practices, and how well search engines can
-          read it. LightAudit Score runs that tool for you — over one page or a thousand — and keeps
-          the results.
+          out of 100 in five areas: how fast it feels, how usable it is for people with
+          disabilities, whether it follows modern web practices, how well search engines can read
+          it, and — newest of the five — how usable it is to an AI agent. LightAudit Score runs that
+          tool for you — over one page or a thousand — and keeps the results.
         </P>
         <P>
           Everything happens on your own computer. There is no account, no server to sign up for,
@@ -195,7 +195,7 @@ npm start`}
           </Step>
           <Step title="Leave Run config alone for now">
             The defaults are sensible: a mobile phone, three repeats, three pages at a time, all
-            four categories. Chapter {docsPlate("audit-settings")} explains every dial.
+            five categories. Chapter {docsPlate("audit-settings")} explains every dial.
           </Step>
           <Step title="Press Run audit">
             The button sits at the bottom right and stays greyed out until you have at least one
@@ -208,7 +208,7 @@ npm start`}
           </Step>
           <Step title="Open the details">
             Click <UiLabel>View →</UiLabel> at the end of a finished row. A panel slides in with
-            the four scores, the speed metrics, the list of problems Lighthouse found, and a button
+            the five scores, the speed metrics, the list of problems Lighthouse found, and a button
             to open Google’s own full HTML report.
           </Step>
         </Steps>
@@ -238,9 +238,9 @@ npm start`}
         id="reading-scores"
         index={docsPlate("reading-scores")}
         title="Reading the scores"
-        lede="Four scores out of 100, six speed measurements, and a colour code used consistently everywhere in the app."
+        lede="Five scores out of 100, six speed measurements, and a colour code used consistently everywhere in the app."
       >
-        <H3>The four categories</H3>
+        <H3>The five categories</H3>
         <SpecList
           rows={[
             {
@@ -267,6 +267,18 @@ npm start`}
               detail:
                 "Whether search engines can find, read and index the page. Titles, descriptions, links and crawlability.",
             },
+            {
+              term: "Agentic Browsing",
+              value: "Agent",
+              detail: (
+                <>
+                  Whether an AI agent can read the page and act on it. The newest category, and the
+                  one to read the caveats for — it is worked out from far fewer checks than the
+                  others, so it moves in bigger steps. See{" "}
+                  <DocLink href="#agentic-browsing">Agentic Browsing</DocLink>.
+                </>
+              ),
+            },
           ]}
         />
 
@@ -287,7 +299,8 @@ npm start`}
             {
               term: "Not scored",
               value: "—",
-              detail: "An em dash means the category was switched off, or the audit failed.",
+              detail:
+                "An em dash means the category was switched off, the audit failed, or the run predates the category — never that the page scored zero.",
             },
           ]}
         />
@@ -349,8 +362,8 @@ npm start`}
         </P>
         <P>
           To see the individual runs behind a median, open a result and scroll to{" "}
-          <UiLabel>Per-run spread</UiLabel>. It lists each run’s four scores side by side, so you
-          can tell a genuinely unstable page from a one-off blip.
+          <UiLabel>Per-run spread</UiLabel>. It lists each run’s scores side by side, so you can
+          tell a genuinely unstable page from a one-off blip.
         </P>
 
         <H3>The environment badge</H3>

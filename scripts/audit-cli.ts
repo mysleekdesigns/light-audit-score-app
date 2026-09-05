@@ -8,7 +8,7 @@
  *   --device=mobile|desktop  emulated form factor (alias: --form-factor)
  *   --throttling=simulated|applied
  *   --cpu=N                  CPU slowdown multiplier (1–20; omit = Lighthouse 4×)
- *   --categories=performance,accessibility,best-practices,seo
+ *   --categories=performance,accessibility,best-practices,seo,agentic-browsing
  *   --no-warm-cache          cold first-visit (default is warm = DevTools parity)
  *   --user-agent="…"         override the emulated page UA (alias: --ua)
  *   --json                   print the raw AuditResult JSON instead of a summary

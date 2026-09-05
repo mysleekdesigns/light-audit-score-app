@@ -107,11 +107,18 @@ function sortOpportunities(opportunities: Opportunity[]): Opportunity[] {
 }
 
 /**
- * The 2×2 / 4-col grid of category scores. Each cell is a button that opens the
- * AI analysis for that category (the sheet's only analysis trigger — the card
- * rings stay non-interactive to avoid nesting buttons inside the card's own
- * select button). The SVG ring visuals are untouched; the affordance lives on the
- * cell (cursor, hover tint, focus ring, a hover/focus Sparkles, and an aria-label).
+ * The tiled grid of category scores — one column per Lighthouse category once the
+ * sheet is wide enough, two on a phone. Each cell is a button that opens the AI
+ * analysis for that category (the sheet's only analysis trigger — the card rings
+ * stay non-interactive to avoid nesting buttons inside the card's own select
+ * button). The SVG ring visuals are untouched; the affordance lives on the cell
+ * (cursor, hover tint, focus ring, a hover/focus Sparkles, and an aria-label).
+ *
+ * The hairlines between tiles are the parent's `bg-border/60` showing through a
+ * 1px gap, so a half-empty last row would render as a solid slab of border colour
+ * rather than as nothing. With an odd number of categories the two-column phone
+ * layout leaves exactly one such hole, so the last tile spans both columns to
+ * close it; the wide layout gives every category its own column and needs no span.
  */
 function CategoryScoreGrid({
   result,
@@ -120,9 +127,14 @@ function CategoryScoreGrid({
   result: AuditResultLite;
   onAnalyze: (category: AnalysisCategory) => void;
 }) {
+  const lastIndex = LIGHTHOUSE_CATEGORIES.length - 1;
+  const spanLast = LIGHTHOUSE_CATEGORIES.length % 2 === 1;
   return (
-    <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border/60 bg-border/60 sm:grid-cols-4">
-      {LIGHTHOUSE_CATEGORIES.map((category) => {
+    <div
+      style={{ "--cat-cols": LIGHTHOUSE_CATEGORIES.length } as React.CSSProperties}
+      className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border/60 bg-border/60 sm:grid-cols-[repeat(var(--cat-cols),minmax(0,1fr))]"
+    >
+      {LIGHTHOUSE_CATEGORIES.map((category, i) => {
         const score = result.median.scores[category] ?? null;
         return (
           <button
@@ -130,7 +142,10 @@ function CategoryScoreGrid({
             key={category}
             onClick={() => onAnalyze(category)}
             aria-label={`Analyze why ${CATEGORY_LABELS[category]} scored ${formatScore(score)}`}
-            className="group relative flex flex-col items-center gap-1.5 bg-card px-2 py-4 outline-none transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+            className={cn(
+              "group relative flex flex-col items-center gap-1.5 bg-card px-2 py-4 outline-none transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+              spanLast && i === lastIndex && "col-span-2 sm:col-span-1",
+            )}
           >
             <Sparkles
               className="absolute right-1.5 top-1.5 size-3 text-transparent transition-colors group-hover:text-muted-foreground/70 group-focus-visible:text-muted-foreground/70"
@@ -424,70 +439,76 @@ function PerRunSpread({ result }: { result: AuditResultLite }) {
   return (
     <section className="flex flex-col gap-3">
       <SectionLabel>Per-run spread · {result.runs} runs</SectionLabel>
+      {/* Run + a column per category + CPU is a wide row on a phone-width sheet.
+          The rounded border box keeps `overflow-hidden` for its corners, so the
+          scroll lives on an inner container — the sheet body never scrolls
+          sideways, and no column is silently clipped. */}
       <div className="overflow-hidden rounded-md border border-border/60">
-        <table className="w-full border-collapse text-left">
-          <caption className="sr-only">
-            Per-run category scores and host CPU benchmark index
-          </caption>
-          <thead>
-            <tr className="border-b border-border/60 bg-muted/30">
-              <th
-                scope="col"
-                className="px-3 py-2 font-mono text-[0.6rem] font-medium uppercase tracking-[0.14em] text-muted-foreground"
-              >
-                Run
-              </th>
-              {RUN_CATEGORY_ORDER.map((category) => (
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-left">
+            <caption className="sr-only">
+              Per-run category scores and host CPU benchmark index
+            </caption>
+            <thead>
+              <tr className="border-b border-border/60 bg-muted/30">
                 <th
-                  key={category}
                   scope="col"
-                  className="px-2 py-2 text-right font-mono text-[0.6rem] font-medium uppercase tracking-[0.14em] text-muted-foreground"
+                  className="px-3 py-2 font-mono text-[0.6rem] font-medium uppercase tracking-[0.14em] text-muted-foreground"
                 >
-                  {CATEGORY_SHORT_LABELS[category]}
+                  Run
                 </th>
-              ))}
-              <th
-                scope="col"
-                className="px-3 py-2 text-right font-mono text-[0.6rem] font-medium uppercase tracking-[0.14em] text-muted-foreground"
-                title="Host CPU/Memory Power (Lighthouse benchmarkIndex) for this run"
-              >
-                CPU
-              </th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border/50">
-            {result.perRunScores.map((scores, i) => {
-              const env = result.perRunEnvironments[i];
-              return (
-                <tr key={i} className="bg-card">
+                {RUN_CATEGORY_ORDER.map((category) => (
                   <th
-                    scope="row"
-                    className="px-3 py-2 font-mono text-xs tabular-nums text-muted-foreground"
+                    key={category}
+                    scope="col"
+                    className="px-2 py-2 text-right font-mono text-[0.6rem] font-medium uppercase tracking-[0.14em] text-muted-foreground"
                   >
-                    {String(i + 1).padStart(2, "0")}
+                    {CATEGORY_SHORT_LABELS[category]}
                   </th>
-                  {RUN_CATEGORY_ORDER.map((category) => {
-                    const score = scores[category] ?? null;
-                    return (
-                      <td
-                        key={category}
-                        className={cn(
-                          "px-2 py-2 text-right font-mono text-sm tabular-nums",
-                          scoreColorClass(score),
-                        )}
-                      >
-                        {formatScore(score)}
-                      </td>
-                    );
-                  })}
-                  <td className="px-3 py-2 text-right font-mono text-sm tabular-nums text-foreground">
-                    {formatBenchmarkIndex(env?.benchmarkIndex ?? null)}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+                ))}
+                <th
+                  scope="col"
+                  className="px-3 py-2 text-right font-mono text-[0.6rem] font-medium uppercase tracking-[0.14em] text-muted-foreground"
+                  title="Host CPU/Memory Power (Lighthouse benchmarkIndex) for this run"
+                >
+                  CPU
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/50">
+              {result.perRunScores.map((scores, i) => {
+                const env = result.perRunEnvironments[i];
+                return (
+                  <tr key={i} className="bg-card">
+                    <th
+                      scope="row"
+                      className="px-3 py-2 font-mono text-xs tabular-nums text-muted-foreground"
+                    >
+                      {String(i + 1).padStart(2, "0")}
+                    </th>
+                    {RUN_CATEGORY_ORDER.map((category) => {
+                      const score = scores[category] ?? null;
+                      return (
+                        <td
+                          key={category}
+                          className={cn(
+                            "px-2 py-2 text-right font-mono text-sm tabular-nums",
+                            scoreColorClass(score),
+                          )}
+                        >
+                          {formatScore(score)}
+                        </td>
+                      );
+                    })}
+                    <td className="px-3 py-2 text-right font-mono text-sm tabular-nums text-foreground">
+                      {formatBenchmarkIndex(env?.benchmarkIndex ?? null)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
       {spread ? (
         <p className="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-muted-foreground tabular-nums">
@@ -731,13 +752,21 @@ function JobDetail({ job, result }: { job: AuditJob; result: AuditResultLite }) 
                 if (value) setCategory(value as AnalysisCategory);
               }}
               aria-label="Category to analyze"
-              className="w-full"
+              // A grid, not `flex-1` items: the group's items are `shrink-0`
+              // `whitespace-nowrap`, so on a phone-width sheet five equal flex
+              // items overflow the header rather than compressing. Equal grid
+              // tracks — three per row on a phone, one per category once the
+              // sheet earns its width — keep every label inside the panel.
+              style={
+                { "--cat-cols": LIGHTHOUSE_CATEGORIES.length } as React.CSSProperties
+              }
+              className="grid w-full grid-cols-3 sm:grid-cols-[repeat(var(--cat-cols),minmax(0,1fr))]"
             >
               {LIGHTHOUSE_CATEGORIES.map((c) => (
                 <ToggleGroupItem
                   key={c}
                   value={c}
-                  className="flex-1 font-mono text-[0.65rem] uppercase tracking-[0.1em]"
+                  className="min-w-0 font-mono text-[0.65rem] uppercase tracking-[0.1em]"
                 >
                   {CATEGORY_SHORT_LABELS[c]}
                 </ToggleGroupItem>

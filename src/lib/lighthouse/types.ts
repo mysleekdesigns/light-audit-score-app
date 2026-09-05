@@ -9,18 +9,30 @@
  * Keep this file free of runtime/Chrome imports so it can be shared everywhere.
  */
 
-/** Lighthouse v13 scoring categories (PWA was removed in v13). */
+/**
+ * Lighthouse v13 scoring categories (PWA was removed in v13).
+ *
+ * `agentic-browsing` is the fifth category Lighthouse **13.3** added: how usable
+ * the page is to an AI agent (agent accessibility tree, WebMCP tool/schema
+ * coverage, `llms.txt`, layout stability). It is scored by the *default* config
+ * — no custom config is needed — but Lighthouse renders it in `fraction` display
+ * mode (n-of-6 audits passed), so its 0–100 value is coarser-grained than the
+ * weighted four. Listed last so every `LIGHTHOUSE_CATEGORIES`-ordered surface
+ * (rings, table columns, exports) appends it rather than reshuffling.
+ */
 export type LighthouseCategory =
   | "performance"
   | "accessibility"
   | "best-practices"
-  | "seo";
+  | "seo"
+  | "agentic-browsing";
 
 export const LIGHTHOUSE_CATEGORIES: readonly LighthouseCategory[] = [
   "performance",
   "accessibility",
   "best-practices",
   "seo",
+  "agentic-browsing",
 ] as const;
 
 /** Emulated device the audit runs against. */

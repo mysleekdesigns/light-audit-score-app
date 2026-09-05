@@ -124,6 +124,182 @@ describe("buildUserPrompt", () => {
   });
 });
 
+/**
+ * Lighthouse 13.4's fifth category scores unlike the other four: all six audits
+ * carry weight 1, not-applicable audits leave the denominator, and the report
+ * renders the result as a "passed / applicable" fraction. The prompt has to say
+ * so, or the model applies "highest-impact first" to audits that all pay the
+ * same — and it has to stay honest that WebMCP is still a proposal.
+ */
+describe("agentic-browsing", () => {
+  /** An LHR whose Agentic Browsing category mirrors the shipped audit refs. */
+  const AGENTIC_LHR: LighthouseResult = {
+    ...LHR,
+    categories: {
+      ...(LHR.categories as Record<string, unknown>),
+      "agentic-browsing": {
+        id: "agentic-browsing",
+        score: 0.49,
+        auditRefs: [
+          { id: "agent-accessibility-tree", weight: 1 },
+          { id: "webmcp-form-coverage", weight: 1 },
+          { id: "webmcp-registered-tools", weight: 1 },
+          { id: "webmcp-schema-validity", weight: 1 },
+          { id: "cumulative-layout-shift", weight: 1 },
+          { id: "llms-txt", weight: 1 },
+        ],
+      },
+    },
+    audits: {
+      ...(LHR.audits as Record<string, unknown>),
+      "agent-accessibility-tree": {
+        id: "agent-accessibility-tree",
+        title: "Page exposes a usable accessibility tree to agents",
+        description: "Agents navigate via the accessibility tree.",
+        score: 0,
+        scoreDisplayMode: "binary",
+        displayValue: "",
+        details: { type: "table", items: [{ node: { selector: "main > div" } }] },
+      },
+      "webmcp-form-coverage": {
+        id: "webmcp-form-coverage",
+        title: "Forms are covered by WebMCP tools",
+        score: 0,
+        scoreDisplayMode: "binary",
+        displayValue: "",
+      },
+      "webmcp-registered-tools": {
+        id: "webmcp-registered-tools",
+        title: "Page registers WebMCP tools",
+        score: 1,
+        scoreDisplayMode: "binary",
+        displayValue: "",
+      },
+      "webmcp-schema-validity": {
+        id: "webmcp-schema-validity",
+        title: "WebMCP tool schemas are valid",
+        score: null,
+        scoreDisplayMode: "notApplicable",
+        displayValue: "",
+      },
+      // Scored on a curve, and above Lighthouse's 0.9 pass threshold: the report
+      // counts this one as PASSED even though it is short of perfect.
+      "cumulative-layout-shift": {
+        id: "cumulative-layout-shift",
+        title: "Cumulative Layout Shift",
+        score: 0.95,
+        scoreDisplayMode: "numeric",
+        displayValue: "0.04",
+      },
+      "llms-txt": {
+        id: "llms-txt",
+        title: "Site provides an llms.txt",
+        score: 0,
+        scoreDisplayMode: "binary",
+        displayValue: "",
+      },
+    },
+  } as LighthouseResult;
+
+  const input = () =>
+    buildAnalysisInput({
+      lhr: AGENTIC_LHR,
+      category: "agentic-browsing",
+      formFactor: "mobile",
+    });
+
+  it("summarizes the category through the generic audit path", () => {
+    const built = input();
+
+    expect(built.categoryScore).toBe(49);
+    // No performance-only projections leak in.
+    expect(built.metrics).toBeUndefined();
+    expect(built.opportunities).toBeUndefined();
+
+    const ids = (built.audits ?? []).map((a) => a.id);
+    expect(ids).toContain("agent-accessibility-tree");
+    expect(ids).toContain("llms-txt");
+    // Passing and not-applicable audits stay out: neither is what to fix, and
+    // the not-applicable one is not even in the score's denominator.
+    expect(ids).not.toContain("webmcp-registered-tools");
+    expect(ids).not.toContain("webmcp-schema-validity");
+    // Concrete targets still come through the shared details reader.
+    expect(
+      built.audits?.find((a) => a.id === "agent-accessibility-tree")?.examples,
+    ).toContain("main > div");
+  });
+
+  it("does not call a numeric audit above the pass threshold FAILED", () => {
+    const cls = input().audits?.find((a) => a.id === "cumulative-layout-shift");
+
+    // Surfaced (0.95 is short of perfect and still worth points)...
+    expect(cls).toBeDefined();
+    // ...but reported at its score, the way Lighthouse's own report shows it.
+    expect(cls?.failed).toBe(false);
+    expect(buildUserPrompt(input())).toContain("Cumulative Layout Shift — score 95/100");
+  });
+
+  it("teaches the fraction scoring model and stays honest about WebMCP", () => {
+    const prompt = buildUserPrompt(input());
+
+    expect(prompt).toContain("Agentic Browsing score: 49 / 100");
+    // Equal weighting among the audits that score, and not-applicable audits
+    // leaving the average.
+    expect(prompt).toContain(
+      "Every audit that counts toward the score carries the SAME weight",
+    );
+    expect(prompt).toContain("drop out of the average entirely");
+    // The two INFORMATIVE audits are weight 0 in Lighthouse
+    // (core/audits/webmcp-{registered-tools,form-coverage}.js declare
+    // scoreDisplayMode: INFORMATIVE), so recommending them as a way to raise the
+    // number would be advice that provably cannot work.
+    expect(prompt).toContain("`webmcp-registered-tools`");
+    expect(prompt).toContain("`webmcp-form-coverage`");
+    expect(prompt).toContain("they cannot move this score at all");
+    // The override of the system prompt's "highest-impact first" rule.
+    expect(prompt).toContain("lowest-effort first");
+    // WebMCP framed as a moving target, not settled practice.
+    expect(prompt).toContain("subject to change");
+    expect(prompt).toMatch(/emerging proposal rather than a ratified standard/);
+    // The brief lands before the audit list it explains.
+    expect(prompt.indexOf("## How this category is scored")).toBeLessThan(
+      prompt.indexOf("## Failing & low-scoring audits"),
+    );
+  });
+
+  it("adds the research steer only for the tier that can open sources", () => {
+    const built = input();
+
+    expect(buildUserPrompt(built, { webResearch: true })).toContain(
+      "https://goo.gle/lighthouse-agentic-web",
+    );
+    // No tools means no fetched source, so pointing at one would only invite an
+    // invented citation.
+    expect(buildUserPrompt(built, { webResearch: false })).not.toContain(
+      "https://goo.gle/lighthouse-agentic-web",
+    );
+    // The scoring brief itself is needed at both tiers.
+    expect(buildUserPrompt(built, { webResearch: false })).toContain(
+      "## How this category is scored",
+    );
+  });
+
+  it("keeps the brief out of the other categories' prompts", () => {
+    for (const category of ["performance", "seo"] as const) {
+      const prompt = buildUserPrompt(
+        buildAnalysisInput({ lhr: AGENTIC_LHR, category, formFactor: "mobile" }),
+      );
+      expect(prompt).not.toContain("## How this category is scored");
+    }
+  });
+
+  it("names the agentic web in both capability tiers' personas", () => {
+    for (const system of [analysisSystemPrompt(true), analysisSystemPrompt(false)]) {
+      expect(system).toContain("agentic web");
+    }
+  });
+});
+
 describe("parseAnalysisSseFrame", () => {
   it("parses a well-formed frame's data payload", () => {
     const frame = `event: text-delta\ndata: ${JSON.stringify({

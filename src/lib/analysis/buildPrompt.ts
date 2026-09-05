@@ -19,7 +19,7 @@ import type { AnalysisInput } from "@/lib/analysis/extract";
  * (which replaces Claude Code's default coding prompt — appropriate, since this
  * agent only diagnoses and researches, it never edits the repo).
  */
-export const ANALYSIS_SYSTEM_PROMPT = `You are a senior web-performance, accessibility, SEO, and web-best-practices engineer. You are given Google Lighthouse / PageSpeed Insights audit data for ONE category of ONE page, and your job is to explain why that category scored low and how to fix it.
+export const ANALYSIS_SYSTEM_PROMPT = `You are a senior web engineer specializing in performance, accessibility, SEO, web best practices, and the agentic web (making a page readable and usable by AI agents). You are given Google Lighthouse / PageSpeed Insights audit data for ONE category of ONE page, and your job is to explain why that category scored low and how to fix it.
 
 Work in three steps:
 1. DIAGNOSE the root causes strictly from the supplied audit data — name the specific failing audits, metrics, or opportunities that are dragging the score down, and explain what each means in plain terms.
@@ -62,7 +62,7 @@ The JSON must be valid (double-quoted keys/strings, no trailing commas, no comme
  * (and the parser drops them anyway). An honest ungrounded answer beats a
  * confident fabricated source, and the UI badges the result accordingly.
  */
-export const ANALYSIS_DATA_ONLY_SYSTEM_PROMPT = `You are a senior web-performance, accessibility, SEO, and web-best-practices engineer. You are given Google Lighthouse / PageSpeed Insights audit data for ONE category of ONE page, and your job is to explain why that category scored low and how to fix it.
+export const ANALYSIS_DATA_ONLY_SYSTEM_PROMPT = `You are a senior web engineer specializing in performance, accessibility, SEO, web best practices, and the agentic web (making a page readable and usable by AI agents). You are given Google Lighthouse / PageSpeed Insights audit data for ONE category of ONE page, and your job is to explain why that category scored low and how to fix it.
 
 You have NO tools and NO web access. Work entirely from the audit data supplied below and your own knowledge.
 
@@ -149,6 +149,45 @@ function pct(score: number | null): string {
   return score === null ? "—" : String(Math.round(score * 100));
 }
 
+/**
+ * Domain + scoring brief for Agentic Browsing, added to the user prompt only for
+ * that category.
+ *
+ * It earns its tokens twice over. The persona line above now names the agentic
+ * web, but naming a domain is not the same as knowing how it is *scored*, and
+ * this category's arithmetic is unusual. The mean itself is the ordinary
+ * weighted one, but every scoring `auditRef` carries weight 1, so the audits
+ * that do count pay out identically — and two of the six do not count at all:
+ * `webmcp-registered-tools` and `webmcp-form-coverage` declare
+ * `scoreDisplayMode: INFORMATIVE` (verified in
+ * `node_modules/lighthouse/core/audits/`), which Lighthouse scores at weight 0
+ * whatever the config says. Not-applicable audits drop out too, so a typical
+ * site is scored on as few as two audits, and Lighthouse renders the result as a
+ * passed/applicable fraction rather than a percentage. Without this the model
+ * applies the system prompt's "highest-impact first" rule to a set of audits
+ * that pay out identically, and invents a ranking — or worse, prescribes WebMCP
+ * work whose two headline audits cannot move the score at all.
+ *
+ * The second job is honesty: WebMCP is a live proposal and Lighthouse itself
+ * calls the category "still under development and subject to change", so the
+ * advice must read as a bet on a moving target, not settled practice.
+ */
+const AGENTIC_BROWSING_BRIEF = [
+  "## How this category is scored (read before ranking fixes)",
+  "",
+  "- It measures how usable this page is to an AI agent: an agent-readable accessibility tree, WebMCP integration (registered tools, form coverage, schema validity), an `llms.txt`, and layout stability (CLS).",
+  "- Every audit that counts toward the score carries the SAME weight, so no scoring audit is worth more than another. Audits Lighthouse marked not-applicable drop out of the average entirely rather than counting against the page, and Lighthouse displays the result as a passed/applicable fraction rather than a percentage.",
+  "- Two of the six audits — `webmcp-registered-tools` and `webmcp-form-coverage` — are INFORMATIVE: they are reported but scored at weight 0, so they cannot move this score at all. Never present acting on them as a way to raise the number; recommend them, if at all, on their own merits.",
+  "- The audits that do score are `agent-accessibility-tree`, `webmcp-schema-validity`, `llms-txt` and `cumulative-layout-shift`. The first three are pass/fail and only pay out when they fully pass; `cumulative-layout-shift` is scored on a curve, so a partial improvement there moves the score partially.",
+  "- Because so few audits apply on a typical page, each one is worth a large share — often 25 or 50 points — so say what a fix is actually worth rather than implying incremental gains.",
+  "- Because every scoring audit pays the same, the usual \"highest-impact first\" ordering cannot discriminate between them: order the fixes by how cheaply and reliably they can be landed instead, lowest-effort first.",
+  "- Google labels this category \"still under development and subject to change\", and WebMCP is an emerging proposal rather than a ratified standard. Say so plainly in the diagnosis: present WebMCP work as a deliberate bet on a moving target, never as settled best practice, and do not imply these audits are stable.",
+];
+
+/** Extra research steer for the tier that can actually open sources. */
+const AGENTIC_BROWSING_RESEARCH_HINT =
+  "- Because the standard is moving, ground every WebMCP or `llms.txt` claim in a page you actually opened — start from the docs Lighthouse links for this category (https://goo.gle/lighthouse-agentic-web) and the WebMCP proposal's own documentation, and prefer them over older secondary write-ups.";
+
 /** Shape of the closing instruction, which differs by capability tier. */
 export interface UserPromptOptions {
   /** Whether the provider can research on the web (default `true`). */
@@ -175,6 +214,14 @@ export function buildUserPrompt(
     } / 100`,
   );
   lines.push("");
+
+  // Ahead of the audit list, so the model knows how this category converts an
+  // audit into score before it reads which audits are failing.
+  if (input.category === "agentic-browsing") {
+    lines.push(...AGENTIC_BROWSING_BRIEF);
+    if (webResearch) lines.push(AGENTIC_BROWSING_RESEARCH_HINT);
+    lines.push("");
+  }
 
   if (input.metrics && input.metrics.length > 0) {
     lines.push("## Core Web Vitals / key timings (lab)");

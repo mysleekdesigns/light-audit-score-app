@@ -101,22 +101,31 @@ import { safeHttpHref } from "@/lib/redactUrl";
 import type { DevicePair } from "@/lib/pairing/devicePairs";
 import { hasBothDevices, pairByDevice } from "@/lib/pairing/devicePairs";
 import { rowsToCsv, rowsToJson } from "@/lib/export/exporters";
+import { rowClearsThresholds } from "@/lib/batch-summary/summary";
 import type { FormFactor, LighthouseCategory } from "@/lib/lighthouse/types";
 import type { Batch } from "@/lib/queue/types";
 import {
   CATEGORY_SHORT_LABELS,
   formatScore,
-  GOOD_THRESHOLD,
   scoreColorClass,
 } from "@/lib/scores";
 import { cn } from "@/lib/utils";
 
-/** The four score columns, in PRD display order, paired with their sort keys. */
+/**
+ * The score columns, in PRD display order, paired with their sort keys.
+ *
+ * The single place this file counts categories: header cells, sub-headers, the
+ * failed-run `colSpan`, the cards' trend strip, the Needs-work gate and both
+ * table bodies all read their width from here, so appending a category widens
+ * every one of them at once. `agentic-browsing` is appended last, matching
+ * `LIGHTHOUSE_CATEGORIES`, so no existing column moves.
+ */
 const SCORE_COLUMNS = [
   { category: "performance", sortKey: "performance" },
   { category: "accessibility", sortKey: "accessibility" },
   { category: "best-practices", sortKey: "best-practices" },
   { category: "seo", sortKey: "seo" },
+  { category: "agentic-browsing", sortKey: "agentic-browsing" },
 ] as const satisfies ReadonlyArray<{
   category: LighthouseCategory;
   sortKey: LighthouseCategory;
@@ -212,15 +221,25 @@ function compareUrlGroup(a: string, b: string): number {
 }
 
 /**
- * A run "passes" the Needs-work gate only when every category is present and at
- * or above the green threshold (90). Errored runs never pass.
+ * A run "passes" the Needs-work gate when every category it actually SCORED is at
+ * or above the green threshold (90). Errored runs, and runs with no score at all,
+ * never pass.
+ *
+ * Judged on the categories present rather than on all of them, matching
+ * `pagesClearingThresholds` in `@/lib/batch-summary/summary` — the rule the Batch
+ * Summary has always used — so the two surfaces cannot disagree about the same
+ * run. The stricter "every category present AND ≥ 90" reading had to go when
+ * Lighthouse 13.3's `agentic-browsing` arrived: every run persisted before that
+ * column existed carries `null` there, so on upgrade it would have re-judged the
+ * entire back catalogue as needing work, stripped every host's "All pass" badge,
+ * and left the Needs-work filter matching everything — a verdict flipped by a
+ * schema migration rather than by anything the pages did. Missing means unmeasured
+ * here, exactly as it does for the Phase-10 environment columns.
  */
 function rowPasses(row: HistoryRow): boolean {
-  if (row.status === "error") return false;
-  return SCORE_COLUMNS.every(({ category }) => {
-    const value = row.scores[category];
-    return value != null && value >= GOOD_THRESHOLD;
-  });
+  // No thresholds argument: the History gate is the fixed green bar (90) for
+  // every category, not the Batch Summary's user-configurable bars.
+  return rowClearsThresholds(row);
 }
 
 /** A run "needs work" when it failed or any category scores below 90. */
@@ -401,7 +420,7 @@ function ScoreCell({
   );
 }
 
-/** Failed-run cell spanning the four score columns: a destructive badge + message. */
+/** Failed-run cell spanning every score column: a destructive badge + message. */
 function FailedCell({
   message,
   className,
@@ -1105,9 +1124,9 @@ function PairedCardsBody({ pairs }: { pairs: DevicePair<CollapsedRun>[] }) {
 }
 
 /**
- * One device's half of a paired table row: the four score cells then a
+ * One device's half of a paired table row: the score cells then a
  * report/actions cell. A null device (this URL wasn't audited on it) renders em
- * dashes; an errored run collapses the four score cells into a single Failed cell
+ * dashes; an errored run collapses the score cells into a single Failed cell
  * but keeps its actions. `borderless` drops the left hairline on the mobile half.
  */
 function HistoryDeviceHalf({
@@ -1119,9 +1138,11 @@ function HistoryDeviceHalf({
   borderless?: boolean;
   /**
    * True when this half is the one the narrow-width device switch has put away.
-   * Both halves together are twelve columns, which only stop overflowing at
-   * ~1180px, so below `xl` only the selected device's cells are displayed; from
-   * `xl` up every cell comes back and the paired table reads as it always has.
+   * Both halves together are fourteen columns — the fifth category added one per
+   * side — so below `xl` only the selected device's cells are displayed; from
+   * `xl` up every cell comes back and the paired table reads as it always has,
+   * falling back to the table container's own horizontal scroll on the narrowest
+   * desktops where fourteen columns still do not fit.
    */
   stowed?: boolean;
 }) {
@@ -1177,8 +1198,8 @@ function HistoryDeviceHalf({
 }
 
 /**
- * The paired archive table for one website: one row per URL with the four
- * category scores shown twice under a two-level "Mobile | Desktop" header
+ * The paired archive table for one website: one row per URL with every
+ * category score shown twice under a two-level "Mobile | Desktop" header
  * (matching the PageSpeed page). Each device half carries its own re-run /
  * report / delete actions plus a compact "since last run" trend under each
  * score; a missing device shows em dashes. Rendered inside a website's accordion
@@ -1237,7 +1258,7 @@ function PairedTableBody({
       <Table>
         <TableHeader className="bg-card [&_th]:bg-card">
           {/* Top header: device-spanning groups over the per-device sub-columns.
-              Stowing a whole group keeps the surviving one at colSpan 5 and
+              Stowing a whole group keeps the surviving one at colSpan 6 and
               leaves URL / Run at on rowSpan 2, so the two-level header stays
               structurally valid with either device alone. */}
           <TableRow className="hover:bg-transparent">
@@ -1273,7 +1294,7 @@ function PairedTableBody({
               Run at
             </TableHead>
           </TableRow>
-          {/* Sub-header: the four category short-labels + a report slot, per device. */}
+          {/* Sub-header: the category short-labels + a report slot, per device. */}
           <TableRow className="hover:bg-transparent">
             {SCORE_COLUMNS.map(({ category }) => (
               <TableHead
@@ -1370,7 +1391,7 @@ function PairedTableBody({
 
 /**
  * The flat archive table for one website: one row per page (its latest run) with
- * the four category scores, device, run time, and per-row actions. Column headers
+ * every category score, device, run time, and per-row actions. Column headers
  * stay sortable (sorting is global across every site). Rendered inside a website's
  * accordion section, so it never sees an empty set and needs no surface of its own.
  */
@@ -1572,7 +1593,7 @@ interface HistoryTableProps {
  * to newest run first — the audit you just finished is the top row of the top
  * website section — and the headers re-sort by the grouped "by URL" order (site
  * root → other public pages → blog and its sub-pages, alphabetical within each),
- * any of the four category scores (nulls last), or run time. Filter by URL substring,
+ * any category score (nulls last), or run time. Filter by URL substring,
  * and/or flip the Needs-work toggle to hide everything that already scores 90+.
  */
 function HistoryTableView({ rows }: HistoryTableProps) {
@@ -1587,7 +1608,7 @@ function HistoryTableView({ rows }: HistoryTableProps) {
   // Default order is newest run first, so the audit you just finished is the top
   // row of the top website section every time you land here. The column headers
   // still switch to the grouped "by URL" order (root → pages → blog) or any of
-  // the four score columns.
+  // the score columns.
   const [sort, setSort] = useState<SortState>({
     key: "createdAt",
     direction: "desc",

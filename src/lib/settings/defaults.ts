@@ -101,12 +101,19 @@ export interface AuditDefaults {
   pagesPerTemplate: number;
 }
 
-/** Every category defaults to the "good" bar (90). */
+/**
+ * Every category defaults to the "good" bar (90) — including Lighthouse 13.3's
+ * fifth category, Agentic Browsing. Purely additive: `sanitizeThresholds`
+ * rebuilds the record from `LIGHTHOUSE_CATEGORIES` and fills any gap from here,
+ * so a stored blob written before the category existed upgrades in place (no
+ * {@link SETTINGS_STORAGE_KEY} bump) and the user keeps their tuned bars.
+ */
 export const DEFAULT_THRESHOLDS: CategoryThresholds = {
   performance: GOOD_THRESHOLD,
   accessibility: GOOD_THRESHOLD,
   "best-practices": GOOD_THRESHOLD,
   seo: GOOD_THRESHOLD,
+  "agentic-browsing": GOOD_THRESHOLD,
 };
 
 /** Factory defaults: mobile / simulated / 3 runs / default concurrency / all categories / 90s. */

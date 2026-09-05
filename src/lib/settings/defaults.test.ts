@@ -5,13 +5,18 @@ import {
   clampRuns,
   clampScore,
   DEFAULT_AUDIT_DEFAULTS,
+  DEFAULT_THRESHOLDS,
   MATCH_DEVTOOLS_PRESET,
   normalizeDefaults,
   sanitizeCategories,
   sanitizeThresholds,
   serializeDefaults,
 } from "@/lib/settings/defaults";
-import { MAX_CPU_MULTIPLIER, MIN_CPU_MULTIPLIER } from "@/lib/lighthouse/types";
+import {
+  LIGHTHOUSE_CATEGORIES,
+  MAX_CPU_MULTIPLIER,
+  MIN_CPU_MULTIPLIER,
+} from "@/lib/lighthouse/types";
 
 describe("clampScore", () => {
   it("rounds and clamps into 0–100", () => {
@@ -54,8 +59,20 @@ describe("sanitizeCategories", () => {
       "accessibility",
       "best-practices",
       "seo",
+      "agentic-browsing",
     ]);
-    expect(sanitizeCategories("nope")).toHaveLength(4);
+    expect(sanitizeCategories("nope")).toHaveLength(5);
+  });
+
+  it("keeps Lighthouse 13.3's fifth category, appended last", () => {
+    expect(sanitizeCategories(["agentic-browsing"])).toEqual([
+      "agentic-browsing",
+    ]);
+    // Canonical order appends it after seo rather than reshuffling the four.
+    expect(sanitizeCategories(["agentic-browsing", "performance"])).toEqual([
+      "performance",
+      "agentic-browsing",
+    ]);
   });
 });
 
@@ -66,6 +83,7 @@ describe("sanitizeThresholds", () => {
       accessibility: 90,
       "best-practices": 90,
       seo: 100,
+      "agentic-browsing": 90,
     });
   });
 
@@ -75,7 +93,43 @@ describe("sanitizeThresholds", () => {
       accessibility: 90,
       "best-practices": 90,
       seo: 90,
+      "agentic-browsing": 90,
     });
+  });
+
+  it("upgrades a blob stored before Agentic Browsing existed, keeping tuned bars", () => {
+    // Purely additive: a four-key blob (written under the same storage key)
+    // gains the fifth bar at the default 90 without disturbing the others.
+    const legacy = { performance: 50, accessibility: 60, "best-practices": 70, seo: 80 };
+    expect(sanitizeThresholds(legacy)).toEqual({
+      ...legacy,
+      "agentic-browsing": 90,
+    });
+    // And an explicitly-set bar is honoured + clamped like any other.
+    expect(
+      sanitizeThresholds({ "agentic-browsing": 45 })["agentic-browsing"],
+    ).toBe(45);
+    expect(
+      sanitizeThresholds({ "agentic-browsing": 250 })["agentic-browsing"],
+    ).toBe(100);
+  });
+});
+
+describe("DEFAULT_THRESHOLDS", () => {
+  it("carries a bar for every Lighthouse category, including Agentic Browsing", () => {
+    for (const category of LIGHTHOUSE_CATEGORIES) {
+      expect(DEFAULT_THRESHOLDS[category]).toBe(90);
+    }
+    expect(Object.keys(DEFAULT_THRESHOLDS)).toHaveLength(
+      LIGHTHOUSE_CATEGORIES.length,
+    );
+  });
+
+  it("defaults a new audit to every category", () => {
+    expect(DEFAULT_AUDIT_DEFAULTS.categories).toEqual([
+      ...LIGHTHOUSE_CATEGORIES,
+    ]);
+    expect(DEFAULT_AUDIT_DEFAULTS.categories).toContain("agentic-browsing");
   });
 });
 

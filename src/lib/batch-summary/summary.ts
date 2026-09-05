@@ -195,6 +195,41 @@ export interface ClearingTally {
  * pages with no scores at all — errors, cancelled runs — stay out of `total`
  * entirely, so the ratio is "of the pages we measured".
  */
+/**
+ * Whether ONE run clears its thresholds: every category the run actually scored
+ * sits at or above that category's bar (missing bars fall back to
+ * {@link GOOD_THRESHOLD_FALLBACK}). A run that measured nothing — an error, or a
+ * row with no scores — never clears.
+ *
+ * Judging on the categories PRESENT, not on all of them, is what keeps a schema
+ * migration from re-judging history: when Lighthouse 13.3's `agentic-browsing`
+ * column arrived, every previously-persisted run carried `null` there, and a
+ * rule requiring all five present would have flipped the entire back catalogue
+ * to failing without a single page having changed.
+ *
+ * Exported so the History page's Needs-work gate and the Batch Summary's
+ * clearing tally are the SAME predicate rather than two copies that drifted —
+ * they previously disagreed, and the fifth category made the disagreement
+ * visible.
+ */
+export function rowClearsThresholds(
+  row: HistoryRow,
+  thresholds: Partial<Record<LighthouseCategory, number>> = {},
+): boolean {
+  if (!isDone(row)) return false;
+
+  const scored = LIGHTHOUSE_CATEGORIES.filter((category) =>
+    isPresent(row.scores[category]),
+  );
+  // A run with nothing measured has cleared nothing — it is not vacuously a pass.
+  if (scored.length === 0) return false;
+
+  return scored.every((category) => {
+    const score = row.scores[category] as number;
+    return score >= (thresholds[category] ?? GOOD_THRESHOLD_FALLBACK);
+  });
+}
+
 export function pagesClearingThresholds(
   rows: HistoryRow[],
   thresholds: Partial<Record<LighthouseCategory, number>>,
@@ -204,18 +239,15 @@ export function pagesClearingThresholds(
 
   for (const row of rows) {
     if (!isDone(row)) continue;
-
-    const scored = LIGHTHOUSE_CATEGORIES.filter((category) =>
+    // Pages with nothing measured stay out of `total` entirely (see the docblock),
+    // which is the one case `rowClearsThresholds` cannot express in a boolean.
+    const hasAnyScore = LIGHTHOUSE_CATEGORIES.some((category) =>
       isPresent(row.scores[category]),
     );
-    if (scored.length === 0) continue;
+    if (!hasAnyScore) continue;
 
     total += 1;
-    const clears = scored.every((category) => {
-      const score = row.scores[category] as number;
-      return score >= (thresholds[category] ?? GOOD_THRESHOLD_FALLBACK);
-    });
-    if (clears) clearing += 1;
+    if (rowClearsThresholds(row, thresholds)) clearing += 1;
   }
 
   return { clearing, total };

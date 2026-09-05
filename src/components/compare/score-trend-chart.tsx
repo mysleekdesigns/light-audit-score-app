@@ -33,6 +33,12 @@ export const TREND_CONFIG = {
   accessibility: { label: CATEGORY_LABELS.accessibility, color: "var(--chart-2)" },
   "best-practices": { label: CATEGORY_LABELS["best-practices"], color: "var(--chart-3)" },
   seo: { label: CATEGORY_LABELS.seo, color: "var(--chart-4)" },
+  // The fifth category takes `--chart-5`, the palette's remaining slot — no new
+  // colour enters the theme, and the four established series keep their own.
+  "agentic-browsing": {
+    label: CATEGORY_LABELS["agentic-browsing"],
+    color: "var(--chart-5)",
+  },
 } satisfies ChartConfig;
 
 interface ScoreTrendChartProps {
@@ -86,9 +92,16 @@ function EdgeTick({
 }
 
 /**
- * Multi-series time-series of the four category scores (0–100) across a URL's
- * runs, oldest → newest. Renders inside the shadcn `ChartContainer`; recharts is
+ * Multi-series time-series of every category score (0–100) across a URL's runs,
+ * oldest → newest. Renders inside the shadcn `ChartContainer`; recharts is
  * client-only so this file is a client component.
+ *
+ * A fifth series is the most this plot can carry legibly, which is why the
+ * banding stays minimal: one tinted passing band and a dashed 90 line, no
+ * per-band washes competing with the lines themselves. Runs persisted before
+ * `agentic-browsing` existed carry a null for it, and `connectNulls` over an
+ * all-null series draws nothing — an old URL's trend gains a legend entry, not
+ * a phantom line along the axis.
  *
  * The Y domain stays a full 0–100 — a trend that silently rescales to its own
  * range would make a 96→97 wobble look like a cliff — and the space that honesty
@@ -155,8 +168,12 @@ export function ScoreTrendChart({ data }: ScoreTrendChartProps) {
         <ChartTooltip
           content={<ChartTooltipContent className="font-mono" labelKey="label" />}
         />
-        {/* Four category names are wider than a phone. A 2×2 grid fills the card
-            evenly instead of leaving a ragged third row of one orphaned entry. */}
+        {/* Category names are wider than a phone, so they pair off two-up while
+            the card is narrow. Unlike the tiled grids elsewhere, a fifth entry
+            alone on the last row reads fine here: legend items are left-aligned
+            text in a ragged list, not boxed cells with a conspicuous gap beside
+            them. "Agentic Browsing" is the longest of the five and still fits a
+            column at the narrowest card width. */}
         <ChartLegend
           content={
             <ChartLegendContent className="grid grid-cols-2 justify-items-start gap-x-4 gap-y-1 @sm:flex @sm:flex-wrap" />

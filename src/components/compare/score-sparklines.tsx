@@ -92,17 +92,27 @@ function Sparkline({
 }
 
 /**
- * A row of four compact per-category sparklines (Perf / A11y / BP / SEO), each
- * labelled with its chart-series swatch and showing its latest value coloured by
- * score band. Satisfies the PRD's "trend sparklines per URL over time".
+ * A row of compact per-category sparklines (Perf / A11y / BP / SEO / Agent),
+ * each labelled with its chart-series swatch and showing its latest value
+ * coloured by score band. Satisfies the PRD's "trend sparklines per URL over
+ * time".
  *
- * Two columns while the card is narrow, four once it can give each tile a usable
- * trace — sized off the card's container, since this row sits in a half-width
- * column from `lg` up.
+ * Two columns while the card is narrow, three from `@lg`, five once it can give
+ * each tile a usable trace — sized off the card's container, since this row sits
+ * in a half-width column from `lg` up.
+ *
+ * The odd count is absorbed at the top of that progression rather than the
+ * bottom: three tiles across a 310px phone card leaves ~63px of tile content,
+ * which truncates the short label to a single letter and makes the swatch the
+ * only thing identifying the series. So the narrowest step stays two-up and the
+ * fifth tile takes the full row instead of being stranded beside an empty cell —
+ * a wider sparkline being a better sparkline, this reads as the intended shape
+ * rather than a gap. From `@lg` the grid divides 3-then-2 and the span is
+ * released.
  */
 export function ScoreSparklines({ data }: ScoreSparklinesProps) {
   return (
-    <div className="grid grid-cols-2 gap-2 @lg:grid-cols-4">
+    <div className="grid grid-cols-2 gap-2 [&>*:last-child]:col-span-2 @lg:grid-cols-3 @lg:[&>*:last-child]:col-span-1 @2xl:grid-cols-5">
       {LIGHTHOUSE_CATEGORIES.map((category) => (
         <Sparkline key={category} category={category} data={data} />
       ))}

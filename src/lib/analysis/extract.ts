@@ -26,8 +26,14 @@ import type {
 import { METRIC_DISPLAY_ORDER, METRIC_META } from "@/lib/scores";
 import type { AnalysisCategory } from "@/lib/analysis/types";
 
-/** Max failing/low-score category audits surfaced to the model (a11y/bp/seo). */
+/** Max failing/low-score category audits surfaced to the model (every non-performance category). */
 const MAX_AUDITS = 15;
+/**
+ * Lighthouse's own pass threshold (`Util.PASS_THRESHOLD`): its report shows any
+ * audit scoring ≥ 0.9 as passing, and counts it as passed in the "N/M" fraction
+ * an Agentic Browsing category renders.
+ */
+const PASS_THRESHOLD = 0.9;
 /** Max performance opportunities surfaced (sorted by estimated savings desc). */
 const MAX_OPPORTUNITIES = 8;
 /** Max concrete targets (selectors/urls) pulled from one audit's details. */
@@ -91,7 +97,7 @@ export interface AnalysisInput {
   metrics?: MetricFinding[];
   /** Performance only: top opportunities by estimated savings. */
   opportunities?: OpportunityFinding[];
-  /** A11y / Best Practices / SEO: the failing & low-score audits. */
+  /** Every non-performance category: the failing & low-score audits. */
   audits?: AuditFinding[];
   /** PSI only: real-world CrUX field data, when present. */
   field?: FieldFinding[];
@@ -198,7 +204,7 @@ function projectAudits(refs: CategoryAuditRef[]): AuditFinding[] {
       a.state === "failed" ||
       (a.weight > 0 &&
         a.score !== null &&
-        a.score < 0.9 &&
+        a.score < PASS_THRESHOLD &&
         a.state !== "notApplicable"),
   );
 
@@ -211,7 +217,15 @@ function projectAudits(refs: CategoryAuditRef[]): AuditFinding[] {
     weight: a.weight,
     score: a.score,
     displayValue: sanitizeUntrusted(a.displayValue, 160),
-    failed: a.state === "failed",
+    // `parseCategoryAudits` calls anything short of a perfect score "failed",
+    // which is right for the binary audits that fill a11y/Best Practices/SEO but
+    // wrong for a NUMERIC one — and Agentic Browsing is the first category to
+    // route one of those (`cumulative-layout-shift`) through here. Lighthouse
+    // shows a 0.95 CLS as passing, so labelling it FAILED to the model would push
+    // a near-perfect audit to the top of a ranking it barely moves. Report it at
+    // its score instead; the filter above still surfaces it as worth improving.
+    failed:
+      a.state === "failed" && !(a.score !== null && a.score >= PASS_THRESHOLD),
   }));
 }
 
@@ -283,8 +297,9 @@ export function buildAnalysisInput(args: {
     return base;
   }
 
-  // Accessibility / Best Practices / SEO: enrich the failing audits with a few
-  // concrete targets read from the raw audit details (which the parsed ref drops).
+  // Every other category (Accessibility / Best Practices / SEO / Agentic
+  // Browsing): enrich the failing audits with a few concrete targets read from
+  // the raw audit details (which the parsed ref drops).
   const refs = parseCategoryAudits(lhr, category);
   const rawAudits = isRecord(lhr.audits) ? lhr.audits : {};
   base.audits = projectAudits(refs).map((finding) => {

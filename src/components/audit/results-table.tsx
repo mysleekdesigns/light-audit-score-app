@@ -6,12 +6,12 @@
  * span one device or both ({@link hasBothDevices} over the jobs):
  *
  *  - **Single-device** — one row per audit job exposing the same data the cards
- *    carry: path, the four category {@link ScorePill}s, an inline micro-CWV
+ *    carry: path, a {@link ScorePill} per Lighthouse category, an inline micro-CWV
  *    (LCP · TBT · CLS), the compact {@link EnvironmentBadge}, the
  *    {@link JobStatusBadge}, and a `View →` that opens the detail sheet via
  *    `onSelect`.
- *  - **Both devices** — one row per *URL* ({@link pairByDevice}) with the four
- *    category pills shown twice under a two-level "Mobile | Desktop" header; a URL
+ *  - **Both devices** — one row per *URL* ({@link pairByDevice}) with the category
+ *    pills shown twice under a two-level "Mobile | Desktop" header; a URL
  *    missing one device renders em dashes in that side, and each side's `View →`
  *    opens that device's job.
  *
@@ -38,7 +38,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { LighthouseCategory, MetricId } from "@/lib/lighthouse/types";
+import {
+  LIGHTHOUSE_CATEGORIES,
+  type LighthouseCategory,
+  type MetricId,
+} from "@/lib/lighthouse/types";
 import { hasBothDevices, pairByDevice } from "@/lib/pairing/devicePairs";
 import { CATEGORY_SHORT_LABELS, METRIC_META, scoreColorClass } from "@/lib/scores";
 import type { AuditJob } from "@/lib/queue/types";
@@ -47,13 +51,13 @@ import { cn } from "@/lib/utils";
 /** Shared header label styling — mono, uppercase, tracked (matches the History table). */
 const HEAD_LABEL = "font-mono text-[0.7rem] uppercase tracking-[0.16em]";
 
-/** The four score columns in PRD display order. */
-const SCORE_COLUMNS: readonly LighthouseCategory[] = [
-  "performance",
-  "accessibility",
-  "best-practices",
-  "seo",
-] as const;
+/**
+ * The score columns, in canonical `LIGHTHOUSE_CATEGORIES` order — the four
+ * weighted categories plus Lighthouse 13's `agentic-browsing`, which is listed
+ * last so the fifth pill *appends* to the row instead of reshuffling the four
+ * columns anyone reading this table already knows the position of.
+ */
+const SCORE_COLUMNS: readonly LighthouseCategory[] = LIGHTHOUSE_CATEGORIES;
 
 /** The micro-CWV metrics shown inline per row (LCP · TBT · CLS). */
 const MICRO_CWV: readonly MetricId[] = [
@@ -132,10 +136,15 @@ function scoreContent(
   return <Skeleton className="ml-auto h-6 w-9 rounded-md" />;
 }
 
-/** The leading "NN · path" URL cell, shared by both layouts. */
+/**
+ * The leading "NN · path" URL cell, shared by both layouts. `max-w-0` lets the
+ * path truncate instead of forcing the column wide; the min-width keeps it
+ * readable now that five score columns — twice over, in the paired layout —
+ * compete for the same row.
+ */
 function UrlCell({ index, url }: { index: number; url: string }) {
   return (
-    <TableCell className="max-w-0">
+    <TableCell className="min-w-[9rem] max-w-0">
       <span className="flex min-w-0 items-baseline gap-2.5">
         <span className="font-mono text-xs tabular-nums text-muted-foreground">
           {String(index + 1).padStart(2, "0")}
@@ -182,7 +191,7 @@ function ViewCell({
 }
 
 /**
- * Dense single-device table: one row per audit job, four category pills, inline
+ * Dense single-device table: one row per audit job, one pill per category, inline
  * micro-CWV, env, status, and a `View →`. This is the original Phase-11 layout,
  * kept verbatim for any batch that ran a single device.
  */
@@ -239,8 +248,9 @@ function SingleDeviceTable({ jobs, onSelect }: ResultsTableProps) {
 }
 
 /**
- * One device's half of a paired row: four right-aligned score cells (band-coloured
- * pills, skeletons, or status dashes), the job's status, then its own `View →`.
+ * One device's half of a paired row: a right-aligned score cell per category
+ * (band-coloured pills, skeletons, or status dashes), the job's status, then its
+ * own `View →`.
  * `job` is null when this URL wasn't audited on this device — every slot becomes
  * an em dash. `borderless` drops the left hairline on the first (mobile) half.
  */
@@ -289,10 +299,12 @@ function DeviceHalf({
 }
 
 /**
- * Paired table: one row per URL with the four category pills shown twice — under
- * a two-level header that spans "Mobile" and "Desktop", each over the four short
- * category labels. Each device half carries its own status + `View →` so the user
- * can open either device's detail sheet. URLs missing a device show em dashes.
+ * Paired table: one row per URL with the category pills shown twice — under a
+ * two-level header that spans "Mobile" and "Desktop", each over the short category
+ * labels. Each device half carries its own status + `View →` so the user can open
+ * either device's detail sheet. URLs missing a device show em dashes. Two device
+ * halves of five categories is a wide row, so the `Table` primitive's own
+ * `overflow-x-auto` container does the scrolling — never the page body.
  */
 function PairedTable({ jobs, onSelect }: ResultsTableProps) {
   const pairs = pairByDevice(
@@ -328,7 +340,7 @@ function PairedTable({ jobs, onSelect }: ResultsTableProps) {
               Desktop
             </TableHead>
           </TableRow>
-          {/* Sub-header: the four category short-labels, status + view, per device. */}
+          {/* Sub-header: the category short-labels, status + view, per device. */}
           <TableRow className="hover:bg-transparent">
             {SCORE_COLUMNS.map((category) => (
               <TableHead

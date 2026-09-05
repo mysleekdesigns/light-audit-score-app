@@ -89,6 +89,13 @@ export const runs = sqliteTable("runs", {
   scoreAccessibility: integer("score_accessibility"),
   scoreBestPractices: integer("score_best_practices"),
   scoreSeo: integer("score_seo"),
+  /**
+   * Lighthouse 13.3's fifth category (Agentic Browsing). Nullable, so rows
+   * written before this column existed — and runs that simply didn't select the
+   * category — degrade to `null` (an unscored category) exactly the way the
+   * Phase-10 environment columns do. Never 0: a missing score is missing.
+   */
+  scoreAgenticBrowsing: integer("score_agentic_browsing"),
   /** Full resolved `AuditOptions` as JSON. */
   options: text("options").notNull(),
   /** Full `CoreWebVitals` (median run) as JSON; null for failed runs. */
@@ -182,7 +189,14 @@ export const analyses = sqliteTable(
     runId: text("run_id")
       .notNull()
       .references(() => runs.id),
-    /** Lighthouse category analyzed ("performance" | "accessibility" | "best-practices" | "seo"). */
+    /**
+     * Lighthouse category analyzed — one of `LIGHTHOUSE_CATEGORIES`
+     * ("performance" | "accessibility" | "best-practices" | "seo" |
+     * "agentic-browsing"). Stored as free text and validated at the API seam
+     * (`/api/reports/[runId]/analyze`), so widening the category set needs no
+     * migration: the unique `run_id + category` index keeps the upsert
+     * deterministic for the new value too.
+     */
     category: text("category").notNull(),
     /** The 0–100 category score at analysis time (null if that category was unscored). */
     categoryScore: integer("category_score"),

@@ -1,5 +1,5 @@
 /**
- * Manual chapters 12–15: the four pages that work with results you already have
+ * Manual chapters 13–16: the four pages that work with results you already have
  * — the archive, trends and diffs, batch summaries, and daily schedules.
  */
 
@@ -46,7 +46,7 @@ export function ResultsChapters() {
             {
               term: "Needs work",
               detail:
-                "One click hides every page that scored 90 or above in all four categories, leaving only the pages with something to fix. The button carries a count.",
+                "One click hides every page that scored 90 or above in every category, leaving only the pages with something to fix. The button carries a count.",
             },
             {
               term: "Sorting",
@@ -68,8 +68,8 @@ export function ResultsChapters() {
         <H3>What a row tells you</H3>
         <List>
           <LI>
-            The four scores, each with a small arrow when it moved since the previous audit of the
-            same page. Hovering the arrow shows the exact before and after.
+            Every category score, each with a small arrow when it moved since the previous audit
+            of the same page. Hovering the arrow shows the exact before and after.
           </LI>
           <LI>
             A badge for the device, and one for the engine — <Code>LHA</Code> for a local audit,{" "}
@@ -134,11 +134,11 @@ export function ResultsChapters() {
 
         <H3>The trend chart</H3>
         <P>
-          All four scores plotted across every audit of that page, oldest to newest. The scale is
-          fixed at 0–100 so the shape never lies, the 90-and-above region is tinted green, and 90
-          itself is marked with a dashed line. Underneath, four small sparklines give each category
-          its own shape at a glance with the latest value beside it. Two audits are the minimum for
-          a trend; with one, the app says so.
+          Every category score plotted across every audit of that page, oldest to newest. The scale
+          is fixed at 0–100 so the shape never lies, the 90-and-above region is tinted green, and 90
+          itself is marked with a dashed line. Underneath, a small sparkline per category gives each
+          one its own shape at a glance with the latest value beside it. Two audits are the minimum
+          for a trend; with one, the app says so.
         </P>
 
         <H3>The diff</H3>
@@ -189,8 +189,8 @@ export function ResultsChapters() {
 
         <H3>Set your own pass mark</H3>
         <P>
-          The panel at the top holds four number boxes, one per category, all starting at 90. Change
-          them to whatever your project actually requires. Every card on the page re-marks itself
+          The panel at the top holds a number box per category, all starting at 90. Change them to
+          whatever your project actually requires. Every card on the page re-marks itself
           immediately, and the readout tells you how many pages and how many batches clear the bar
           across your entire archive.
         </P>
@@ -203,7 +203,7 @@ export function ResultsChapters() {
         <List>
           <LI>
             <strong className="font-medium text-foreground">Average scores</strong> across the
-            batch, as four rings.
+            batch, one ring per category.
           </LI>
           <LI>
             <strong className="font-medium text-foreground">Best and worst page</strong>, each

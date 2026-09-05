@@ -28,6 +28,9 @@ everything else is optional (see [Setup](#setup)).
   with JSON/CSV export and bulk report opening.
 - **Site discovery**: paste a URL list, or crawl a site (sitemap + shallow same-origin crawl,
   `robots.txt`-aware).
+- **Agentic Browsing score**: Lighthouse 13.3's fifth category — agent accessibility tree, WebMCP
+  tool/schema coverage, `llms.txt`, layout stability — scored beside the classic four, on both the
+  local and the PageSpeed engine.
 
 This is **local lab data only** — no PageSpeed Insights / CrUX field data. It uses the *same*
 `lighthouse` engine (v13) that PageSpeed Insights runs, so the local scores are legitimate
@@ -228,9 +231,9 @@ npm run typecheck   # tsc --noEmit
 - **Batches** — groups runs by batch and shows average scores, best/worst page, and pass/fail
   counts against configurable per-category thresholds, with JSON/CSV export and bulk report
   opening.
-- **Documentation** — a built-in, beginner-friendly manual (20 chapters) covering setup, the audit
-  dials, calibration, AI analysis and providers, schedules, privacy and troubleshooting, with a
-  scroll-spy contents rail.
+- **Documentation** — a built-in, beginner-friendly manual (21 chapters) covering setup, the audit
+  dials, calibration, the Agentic Browsing category, AI analysis and providers, schedules, privacy
+  and troubleshooting, with a scroll-spy contents rail.
 - **Settings persistence** — default device, runs, concurrency, categories, and per-category pass
   thresholds are remembered between visits.
 
@@ -243,8 +246,19 @@ npm run typecheck   # tsc --noEmit
 - **Fresh isolated Chrome per run.** Every run launches its own headless Chrome (`--headless=new`)
   with a unique temporary `--user-data-dir` (cold cache), and always tears it down afterwards,
   even on error.
-- **Categories.** Performance, Accessibility, Best Practices, and SEO (Lighthouse v13 — PWA was
-  removed). Lighthouse reports each as 0–1; we normalise to **0–100** (rounded).
+- **Categories.** Performance, Accessibility, Best Practices, SEO, and **Agentic Browsing**
+  (Lighthouse v13 — PWA was removed; `agentic-browsing` arrived in 13.3 and is scored by the
+  *default* config, so it needs no custom config here). Lighthouse reports each as 0–1; we
+  normalise to **0–100** (rounded).
+- **Agentic Browsing is coarser than the rest.** Its score is the same weighted mean, but two of
+  its six audits (`webmcp-registered-tools`, `webmcp-form-coverage`) are *informative* and carry
+  weight 0, and audits that don't apply — no `llms.txt`, no registered WebMCP tools — drop out of
+  the mean rather than scoring 0. On a typical site that leaves as few as two scoring audits
+  (`agent-accessibility-tree` and `cumulative-layout-shift`), so one flipping moves the score up to
+  50 points. Google's own report renders the category as a passed/applicable **fraction** rather
+  than a percentage (`categoryScoreDisplayMode: 'fraction'`); we normalise the underlying score to
+  0–100 like every other ring. Runs recorded before the column existed read back `null` and render
+  as an em dash, never as 0.
 - **Colour bands.** 0–49 = poor (red), 50–89 = average (orange), 90–100 = good (green).
 - **Configurable levers.** Form factor (**mobile** default / desktop — desktop uses Lighthouse's
   `desktopConfig`), throttling method (**simulated** default / applied — mapped to Lighthouse's
@@ -322,7 +336,8 @@ CPU *during that trace*, which inflates the measured TBT/LCP and therefore **def
 score versus a solo run. To get trustworthy Performance numbers, enable **accuracy mode**: it forces
 *effective* concurrency to 1 whenever Performance is in scope (other URLs still queue), without
 changing your configured `concurrency` for non-Performance work. Accessibility, SEO, and Best Practices
-do not depend on CPU throttling and are unaffected by concurrency.
+do not depend on CPU throttling and are unaffected by concurrency; Agentic Browsing is affected only
+through the `cumulative-layout-shift` audit it shares with Performance.
 
 ### Environment badge & drift warning
 

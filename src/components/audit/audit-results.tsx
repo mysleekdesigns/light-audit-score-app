@@ -41,6 +41,7 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuditDefaults } from "@/hooks/useAuditDefaults";
 import { assessDrift } from "@/lib/lighthouse/drift";
+import { LIGHTHOUSE_CATEGORIES } from "@/lib/lighthouse/types";
 import { hasBothDevices, pairByDevice } from "@/lib/pairing/devicePairs";
 import { cn } from "@/lib/utils";
 import type { StreamConnection } from "@/hooks/useBatchStream";
@@ -378,6 +379,22 @@ const DEVICE_LABEL =
   "font-mono text-[0.625rem] uppercase tracking-[0.18em] text-muted-foreground";
 
 /**
+ * Placeholder ring row shown while a job is queued/running: one placeholder per
+ * Lighthouse category, on the same `repeat(auto-fit, minmax(0, <diameter>px))`
+ * tracks {@link ScoreRings} uses, so the loading row wraps where the real gauges
+ * will and a fifth category can never push it past the edge of a narrow card. The
+ * two track objects differ only in the diameter each card's placeholders use, and
+ * are hoisted so the `style` prop stays referentially stable across re-renders.
+ */
+const SKELETON_RING_ROW = "grid items-start justify-start justify-items-center gap-5";
+const SKELETON_RING_TRACKS_48 = {
+  gridTemplateColumns: "repeat(auto-fit, minmax(0, 48px))",
+} as const;
+const SKELETON_RING_TRACKS_56 = {
+  gridTemplateColumns: "repeat(auto-fit, minmax(0, 56px))",
+} as const;
+
+/**
  * Compact real-world (CrUX) assessment for a result card — the at-a-glance field
  * verdict alongside the lab rings. Renders nothing for local runs (no `field`);
  * for PSI runs it shows the overall URL (else origin) assessment, or a "no CrUX
@@ -414,9 +431,9 @@ interface DeviceSectionProps {
 
 /**
  * One device's ring-set within a {@link PairedAuditCard}: a device caption + the
- * job's status, then the four rings (done), an error line (error), skeleton rings
- * (pending), or an em-dash placeholder when this URL wasn't audited on this
- * device. A done/errored section is a button that opens that job's detail sheet.
+ * category rings (done), an error line (error), skeleton rings (pending), or an
+ * em-dash placeholder when this URL wasn't audited on this device. A done/errored
+ * section is a button that opens that job's detail sheet.
  */
 function DeviceSection({ device, job, url, onSelect }: DeviceSectionProps) {
   const interactive = job?.status === "done" || job?.status === "error";
@@ -457,9 +474,9 @@ function DeviceSection({ device, job, url, onSelect }: DeviceSectionProps) {
     );
   } else {
     body = (
-      <div className="flex gap-5" aria-hidden>
-        {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="flex flex-col items-center gap-2">
+      <div className={SKELETON_RING_ROW} style={SKELETON_RING_TRACKS_48} aria-hidden>
+        {LIGHTHOUSE_CATEGORIES.map((category) => (
+          <div key={category} className="flex flex-col items-center gap-2">
             <Skeleton className="size-12 rounded-full" />
             <Skeleton className="h-2 w-9" />
           </div>
@@ -589,9 +606,9 @@ const AuditJobCard = memo(function AuditJobCard({
         </p>
       ) : (
         <div className="flex flex-col gap-4" aria-hidden>
-          <div className="flex gap-5">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="flex flex-col items-center gap-2">
+          <div className={SKELETON_RING_ROW} style={SKELETON_RING_TRACKS_56}>
+            {LIGHTHOUSE_CATEGORIES.map((category) => (
+              <div key={category} className="flex flex-col items-center gap-2">
                 <Skeleton className="size-14 rounded-full" />
                 <Skeleton className="h-2 w-10" />
               </div>

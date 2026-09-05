@@ -70,18 +70,14 @@ export interface MetricDiff {
 }
 
 /** One point on the per-URL score trend (one per run, oldest → newest). */
-export interface ScoreTrendPoint {
+export type ScoreTrendPoint = {
   /** Effective time (`fetchTime ?? createdAt`) — the chart's x dataKey. */
   t: string;
   /** Short, human-readable axis label for this point. */
   label: string;
   /** Originating run id (for keys / linking). */
   runId: string;
-  performance: number | null;
-  accessibility: number | null;
-  "best-practices": number | null;
-  seo: number | null;
-}
+} & Record<LighthouseCategory, number | null>;
 
 /** Ascending-by-time comparator over history rows (stable for equal times). */
 function byTimeAsc(a: HistoryRow, b: HistoryRow): number {
@@ -199,7 +195,7 @@ function trendLabel(iso: string): string {
 
 /**
  * Build the ordered (oldest → newest) score trend for a set of runs. Filters to
- * done runs, sorts ascending by time, and projects each run's four category
+ * done runs, sorts ascending by time, and projects each run's category
  * scores into a chart-ready point. Pass a single URL's runs (already grouped).
  */
 export function buildScoreTrend(rows: HistoryRow[]): ScoreTrendPoint[] {
@@ -212,10 +208,12 @@ export function buildScoreTrend(rows: HistoryRow[]): ScoreTrendPoint[] {
         t,
         label: trendLabel(t),
         runId: row.id,
-        performance: normScore(row.scores.performance),
-        accessibility: normScore(row.scores.accessibility),
-        "best-practices": normScore(row.scores["best-practices"]),
-        seo: normScore(row.scores.seo),
+        ...(Object.fromEntries(
+          LIGHTHOUSE_CATEGORIES.map((category) => [
+            category,
+            normScore(row.scores[category]),
+          ]),
+        ) as Record<LighthouseCategory, number | null>),
       };
     });
 }

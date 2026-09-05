@@ -4,7 +4,7 @@
  * Turns the {@link HistoryRow}s the History / Batch views already hold into
  * downloadable **JSON** and **CSV**. The exported shape is a flat, analysis-
  * friendly projection (one object/row per run): the requested + final URL, the
- * device, status, the four category scores, the six Core Web Vitals (numeric),
+ * device, status, every category score, the six Core Web Vitals (numeric),
  * timing/version metadata, and any error message. Heavy raw LHRs are *not*
  * included — those stay one click away via the per-run report endpoint.
  *
@@ -32,6 +32,13 @@ export interface ExportRecord {
   accessibility: number | null;
   "best-practices": number | null;
   seo: number | null;
+  /**
+   * Lighthouse 13.3's fifth category. Appended after `seo` (the canonical
+   * `LIGHTHOUSE_CATEGORIES` order) so an existing consumer's column positions
+   * are unchanged. `null` — an empty CSV cell — whenever the run didn't score
+   * it, including every row persisted before the category existed.
+   */
+  "agentic-browsing": number | null;
   /** Core Web Vitals numeric values keyed by abbreviation (LCP, CLS, …). */
   lcp: number | null;
   cls: number | null;
@@ -67,6 +74,7 @@ export function toExportRecord(row: HistoryRow): ExportRecord {
     accessibility: score("accessibility"),
     "best-practices": score("best-practices"),
     seo: score("seo"),
+    "agentic-browsing": score("agentic-browsing"),
     lcp: metric("largest-contentful-paint"),
     cls: metric("cumulative-layout-shift"),
     tbt: metric("total-blocking-time"),
@@ -84,7 +92,11 @@ export function rowsToJson(rows: HistoryRow[]): string {
   return JSON.stringify(rows.map(toExportRecord), null, 2);
 }
 
-/** Ordered CSV columns: the scalar fields first, then the four scores + six CWVs. */
+/**
+ * Ordered CSV columns: the scalar fields first, then the category scores (in
+ * `LIGHTHOUSE_CATEGORIES` order, so a new category appends rather than
+ * reshuffles) + the six CWVs.
+ */
 const CSV_COLUMNS: ReadonlyArray<keyof ExportRecord> = [
   "url",
   "finalUrl",

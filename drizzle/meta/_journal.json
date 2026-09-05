@@ -50,6 +50,13 @@
       "when": 1788386908587,
       "tag": "0006_yielding_kang",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1788648690336,
+      "tag": "0007_abandoned_susan_delgado",
+      "breakpoints": true
     }
   ]
 }

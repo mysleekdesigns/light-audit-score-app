@@ -1,6 +1,8 @@
 /**
- * Manual chapters 05–08: the run-config dials, how to get numbers you can
- * trust, finding pages to audit, and the Google-hosted PageSpeed engine.
+ * Manual chapters 05–09: the run-config dials, how to get numbers you can
+ * trust, finding pages to audit, the Google-hosted PageSpeed engine, and the
+ * fifth category — which lands here, after both engines, because it is scored
+ * on both and its caveats belong beside "Trustworthy numbers".
  */
 
 import {
@@ -29,7 +31,7 @@ export function AuditingChapters() {
         lede="Every dial in Run config, what it changes, and when the default is the right answer."
       >
         <P>
-          The <UiLabel>Run config</UiLabel> half of the audit form holds six dials, four category
+          The <UiLabel>Run config</UiLabel> half of the audit form holds six dials, five category
           switches and two flags. Your choices are remembered for next time, so you normally set
           them once. Everything is locked while an audit is running.
         </P>
@@ -69,7 +71,7 @@ export function AuditingChapters() {
               term: "Concurrency",
               value: "3",
               detail:
-                "How many pages are audited at the same time. Higher finishes a long list sooner but makes Performance scores read lower than they should, because the audits compete for your processor. Accessibility, Best Practices and SEO are unaffected.",
+                "How many pages are audited at the same time. Higher finishes a long list sooner but makes Performance scores read lower than they should, because the audits compete for your processor. Accessibility, Best Practices and SEO are unaffected, and Agentic Browsing very nearly so — layout stability is its only check that comes from the timed part of the audit.",
             },
             {
               term: "User agent",
@@ -79,7 +81,7 @@ export function AuditingChapters() {
             },
             {
               term: "Categories",
-              value: "all four",
+              value: "all five",
               detail:
                 "Turn off what you do not need to make audits quicker. At least one must stay on — the app quietly refuses to let you clear the last.",
             },
@@ -118,7 +120,8 @@ export function AuditingChapters() {
       >
         <P>
           Accessibility, Best Practices and SEO are stable — they check facts about the page, and
-          they give the same answer every time. Performance is different. It is a measurement of
+          they give the same answer every time. Agentic Browsing is nearly as stable: only its
+          layout-stability check comes from the timed part of the audit. Performance is different. It is a measurement of
           speed, so it inherits the conditions of the machine doing the measuring. Everything in
           this chapter is about Performance.
         </P>
@@ -411,6 +414,166 @@ export function AuditingChapters() {
           PageSpeed runs are badged <Code>PSI</Code> and local runs <Code>LHA</Code> throughout the
           app. They were measured on different hardware, so a diff between one of each tells you
           about the machines as much as the page. Compare warns you when a page has both.
+        </Callout>
+      </DocsSection>
+
+      <DocsSection
+        id="agentic-browsing"
+        index={docsPlate("agentic-browsing")}
+        title="Agentic Browsing"
+        lede="The fifth score. It grades the page for a different kind of visitor — an AI agent working on someone’s behalf — and it is worked out differently from the other four."
+      >
+        <P>
+          Lighthouse 13.3 added a fifth category, and this app runs it with no extra setup: it is
+          part of Lighthouse’s standard configuration, so an ordinary audit already produces it.
+          Where Accessibility asks whether a person using a screen reader can operate the page,
+          Agentic Browsing asks whether a piece of software sent to do a job — book the table, fill
+          the form, find the price — can work out what is on the page and act on it.
+        </P>
+        <Callout tone="note" label="In Google’s words">
+          “These checks ensure high-quality, browsable websites for AI agents and validate the
+          correctness of WebMCP integrations. This category is still under development and subject
+          to change.”
+        </Callout>
+
+        <H3>What it checks</H3>
+        <P>
+          Six checks. Two are about whether an agent can read the page at all — Google groups those
+          as <em>Agent Accessibility</em> — three are about <Code>WebMCP</Code>, a browser feature a
+          page uses to hand an agent named, described tools instead of making it guess at your
+          buttons, and the last is layout stability, borrowed from the speed side of the audit.
+        </P>
+        <SpecList
+          rows={[
+            {
+              term: "Accessibility tree",
+              value: "agent-accessibility-tree",
+              detail: (
+                <>
+                  Whether the page exposes a well-formed accessibility tree — the structure an agent
+                  reads to work out what each control is. It reuses the same checks the
+                  Accessibility category runs, narrowed to the ones that give a control a name:
+                  button and link text, form labels, and the ARIA attributes that describe a widget.
+                </>
+              ),
+            },
+            {
+              term: "llms.txt",
+              value: "llms-txt",
+              detail: (
+                <>
+                  Whether the site publishes an <Code>llms.txt</Code> — a Markdown file at the root
+                  telling language models how you want the site read — and whether it follows the
+                  community’s recommendations, which at minimum means real Markdown with at least
+                  one <Code>#</Code> heading.
+                </>
+              ),
+            },
+            {
+              term: "Registered tools",
+              value: "webmcp-registered-tools",
+              detail:
+                "Lists the WebMCP tools the page had registered at the moment of the audit, with each one’s name, description and input schema. Informative — it reports what it found and does not affect the score.",
+            },
+            {
+              term: "Form coverage",
+              value: "webmcp-form-coverage",
+              detail:
+                "Lists the forms on the page and whether each carries WebMCP annotations, so an agent can fill it reliably rather than by inference. Also informative.",
+            },
+            {
+              term: "Schema validity",
+              value: "webmcp-schema-validity",
+              detail:
+                "Whether the registered tools’ schemas are valid — a missing tool name or an unnamed required parameter is a tool an agent cannot call correctly. Errors score zero; warnings alone score half.",
+            },
+            {
+              term: "Layout stability",
+              value: "cumulative-layout-shift",
+              detail: (
+                <>
+                  The same <Code>CLS</Code> measurement that feeds the Performance score. A page that
+                  jumps around while it loads is as hostile to an agent clicking the wrong element as
+                  it is to a person.
+                </>
+              ),
+            },
+          ]}
+        />
+
+        <H3>Why the number moves in big steps</H3>
+        <P>
+          The score is an average of the checks above, exactly like the other four categories — but
+          two things about this category’s checks change how it behaves.
+        </P>
+        <List>
+          <LI>
+            <strong className="font-medium text-foreground">Two of the six only report.</strong>{" "}
+            Registered tools and form coverage are marked informative. They tell you what is there
+            and are left out of the arithmetic entirely.
+          </LI>
+          <LI>
+            <strong className="font-medium text-foreground">
+              Checks that do not apply are dropped, not failed.
+            </strong>{" "}
+            A site that serves no <Code>llms.txt</Code> and registers no WebMCP tools has those
+            checks marked not applicable, and they leave the calculation rather than scoring zero.
+            The category does not punish you for not having adopted WebMCP.
+          </LI>
+        </List>
+        <P>
+          On an ordinary site that leaves as few as two checks actually scoring: the accessibility
+          tree and layout stability. One of them flipping therefore moves the score by up to half
+          the scale. Google’s own report acknowledges this by showing the category as a fraction —{" "}
+          <Code>1/2</Code>, how many of the checks that applied came out passing — rather than as a
+          percentage.
+          This app normalises it to 0–100 like every other ring, so the rings, tables, exports and
+          thresholds all stay consistent, but the underlying number is a coarser instrument than
+          Performance or SEO.
+        </P>
+        <Callout tone="warn" label="Read a change here as a signal, not a measurement">
+          A 50-point drop in this category means one check started failing, not that the page got
+          half as good. Open Google’s full report from the result to see which one it was — the
+          category is listed there with each check’s own findings.
+        </Callout>
+
+        <H3>Why it is a category of its own</H3>
+        <P>
+          It grades a different audience. The other four are all about the experience of a person
+          visiting the page; this one is about a program acting for them, which is a separate
+          question with separate fixes. Keeping it separate is also honest about its maturity —
+          Google says the category is still under development and subject to change, so the checks
+          in it, and therefore the score, may move for reasons that have nothing to do with your
+          page. Folding it into Accessibility or Performance would quietly shift numbers people
+          already track.
+        </P>
+
+        <H3>Where you will see it</H3>
+        <List>
+          <LI>
+            As a fifth ring and a fifth column everywhere scores appear — the live results panel,
+            History, Compare and Batches — with its own pass threshold alongside the others.
+          </LI>
+          <LI>
+            Short-labelled <Code>Agent</Code> where a column heading has no room for the full name.
+          </LI>
+          <LI>
+            As one of the scores you can click to ask the AI why it came out that way, the same as
+            any other category.
+          </LI>
+          <LI>
+            On the <DocLink href="/pagespeed">PageSpeed</DocLink> page as well as the local engine.
+            Google’s API accepts the category, so a PageSpeed audit scores it exactly like a local
+            one — nothing on that page is hidden, disabled, or reported as a zero it did not
+            measure.
+          </LI>
+        </List>
+
+        <Callout tone="note" label="Audits you ran before this release">
+          Older results have no Agentic Browsing score and never will — it was not measured at the
+          time, and nothing can reconstruct it. They show an em dash, the same “not scored” mark
+          described in <DocLink href="#reading-scores">Reading the scores</DocLink>, rather than a
+          zero. Re-run a page if you want the fifth number for it.
         </Callout>
       </DocsSection>
     </>

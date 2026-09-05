@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { AuditOptions } from "@/lib/lighthouse/types";
+import { type AuditOptions, LIGHTHOUSE_CATEGORIES } from "@/lib/lighthouse/types";
 import { buildPsiUrl } from "@/lib/pagespeed/buildPsiUrl";
 
 const OPTIONS: AuditOptions = {
@@ -45,13 +45,15 @@ describe("buildPsiUrl", () => {
   });
 
   it("maps every category id to its PSI enum value", () => {
+    // Driven off LIGHTHOUSE_CATEGORIES so the case cannot silently stop covering
+    // "every" category the way it did when `agentic-browsing` was added. The
+    // Record type makes a MISSING key a compile error but says nothing about the
+    // value, so a typo in an enum string would otherwise ship and PSI would 400
+    // or quietly drop the category.
     const url = new URL(
       buildPsiUrl(
         "https://example.com",
-        {
-          ...OPTIONS,
-          categories: ["performance", "accessibility", "best-practices", "seo"],
-        },
+        { ...OPTIONS, categories: [...LIGHTHOUSE_CATEGORIES] },
         undefined,
       ),
     );
@@ -60,6 +62,27 @@ describe("buildPsiUrl", () => {
       "ACCESSIBILITY",
       "BEST_PRACTICES",
       "SEO",
+      // Verified live against PSI v5 (discovery revision 20260904): the API
+      // accepts this enum and returns the category scored.
+      "AGENTIC_BROWSING",
     ]);
+  });
+
+  it("cannot pick up an API key from the environment", () => {
+    // The third argument used to default to `getPsiApiKey()`, so passing an
+    // explicit `undefined` — the obvious way to request a keyless URL — resolved
+    // the env key instead and appended it. That made every assertion here depend
+    // on whether PAGESPEED_API_KEY happened to be set, and one `toContain` over
+    // the whole URL away from printing a live key into CI logs.
+    const previous = process.env.PAGESPEED_API_KEY;
+    process.env.PAGESPEED_API_KEY = "not-a-real-key-just-a-test-sentinel";
+    try {
+      const url = buildPsiUrl("https://example.com", OPTIONS, undefined);
+      expect(new URL(url).searchParams.has("key")).toBe(false);
+      expect(url).not.toContain("sentinel");
+    } finally {
+      if (previous === undefined) delete process.env.PAGESPEED_API_KEY;
+      else process.env.PAGESPEED_API_KEY = previous;
+    }
   });
 });

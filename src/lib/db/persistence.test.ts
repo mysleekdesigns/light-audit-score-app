@@ -16,10 +16,11 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { getAnalysis, saveAnalysis } from "@/lib/db/analyses";
-import { resetDbForTests } from "@/lib/db/client";
+import { getDb, resetDbForTests } from "@/lib/db/client";
 import { reportJsonPath } from "@/lib/db/paths";
 import {
   deleteBatch,
@@ -130,6 +131,48 @@ function makeResult(url: string): AuditResult {
       cpuSlowdownMultiplier: 4,
     },
   };
+}
+
+/**
+ * A result that also carries Lighthouse 13.3's fifth category (Agentic
+ * Browsing). Pass `null` for the "category selected but unscored" case; the
+ * shared {@link makeResult} covers the "category never selected" one.
+ */
+function makeAgenticResult(url: string, score: number | null): AuditResult {
+  const base = makeResult(url);
+  return {
+    ...base,
+    options: {
+      ...OPTIONS,
+      categories: [...OPTIONS.categories, "agentic-browsing"],
+    },
+    median: {
+      ...base.median,
+      scores: { ...base.median.scores, "agentic-browsing": score },
+    },
+  };
+}
+
+/**
+ * Insert a `runs` row the way a pre-0007 build did: the INSERT never mentions
+ * `score_agentic_browsing`, so the column added by the migration holds SQL NULL.
+ * Proves the new column is nullable with no default (a `NOT NULL DEFAULT 0`
+ * would surface a legacy run as a hard 0 for the fifth category).
+ */
+function insertLegacyRow(id: string, batchId: string, url: string): void {
+  getDb().run(sql`
+    INSERT INTO runs (
+      id, batch_id, idx, url, final_url, status, source, form_factor,
+      throttling, runs, lighthouse_version,
+      score_performance, score_accessibility, score_best_practices, score_seo,
+      options, metrics, report_json, fetch_time, created_at
+    ) VALUES (
+      ${id}, ${batchId}, 0, ${url}, ${url}, 'done', 'local', 'mobile',
+      'simulated', 3, '13.2.0',
+      88, 77, 66, 55,
+      ${JSON.stringify(OPTIONS)}, NULL, NULL, NULL, '2026-01-01T00:00:00.000Z'
+    )
+  `);
 }
 
 beforeEach(async () => {
@@ -343,6 +386,100 @@ describe("persistence", () => {
     expect(row.options.categories).toEqual(OPTIONS.categories);
     expect(row.options.throttling).toBe("simulated");
     expect(row.options.runs).toBe(3);
+  });
+});
+
+describe("agentic-browsing score (Lighthouse 13.3's fifth category)", () => {
+  it("round-trips a scored run through the score_agentic_browsing column", async () => {
+    const job = makeJob("ag-scored", 0, "https://agent.test/");
+    const batch = makeBatch("batch-ag", [job]);
+    recordBatch(batch);
+    await recordRun(batch, job, makeAgenticResult("https://agent.test/", 66.6));
+
+    const [row] = listHistory();
+    // Rounded to the int column exactly like the other four.
+    expect(row.scores["agentic-browsing"]).toBe(67);
+    // The pre-existing four are unaffected by the widening.
+    expect(row.scores.performance).toBe(91);
+    expect(row.scores.seo).toBe(80);
+  });
+
+  it("reads back null — never 0 — for a run that didn't select the category", async () => {
+    // makeResult()'s median carries only the four weighted categories, which is
+    // what a run with `categories: [performance, a11y, best-practices, seo]`
+    // produces. The fifth score must be missing, not zero.
+    const job = makeJob("ag-absent", 0, "https://absent.test/");
+    const batch = makeBatch("batch-ag-absent", [job]);
+    recordBatch(batch);
+    await recordRun(batch, job, makeResult("https://absent.test/"));
+
+    const [row] = listHistory();
+    expect(row.scores["agentic-browsing"]).toBeNull();
+    expect(row.scores["agentic-browsing"]).not.toBe(0);
+  });
+
+  it("reads back null for a category that ran but produced no score", async () => {
+    const job = makeJob("ag-null", 0, "https://null.test/");
+    const batch = makeBatch("batch-ag-null", [job]);
+    recordBatch(batch);
+    await recordRun(batch, job, makeAgenticResult("https://null.test/", null));
+
+    const [row] = listHistory();
+    expect(row.scores["agentic-browsing"]).toBeNull();
+    expect(row.scores["agentic-browsing"]).not.toBe(0);
+  });
+
+  it("leaves the fifth score null on a failed run, like the other four", () => {
+    const job: AuditJob = {
+      ...makeJob("ag-bad", 0, "https://bad.test/"),
+      status: "error",
+      error: { message: "Chrome launch failed" },
+    };
+    const batch = makeBatch("batch-ag-bad", [job]);
+    recordBatch(batch);
+    recordFailedRun(batch, job);
+
+    const [row] = listHistory();
+    expect(row.scores["agentic-browsing"]).toBeNull();
+    expect(row.scores.performance).toBeNull();
+  });
+
+  it("degrades a legacy row (written before the 0007 migration) to a null score", () => {
+    // The migration self-heals on first DB access, so an old row gains the
+    // column with SQL NULL. History must show it as unscored, keeping the four
+    // scores the row *does* carry intact.
+    const batch = makeBatch("batch-legacy", []);
+    recordBatch(batch);
+    insertLegacyRow("legacy-run", "batch-legacy", "https://legacy.test/");
+
+    const [row] = listHistory();
+    expect(row.id).toBe("legacy-run");
+    expect(row.scores.performance).toBe(88);
+    expect(row.scores.accessibility).toBe(77);
+    expect(row.scores["best-practices"]).toBe(66);
+    expect(row.scores.seo).toBe(55);
+    expect(row.scores["agentic-browsing"]).toBeNull();
+    expect(row.scores["agentic-browsing"]).not.toBe(0);
+  });
+
+  it("reconstructs the fifth score (and its legacy null) from the runs table", async () => {
+    const job = makeJob("ag-rb", 0, "https://agent.test/");
+    const batch = makeBatch("batch-ag-rb", [job]);
+    recordBatch(batch);
+    await recordRun(batch, job, makeAgenticResult("https://agent.test/", 50));
+    insertLegacyRow("ag-rb-legacy", "batch-ag-rb", "https://legacy.test/");
+    updateBatchStatus("batch-ag-rb", {
+      status: "completed",
+      finishedAt: new Date().toISOString(),
+    });
+
+    const restored = reconstructBatch("batch-ag-rb")!;
+    const byId = new Map(restored.jobs.map((j) => [j.id, j]));
+    expect(byId.get("ag-rb")!.result!.median.scores["agentic-browsing"]).toBe(50);
+    const legacy = byId.get("ag-rb-legacy")!.result!.median.scores;
+    expect(legacy["agentic-browsing"]).toBeNull();
+    expect(legacy["agentic-browsing"]).not.toBe(0);
+    expect(legacy.performance).toBe(88);
   });
 });
 

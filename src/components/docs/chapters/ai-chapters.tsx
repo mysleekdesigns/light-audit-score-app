@@ -1,5 +1,5 @@
 /**
- * Manual chapters 09–11: the AI score analysis, choosing which AI runs it, and
+ * Manual chapters 10–12: the AI score analysis, choosing which AI runs it, and
  * connecting a research server so the answers cite real pages.
  */
 
@@ -44,7 +44,7 @@ export function AiChapters() {
             History.
           </Step>
           <Step title="Click the score you want explained">
-            In the <UiLabel>Category scores</UiLabel> grid, each of the four scores is a button.
+            In the <UiLabel>Category scores</UiLabel> grid, each of the five scores is a button.
             Clicking one jumps to the Analysis tab already aimed at that category. You can also open
             the <UiLabel>Analysis</UiLabel> tab directly — it preselects whichever category scored
             worst.
