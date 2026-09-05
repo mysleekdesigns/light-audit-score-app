@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // PreToolUse guard (Bash): deterministic protections for this repo.
 //  - no force-push to main/develop (force-with-lease on feature branches is allowed)
-//  - never stage .env* or .mcp.json (local-dev-only secrets; must never ship — SAAS_PLAN.md Phase D/E)
+//  - never stage .env* or .mcp.json (local-dev-only secrets; must never ship).
+//    .env.example is exempt — it is the committed template (.claude/rules/security.md).
 //  - no live credentials pasted into shell commands
 // Exit 2 = block (stderr goes back to Claude as feedback).
 let raw = "";
@@ -28,10 +29,11 @@ process.stdin.on("end", () => {
     process.exit(2);
   }
 
-  if (/\bgit\s+add\b[^\n;|&]*(\.mcp\.json|\.env(\.[A-Za-z0-9.]+)?\b)/.test(cmd)) {
+  if (/\bgit\s+add\b[^\n;|&]*(\.mcp\.json|\.env(?!\.example\b)(\.[A-Za-z0-9.]+)?\b)/.test(cmd)) {
     console.error(
       "Blocked: .mcp.json and .env files are local-dev-only and must never be staged or " +
-        "committed (they hold machine paths and secrets; SAAS_PLAN.md says they never ship)."
+        "committed (they hold machine paths and secrets; they never ship). " +
+        ".env.example is the one exception — it is the committed template."
     );
     process.exit(2);
   }
