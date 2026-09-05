@@ -90,7 +90,7 @@ server-side only and never sent to the browser.
 ### AI analysis (optional)
 
 After any Lighthouse or PageSpeed audit you can ask an AI *why* a category scored low and what to
-change. It runs on **your** AI — LightAudit ships no AI credentials and nothing is preconfigured,
+change. It runs on **your** AI — LightAudit Score ships no AI credentials and nothing is preconfigured,
 so pick a provider and set it up yourself.
 
 **Claude Code (default).** If you already use Claude Code or Claude Max on this machine, there is
@@ -142,9 +142,9 @@ LH_ANALYSIS_API_KEY=your-key-here
 recommendation cites a page it actually read. That needs a research MCP server, and the easiest
 one to add is [CrawlForge](https://www.crawlforge.dev): get a free API key (1,000 credits, no
 card), run `npx crawlforge-setup` once to store it, then switch it on under Settings →
-**Web research**. It is off by default. When on, LightAudit launches a pinned
+**Web research**. It is off by default. When on, LightAudit Score launches a pinned
 `npx -y crawlforge-mcp-server@<version>` on demand — the server reads the key from its own
-setup file, LightAudit never touches it — and keeps the agent to CrawlForge's search and
+setup file, LightAudit Score never touches it — and keeps the agent to CrawlForge's search and
 page-reading tools, so one analysis costs a handful of credits rather than a crawl. To run a
 newer CrawlForge release than the pinned one, set `LH_CRAWLFORGE_VERSION=x.y.z` in `.env`.
 

@@ -34,14 +34,14 @@ engine = `lighthouse` v13 + `chrome-launcher`; `p-queue`; `better-sqlite3` + Dri
 > from `process.env` (normally a gitignored `.env`); Settings panels are read-only status plus
 > guidance, never key-entry forms.
 >
-> **LightAudit ships no third-party application.** AI analysis can optionally use a **research MCP
+> **LightAudit Score ships no third-party application.** AI analysis can optionally use a **research MCP
 > server**, but that server is separate software the user installs and authenticates themselves —
 > never bundled, never installed by us, and its credentials are never stored or displayed by
-> LightAudit. The generic seam stays vendor-neutral: any server declared in an MCP config works.
+> LightAudit Score. The generic seam stays vendor-neutral: any server declared in an MCP config works.
 > **CrawlForge is the ONE named exception** (2026-09-02, at the owner's request — it is their own
 > MCP server): an opt-in switch in Settings → Web research, off by default, that launches a
 > pinned `npx -y crawlforge-mcp-server@<version>` on demand, lets CrawlForge read its own setup
-> file (`~/.crawlforge/config.json` — LightAudit existence-checks it, never opens it, forwards no
+> file (`~/.crawlforge/config.json` — LightAudit Score existence-checks it, never opens it, forwards no
 > key), and strips its credit-heavy tools from the agent (`src/lib/analysis/providers/crawlforge.ts`).
 > Do not add other product names, do not bundle or auto-install CrawlForge, do not turn it on by
 > default, and do not forward a key to it (the Agent SDK puts MCP launch configs on the `claude`

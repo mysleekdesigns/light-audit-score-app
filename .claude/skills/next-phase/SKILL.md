@@ -1,6 +1,6 @@
 ---
 name: next-phase
-description: Build the next unfinished phase of SAAS_PLAN.md (the LightAudit launch plan, phases A–H) using a parallel team of sub-agents, run the full verification gate until everything is green, check off the plan's checklist, then commit and push. Use when asked to "work on the next phase", "build/do the next phase", "advance the plan", or via /next-phase. Accepts an optional phase letter or range (e.g. /next-phase B, /next-phase D-E) and an optional alternate plan file (e.g. /next-phase @PRD.md 3).
+description: Build the next unfinished phase of SAAS_PLAN.md (the LightAudit Score launch plan, phases A–H) using a parallel team of sub-agents, run the full verification gate until everything is green, check off the plan's checklist, then commit and push. Use when asked to "work on the next phase", "build/do the next phase", "advance the plan", or via /next-phase. Accepts an optional phase letter or range (e.g. /next-phase B, /next-phase D-E) and an optional alternate plan file (e.g. /next-phase @PRD.md 3).
 metadata:
   argument-hint: "[phase letter/number and/or plan file — defaults to SAAS_PLAN.md, next unfinished phase]"
   version: "2.0.0"

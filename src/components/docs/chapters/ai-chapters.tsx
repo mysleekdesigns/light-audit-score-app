@@ -254,7 +254,7 @@ LH_ANALYSIS_API_KEY=your-key-here`}
           <Step title="Run the setup command once">
             <Terminal caption="terminal">{`npx crawlforge-setup`}</Terminal>
             It checks the key and stores it in its own configuration file in your home folder.
-            LightAudit only ever checks that the file exists — it never opens it, and never passes
+            LightAudit Score only ever checks that the file exists — it never opens it, and never passes
             the key anywhere.
           </Step>
           <Step title="Turn the switch on">
@@ -289,7 +289,7 @@ LH_ANALYSIS_API_KEY=your-key-here`}
         </List>
         <Callout tone="warn" label="It runs as its own program">
           A research server is separate software you install and authenticate yourself. It runs
-          under your control and spends your credits. LightAudit never stores or forwards its
+          under your control and spends your credits. LightAudit Score never stores or forwards its
           credentials — so prefer servers that read their own configuration rather than expecting a
           key to be handed to them.
         </Callout>

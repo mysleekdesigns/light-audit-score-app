@@ -6,7 +6,7 @@
  * CrawlForge's own setup file exists (the server authenticates itself from it).
  * When active it takes precedence over a server declared in an MCP config;
  * otherwise resolution falls through to that config exactly as before.
- * LightAudit never reads or forwards a key — it existence-checks the setup file
+ * LightAudit Score never reads or forwards a key — it existence-checks the setup file
  * and reports booleans.
  *
  * Every probe is pointed at temp dirs: the preference store (`LH_DATA_DIR`),
@@ -86,7 +86,7 @@ afterEach(() => {
 /** Create CrawlForge's own setup file under the stand-in home dir. */
 function writeSetupFile(): void {
   mkdirSync(path.join(home, ".crawlforge"), { recursive: true });
-  // Contents are irrelevant: LightAudit checks existence only, never reads it.
+  // Contents are irrelevant: LightAudit Score checks existence only, never reads it.
   writeFileSync(path.join(home, ".crawlforge", "config.json"), "{}");
 }
 
@@ -253,7 +253,7 @@ describe("resolveResearchServer precedence", () => {
 });
 
 describe("researchLaunchConfig for CrawlForge", () => {
-  it("never carries a key, even when one is in LightAudit's environment", () => {
+  it("never carries a key, even when one is in LightAudit Score's environment", () => {
     // The SDK puts this config on the `claude` command line; a forwarded key
     // would be readable from the process list for the whole analysis.
     setCrawlforgeEnabled(true);

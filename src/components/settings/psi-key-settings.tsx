@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 /**
  * PageSpeed Insights API-key status.
  *
- * LightAudit runs from your own checkout (`npm start`), so credentials come from
+ * LightAudit Score runs from your own checkout (`npm start`), so credentials come from
  * the environment — normally a gitignored `.env` beside the project. There is no
  * key store inside the app and nothing is written to disk by it, which is why
  * this panel is read-only status plus guidance rather than a form.

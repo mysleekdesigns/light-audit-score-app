@@ -4,7 +4,7 @@
  * CrawlForge switch. Booleans and a source name ONLY.
  *
  * Mirrors `psi-status`. A research server is SEPARATE software the user
- * installs and authenticates themselves; LightAudit only resolves whether one
+ * installs and authenticates themselves; LightAudit Score only resolves whether one
  * is in reach. This endpoint resolves exactly what the analysis engine resolves,
  * so "Ready" here means the research tools will actually be available.
  *

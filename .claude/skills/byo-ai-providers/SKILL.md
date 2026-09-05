@@ -1,13 +1,13 @@
 ---
 name: byo-ai-providers
-description: The BYO-AI provider seam for LightAudit's analysis engine — AnalysisProvider interface over src/lib/analysis/runAnalysis.ts via the Vercel AI SDK, Claude Agent-SDK / Ollama / OpenAI-compatible drivers, capability tiers and honest degradation, app-side web-search tool, structured-output repair, provider badging and settings UX. Use for SAAS_PLAN.md Phase D work or any change under src/lib/analysis/.
+description: The BYO-AI provider seam for LightAudit Score's analysis engine — AnalysisProvider interface over src/lib/analysis/runAnalysis.ts via the Vercel AI SDK, Claude Agent-SDK / Ollama / OpenAI-compatible drivers, capability tiers and honest degradation, app-side web-search tool, structured-output repair, provider badging and settings UX. Use for SAAS_PLAN.md Phase D work or any change under src/lib/analysis/.
 ---
 
-# BYO AI providers for LightAudit
+# BYO AI providers for LightAudit Score
 
 Authoritative plan: `SAAS_PLAN.md` §4 ("BYO AI") + Phase D. Goal: analysis runs on the
-**user's** AI — Claude plan, any provider key, or local Ollama — with **zero LightAudit-owned
-AI credentials** shipped in or reachable from the app.
+**user's** AI — Claude plan, any provider key, or local Ollama — with **zero AI credentials owned by
+LightAudit Score** shipped in or reachable from the app.
 
 ## The frozen contract
 
@@ -67,5 +67,5 @@ repair/retry pass for weaker models → degrade to prose-only. Never crash the s
 
 End-to-end analysis on all four paths — (a) Claude login, (b) pasted Anthropic key, (c) local
 Ollama model, (d) OpenAI-compatible endpoint; cited fixes on tool-capable paths; badged
-LHR-only fallback on a small local model; PSI on a user-created key; zero LightAudit-owned
-credentials anywhere.
+LHR-only fallback on a small local model; PSI on a user-created key; zero credentials owned by
+LightAudit Score anywhere.

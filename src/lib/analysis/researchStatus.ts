@@ -19,7 +19,7 @@ export interface CrawlforgeStatus {
   enabled: boolean;
   /**
    * CrawlForge's own setup file exists (`npx crawlforge-setup` has been run).
-   * That file is where the server reads its key from; LightAudit only checks
+   * That file is where the server reads its key from; LightAudit Score only checks
    * that it is there.
    */
   setupOnDisk: boolean;

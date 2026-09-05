@@ -5,7 +5,7 @@
  * Ollama detection.
  *
  * AI analysis runs on YOUR AI — a Claude Code / Max login, a provider key you
- * own, or a model running locally under Ollama. LightAudit ships no AI
+ * own, or a model running locally under Ollama. LightAudit Score ships no AI
  * credential of its own, so like the PageSpeed panel this is read-only status
  * plus guidance for everything credential-shaped: keys and endpoints live in
  * the environment (a gitignored `.env`) and are never accepted, stored, or
@@ -237,7 +237,7 @@ export function AiProviderSettings() {
           Score analysis runs on <em className="not-italic text-foreground">your</em>{" "}
           AI, never ours: the Claude you are already signed in to, a model running
           locally under Ollama, or any OpenAI-compatible endpoint you have a key
-          for. LightAudit ships no AI credentials, so nothing is billed to us and
+          for. LightAudit Score ships no AI credentials, so nothing is billed to us and
           nothing leaves your machine unless the provider you chose is remote.
         </p>
 

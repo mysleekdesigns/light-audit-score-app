@@ -25,7 +25,7 @@ export type AnalysisCategory = LighthouseCategory;
  * AI backends the analysis can run on. All three are the USER's own: `claude`
  * uses their Claude Code/Max login or their `ANTHROPIC_API_KEY`; `ollama` talks
  * to a model they installed locally; `openai-compatible` is any base URL + key +
- * model they supply. LightAudit ships no AI credential of its own.
+ * model they supply. LightAudit Score ships no AI credential of its own.
  *
  * Additive: new ids may be appended, and readers must tolerate an unknown one
  * (see `parseProviderModel`).

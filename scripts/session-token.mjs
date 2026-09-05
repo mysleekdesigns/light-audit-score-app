@@ -80,7 +80,7 @@ export function resolveSessionToken({ env, dotEnv, dataDir }) {
     if (explicit.length < MIN_PINNED_LENGTH || /\s/.test(explicit)) {
       throw new Error(
         `LH_SESSION_TOKEN must be at least ${MIN_PINNED_LENGTH} characters with no whitespace ` +
-          `(got ${explicit.length}). Unset it to let LightAudit generate one.`,
+          `(got ${explicit.length}). Unset it to let LightAudit Score generate one.`,
       );
     }
     return { token: explicit, source: "env" };

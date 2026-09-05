@@ -7,7 +7,7 @@
  *      When the user has enabled it in Settings AND a key is detectable, the
  *      agent launches `npx -y crawlforge-mcp-server`. Off by default.
  *   2. **A user-declared server** in a standard MCP config — the vendor-neutral
- *      path. LightAudit reads the config and launches whatever it declares.
+ *      path. LightAudit Score reads the config and launches whatever it declares.
  *
  * Either way the server is SEPARATE software running under the user's control,
  * authenticated with the user's own account. This module never sources a

@@ -3,7 +3,7 @@
  * research MCP server it drives for web-grounded fixes.
  *
  * The contract under test is that the research server is a SEPARATE application
- * the user installs and configures: LightAudit reads a standard MCP config,
+ * the user installs and configures: LightAudit Score reads a standard MCP config,
  * launches what it declares, and never sources a credential of its own. When
  * nothing is configured, resolution returns null and the analysis degrades to a
  * data-only diagnosis rather than failing.

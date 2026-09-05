@@ -109,7 +109,7 @@ function forbiddenHost(): NextResponse {
   return refuse(
     403,
     "Forbidden",
-    "Unexpected Host header. LightAudit only answers to loopback hostnames; set LH_ALLOWED_HOSTS to allow others.",
+    "Unexpected Host header. LightAudit Score only answers to loopback hostnames; set LH_ALLOWED_HOSTS to allow others.",
   );
 }
 
@@ -118,7 +118,7 @@ function forbiddenOrigin(): NextResponse {
   return refuse(
     403,
     "Forbidden",
-    "Cross-origin request refused. LightAudit only accepts changes from its own pages.",
+    "Cross-origin request refused. LightAudit Score only accepts changes from its own pages.",
   );
 }
 

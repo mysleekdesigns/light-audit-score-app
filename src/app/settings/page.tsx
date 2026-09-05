@@ -16,7 +16,7 @@ export default function SettingsPage() {
       <PageHeader
         kicker="06 — Settings"
         title="Settings"
-        description="Credentials and integrations for the audit engines. LightAudit reads these from your environment — normally a gitignored .env file in the project root."
+        description="Credentials and integrations for the audit engines. LightAudit Score reads these from your environment — normally a gitignored .env file in the project root."
       />
       <PsiKeySettings />
       <AiProviderSettings />

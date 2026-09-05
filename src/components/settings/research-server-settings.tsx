@@ -13,7 +13,7 @@
  *   - **A custom server** — anything declared in a standard MCP config.
  *
  * Either way the server is a separate application: the user installs and
- * authenticates it, it runs under their control, and LightAudit never stores,
+ * authenticates it, it runs under their control, and LightAudit Score never stores,
  * forwards, or displays its credentials. The only credential-shaped thing here
  * is a boolean — "CrawlForge's setup file exists" — never a value.
  */
@@ -324,7 +324,7 @@ function CrawlforgeCard({
 
       <p className="text-xs leading-relaxed text-muted-foreground">
         Runs as its own process on your machine and spends credits from your
-        CrawlForge account. LightAudit never reads, stores, or forwards the key
+        CrawlForge account. LightAudit Score never reads, stores, or forwards the key
         — it only checks that the setup file exists — and keeps the analysis
         agent to CrawlForge&apos;s search and page-reading tools, so one
         analysis costs a handful of credits rather than a crawl. When on, it
@@ -407,11 +407,11 @@ function CustomServerNote({ status }: { status: ResearchStatus | null }) {
         </span>
         <span>
           Declare one under <Code>mcpServers.research</Code> in an MCP config
-          file. LightAudit reads <span className="font-mono text-foreground">.mcp.json</span>{" "}
+          file. LightAudit Score reads <span className="font-mono text-foreground">.mcp.json</span>{" "}
           from its working directory by default; set <Code>LH_RESEARCH_MCP_CONFIG</Code> to
           point somewhere else, or <Code>LH_RESEARCH_MCP_SERVER</Code> to choose a
           differently-named server. It runs as its own application under your
-          control — LightAudit never stores or forwards its credentials.
+          control — LightAudit Score never stores or forwards its credentials.
         </span>
       </div>
     </div>

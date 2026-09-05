@@ -11,12 +11,12 @@
  * The boundaries that keep this honest:
  *   - **Opt-in, off by default.** Nothing runs, downloads, or is advertised as
  *     "on" until the user flips the switch. `npx` fetches the (pinned) package
- *     on first use — LightAudit bundles nothing.
+ *     on first use — LightAudit Score bundles nothing.
  *   - **The user's own account.** CrawlForge meters every tool against an API
  *     key the user gets themselves (free tier at signup) and stores with
  *     CrawlForge's own wizard, `npx crawlforge-setup`, in
  *     `~/.crawlforge/config.json`. The server reads that file itself.
- *   - **No credential handling at all.** LightAudit forwards NOTHING to the
+ *   - **No credential handling at all.** LightAudit Score forwards NOTHING to the
  *     server: the only credential-shaped fact it knows is whether the setup
  *     file exists (`existsSync`, never opened), reported as a boolean. That is
  *     deliberate — the Agent SDK passes MCP launch configs on the `claude`

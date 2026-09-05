@@ -13,9 +13,9 @@
 - Settings pages are **read-only status plus guidance** — they never accept, write, or echo a key,
   and status endpoints report presence as a boolean only. Non-secret preferences (the CrawlForge
   research switch) may be written to the `app_settings` table; nothing credential-shaped may.
-- Only LightAudit's OWN credentials belong in `.env`. A third-party tool the app merely talks to
+- Only LightAudit Score's OWN credentials belong in `.env`. A third-party tool the app merely talks to
   (e.g. a research MCP server) owns its credentials — never read, store, or forward them.
-  CrawlForge reads its own `~/.crawlforge/config.json`, which LightAudit existence-checks and
+  CrawlForge reads its own `~/.crawlforge/config.json`, which LightAudit Score existence-checks and
   never opens; its declaration carries no env secret. For a custom MCP config,
   `researchLaunchConfig` overlays only the `env` block the USER declared, at launch — and the
   Agent SDK passes that config on the `claude` command line, so never author a declaration that

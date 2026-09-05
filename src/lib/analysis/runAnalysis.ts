@@ -10,7 +10,7 @@
  * change to the hook or the analysis panels.
  *
  * Auth is ALWAYS the user's own — their Claude login, their provider key from
- * `process.env`, or a local Ollama needing none. LightAudit ships no AI
+ * `process.env`, or a local Ollama needing none. LightAudit Score ships no AI
  * credential.
  *
  * The function streams progress to the caller via `onEvent` (status / tool-use /
