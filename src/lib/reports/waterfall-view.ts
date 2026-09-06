@@ -263,11 +263,19 @@ export function formatRowNumber(index: number, count: number): string {
 }
 
 /**
+ * Longest label put into the DOM for one row. Far more than a 672px cell can
+ * show — the clamp is a ceiling on what reaches the document, not a design
+ * choice about where to truncate, which CSS still does.
+ */
+export const MAX_LABEL = 240;
+
+/**
  * Cut over-long text to `max` characters with an ellipsis.
  *
  * Needed because a `data:` URL is a legitimate waterfall row and can be
- * megabytes of base64. CSS `truncate` handles the visible cell, but a `title`
- * attribute has no such limit and would hand the browser the whole blob.
+ * megabytes of base64. CSS `truncate` handles the visible cell, but neither a
+ * `title` attribute nor a text node has any such limit, and both would
+ * otherwise hand the browser the whole blob.
  */
 export function clampText(text: string, max: number): string {
   if (max <= 0) return "";
@@ -310,9 +318,13 @@ export function requestLabel(
   request: Pick<WaterfallRequest, "url" | "path" | "host">,
   finalHost: string,
 ): RequestLabel {
-  const path = request.path || request.url;
+  // Clamped for the same reason the hover title is, and it was an oversight
+  // that only the title was: CSS `truncate` hides an over-long label, it does
+  // not shorten it, so the whole string still lands in a DOM text node. A
+  // megabyte-scale `data:` URL would put a megabyte there, per row.
+  const path = clampText(request.path || request.url, MAX_LABEL);
   if (request.host && finalHost && request.host !== finalHost) {
-    return { text: `${request.host}${path}`, crossHost: true };
+    return { text: clampText(`${request.host}${path}`, MAX_LABEL), crossHost: true };
   }
   return { text: path, crossHost: false };
 }

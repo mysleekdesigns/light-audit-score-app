@@ -179,4 +179,15 @@ describe("GET /api/reports/:runId", () => {
     const html = await res.text();
     expect(html).toContain("<h1>report</h1>");
   });
+
+  it("reflects no request data into its 404 bodies", () => {
+    // Aligned with the trace route after Phase D's security review flagged this
+    // one as the odd surface out (`.claude/rules/security.md`: request data must
+    // not be echoed back).
+    const runId = "echo-me-4b21";
+    return callGet(runId).then(async (res) => {
+      expect(res.status).toBe(404);
+      expect(await res.text()).not.toContain(runId);
+    });
+  });
 });

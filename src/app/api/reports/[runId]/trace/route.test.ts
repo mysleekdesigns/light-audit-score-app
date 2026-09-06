@@ -479,6 +479,19 @@ describe("GET /api/reports/:runId/trace", () => {
       expect(await res.text().catch(() => "")).not.toContain("run-huge");
     });
 
+    it("marks the response no-store, cache hit and miss alike", async () => {
+      // The payload embeds screenshots of the audited page, which ROADMAP Phase
+      // B made possible to be a logged-in or staging one.
+      await seedRun("run-nostore", makeLhr("https://trace.test/"));
+
+      const miss = await callGet("run-nostore");
+      expect(miss.headers.get("cache-control")).toBe("no-store");
+      expect(miss.headers.get("x-content-type-options")).toBe("nosniff");
+
+      const hit = await callGet("run-nostore");
+      expect(hit.headers.get("cache-control")).toBe("no-store");
+    });
+
     it("echoes the stored run id, not the caller's string", async () => {
       await seedRun("run-echo", makeLhr("https://trace.test/"));
       const body = (await (await callGet("run-echo")).json()) as RunTrace;

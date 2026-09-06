@@ -83,7 +83,7 @@ export async function GET(
     if (!result) {
       return notFound(
         "report_not_found",
-        `No completed report found for run "${runId}".`,
+        "No completed report found for that run.",
       );
     }
 
@@ -132,7 +132,7 @@ export async function GET(
   if (!result) {
     return notFound(
       "report_not_found",
-      `No completed report found for run "${runId}".`,
+      "No completed report found for that run.",
     );
   }
 

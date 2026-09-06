@@ -9,8 +9,8 @@
 > read lazily from the report already on disk — data every audit has always captured and
 > Lighthouse's own report never shows. Phases E–H are unbuilt. **E is next in dependency order**
 > and is now unblocked, since it reuses D's stored-report readers; **F is independent of it.**
-> D's `security-reviewer` pass came back clean (no Critical/High/Medium); its four Lows were fixed
-> before the phase closed.
+> D's `security-reviewer` pass came back clean (no Critical, no High) across two independent
+> reviewers; every finding either raised was fixed before the phase closed.
 > This file is a **plan**, not a record — it was drafted from a competitor survey of the
 > free/local Lighthouse tooling space (Unlighthouse, Lighthouse CI, sitespeed.io,
 > Lighthouse Parade) and the commercial monitoring tier (DebugBear, Foo.software,
@@ -596,14 +596,25 @@ five categories — `perf 85 · a11y 90 · bp 100 · seo 92 · agentic 46`.
   capture one") rather than merely that. No throw, no console error. The fixture was removed from
   the archive afterwards.
 
-Suite: lint · typecheck · build · **1194 tests**, all green (1039 → 1194).
+Suite: lint · typecheck · build · **1199 tests**, all green (1039 → 1199).
 
 *Security review (read-only `security-reviewer`, required by `.claude/rules/security.md` because
-the phase adds a route to the local HTTP server): **pass — no Critical, no High, no Medium.** All
-four Lows were fixed here rather than deferred.* (Its report arrived only after a long delivery
-delay, during which the checks listed further below were performed independently; the reviewer
-also revised its own initial Medium down to Low on seeing the linearity data, noting the browser's
-~6-connection-per-origin cap bounds the blind-fetch vector.)
+the phase adds a route to the local HTTP server): **pass — no Critical, no High.** Two reviewers
+ran independently; every finding either reviewer raised was fixed here rather than deferred.*
+(Both reports arrived only after a long delivery delay, during which the checks listed further
+below were performed independently.)
+
+**Where the two reviewers disagreed, the question was settled by experiment rather than argument.**
+Reviewer 1 held that the route is reachable, with the session cookie attached, from a page served
+on another loopback port — cookies ignore ports, and `SameSite=Strict` is scoped to the *site*, of
+which a port is not part. Reviewer 2 held the opposite: that `sameSite: "strict"` means "a
+cross-site page cannot reach this route at all". This is the difference between "a hostile local
+page can make this server work" and "only the user can", so it was tested: a page served on
+`127.0.0.1:3412` issuing a `no-cors`, `credentials: "include"` fetch at the app on
+`127.0.0.1:3411` was answered **200**, cookie attached (observed at the network layer, since CORS
+hides the reply from the page but not the request from the server). **Reviewer 1 is right**, and
+the hardening below is aimed at a genuinely reachable surface. Reviewer 2's own severity call
+rested on the opposite belief, so its M1 is treated as live, not discounted.
 
 - **L1 — the route re-read and re-parsed a ~690 KB report on every request, uncached and
   unbounded.** The parse is synchronous, so it occupies the event loop, and the route is reachable
@@ -639,9 +650,34 @@ also revised its own initial Medium down to Low on seeing the linearity data, no
   across the 224 stored reports already use, so the SVG-in-`img` semantics stop needing to be
   reasoned about.
 
-The reviewer also confirmed, against the installed Lighthouse rather than by assumption, that the
+The second reviewer added three items of its own, all fixed:
+
+- **Peak memory, not file size, is what needed bounding.** It corrected a belief I had stated: the
+  sibling `GET /api/reports/:runId` does *not* stream either — it also reads the whole file — but it
+  holds **one** copy and hands the string straight back, whereas this route holds the string, the
+  parsed object graph (several times the text, for an LHR's many small objects), the projected
+  arrays and the serialized response, all at once. So the ceiling was re-derived against that ~5–10×
+  multiplier and lowered **32 MB → 8 MB**, still over 5× the largest report here.
+- **The row label was unclamped where the hover title was clamped.** `clampText(url, 240)` guarded
+  the `title`, but the visible label went into the DOM in full — and CSS `truncate` hides an
+  over-long string without shortening it, so a megabyte-scale `data:` URL would put a megabyte in a
+  text node, per row. Now clamped through the same `MAX_LABEL`, with tests.
+- **`Cache-Control: no-store` is now explicit** on the trace response (both reviewers raised it). A
+  trace embeds screenshots of the audited page, which Phase B made able to be a logged-in or
+  staging one, so it should not be inherited from whatever a `force-dynamic` handler happens to
+  emit.
+
+**One fix outside Phase D's scope, flagged independently by both reviewers and taken anyway:** the
+*sibling* `GET /api/reports/:runId` interpolated the caller's run id into its two 404 bodies, which
+is the one place the project's no-reflection rule was not held. Two lines, no test depended on the
+wording, and leaving a known reflection in place next to a route that documents the opposite would
+have been the worse call.
+
+Both reviewers confirmed, against the installed Lighthouse rather than by assumption, that the
 filmstrip is capped at 8 frames and `data:` URLs are elided to ~100 chars — so the 234 KB payload
-is not attacker-inflatable.
+is not attacker-inflatable — and that the new modules apply no regex to report data, so there is no
+ReDoS surface. Reviewer 2 additionally noted `splitUrl` and `isThirdParty` each construct a `URL`
+per row: a constant factor, not a complexity problem, and left as is.
 
 The checks below were performed directly while the report was outstanding, and stand as
 independent corroboration:

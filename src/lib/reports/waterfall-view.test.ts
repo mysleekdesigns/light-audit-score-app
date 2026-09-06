@@ -12,6 +12,7 @@ import {
   formatDuration,
   formatRowNumber,
   hostOf,
+  MAX_LABEL,
   MIN_BAR_PCT,
   nextSort,
   requestLabel,
@@ -427,5 +428,33 @@ describe("summarizeWaterfall", () => {
       transferLabel: "0 B",
       timelineLabel: ABSENT,
     });
+  });
+});
+
+describe("requestLabel clamping (security review, r2 L3)", () => {
+  it("clamps a megabyte-scale label so it cannot reach the DOM in full", () => {
+    // CSS `truncate` hides an over-long label; it does not shorten it, so the
+    // whole string would otherwise land in a text node — once per row.
+    const huge = `data:image/png;base64,${"A".repeat(2_000_000)}`;
+    const label = requestLabel({ url: huge, path: huge, host: "" }, "example.com");
+    expect(label.text.length).toBeLessThanOrEqual(MAX_LABEL + 1);
+  });
+
+  it("clamps the cross-host form too, where the host is prepended", () => {
+    const huge = `/${"b".repeat(5000)}`;
+    const label = requestLabel(
+      { url: `https://cdn.other.test${huge}`, path: huge, host: "cdn.other.test" },
+      "example.com",
+    );
+    expect(label.crossHost).toBe(true);
+    expect(label.text.length).toBeLessThanOrEqual(MAX_LABEL + 1);
+  });
+
+  it("leaves an ordinary label untouched", () => {
+    const label = requestLabel(
+      { url: "https://example.com/app.js", path: "/app.js", host: "example.com" },
+      "example.com",
+    );
+    expect(label.text).toBe("/app.js");
   });
 });

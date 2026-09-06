@@ -58,12 +58,18 @@ async function readPersistedFile(path: string): Promise<string | null> {
 }
 
 /**
- * Refuse to read a report far larger than one can legitimately be. Observed max
- * in this repo is 1.5 MB, so 32 MB is not a limit anyone meets by accident — it
- * exists so a corrupt or hostile file on disk cannot be pulled into memory in
- * full before anything gets to reject it.
+ * Refuse to read a report far larger than one can legitimately be.
+ *
+ * The ceiling is set against PEAK MEMORY, not file size, because this route
+ * holds far more than the file: the UTF-8 string, the parsed object graph (an
+ * LHR is a great many small objects and strings, so several times the text),
+ * the projected arrays, and the serialized response — all live at once. The
+ * sibling `GET /api/reports/:runId` holds one copy and hands the string
+ * straight back, so this is a genuinely new exposure rather than an inherited
+ * one. 8 MB is over 5× the largest report observed here (1.5 MB) and still
+ * bounds the whole chain to something a local server can absorb.
  */
-const MAX_REPORT_BYTES = 32 * 1024 * 1024;
+const MAX_REPORT_BYTES = 8 * 1024 * 1024;
 
 /** Whether the file at `path` is small enough to read. Missing file → let the read fall through. */
 async function withinSizeLimit(path: string): Promise<boolean> {
@@ -72,6 +78,24 @@ async function withinSizeLimit(path: string): Promise<boolean> {
   } catch {
     return true;
   }
+}
+
+/**
+ * A trace embeds the filmstrip — actual screenshots of the audited page, which
+ * may be a logged-in or staging one (ROADMAP Phase B made authenticated audits
+ * a first-class case). That should not sit in a disk cache or an intermediary,
+ * so the header is explicit rather than inherited from whatever a
+ * `force-dynamic` route handler happens to emit.
+ */
+const TRACE_HEADERS = {
+  "Content-Type": "application/json",
+  "Cache-Control": "no-store",
+  "X-Content-Type-Options": "nosniff",
+} as const;
+
+/** A `RunTrace` as a JSON 200 with the headers above. */
+function traceResponse(trace: RunTrace): Response {
+  return new Response(JSON.stringify(trace), { status: 200, headers: TRACE_HEADERS });
 }
 
 /**
@@ -84,8 +108,12 @@ async function withinSizeLimit(path: string): Promise<boolean> {
  * cookies ignore ports and `SameSite=Strict` is scoped to the site rather than
  * the port, so a page on ANOTHER loopback port can fire credentialed GETs at
  * this route. CORS stops it reading the response; it does not stop it causing
- * the work. Sixteen entries is comfortably more than a session opens and bounds
- * the memory at a few MB of projections.
+ * the work. Confirmed by experiment, not inferred: a page served on
+ * 127.0.0.1:3412 issuing a `no-cors`, `credentials: "include"` fetch at the app
+ * on 127.0.0.1:3411 was answered 200, cookie attached.
+ *
+ * Sixteen entries is comfortably more than a session opens, and bounds the
+ * memory at a few MB of projections.
  */
 const TRACE_CACHE_LIMIT = 16;
 const traceCache = new Map<string, RunTrace>();
@@ -136,7 +164,7 @@ export async function GET(
   }
 
   const cached = cacheGet(runId);
-  if (cached !== undefined) return Response.json(cached, { status: 200 });
+  if (cached !== undefined) return traceResponse(cached);
 
   let lhr: LighthouseResult | null = null;
 
@@ -185,7 +213,7 @@ export async function GET(
     // of the success body as well, not just the error bodies.
     const trace = extractRunTrace(lhr, persisted?.id ?? runId);
     cacheSet(runId, trace);
-    return Response.json(trace, { status: 200 });
+    return traceResponse(trace);
   } catch {
     return serverError(
       "trace_extraction_failed",
