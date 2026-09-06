@@ -21,6 +21,12 @@
  *  - **Defensive snapshots.** `getBatch`/events return shallow clones of the
  *    batch and its jobs so external callers can't mutate internal state. The
  *    lite views never contain the lhr, so a shallow clone is sufficient.
+ *  - **Credentials off the batch.** A batch is serialised straight to the
+ *    browser by `POST /api/audits`, `GET /api/audits/:id` and the SSE
+ *    `batch-snapshot`, so audit credentials (ROADMAP Phase B) never go on it:
+ *    `createBatch` lifts them into a per-batch side map, pins the *redacted*
+ *    options on the batch, and `runJob` re-attaches the real values only on the
+ *    way into the forked worker. See {@link AuditQueue.batchCredentials}.
  *  - **HMR-safe singleton.** {@link getAuditQueue} pins the instance to
  *    `globalThis` so Next.js dev-mode hot reloads don't spawn duplicate queues
  *    (and orphan in-flight audits). Tests construct `new AuditQueue()` directly
@@ -38,6 +44,13 @@ import {
   recordRun,
   updateBatchStatus,
 } from "@/lib/db/persistence";
+import {
+  extractAuditCredentials,
+  redactAuditOptions,
+  stripAuditCredentials,
+  withAuditCredentials,
+  type AuditCredentials,
+} from "@/lib/lighthouse/credentials";
 import { resolveFormFactors } from "@/lib/lighthouse/options";
 import type { AuditResult } from "@/lib/lighthouse/types";
 import { runPsiAudit } from "@/lib/pagespeed/runPsiAudit";
@@ -146,6 +159,23 @@ export class AuditQueue implements AuditQueueApi {
    */
   private readonly batchControllers = new Map<string, AbortController>();
 
+  /**
+   * Per-batch audit credentials (ROADMAP Phase B), held deliberately OUT of the
+   * {@link Batch} object.
+   *
+   * `POST /api/audits`, `GET /api/audits/:id` and the SSE `batch-snapshot` all
+   * serialise a batch straight to the browser, so anything sitting on
+   * `batch.options` is client-visible by construction. Credentials belong to the
+   * site under audit — they are not LightAudit Score's own secrets — and must
+   * never reach the client, SQLite, a log line or a report file
+   * (`.claude/rules/security.md`). So `createBatch` lifts them off the incoming
+   * options into this side map (same shape as `results` / `batchControllers`)
+   * and `runJob` re-attaches them only on the way into the forked worker. The
+   * entry is deleted as soon as the batch settles or is cancelled, so a
+   * credential lives exactly as long as the batch that needed it.
+   */
+  private readonly batchCredentials = new Map<string, AuditCredentials>();
+
   constructor(concurrency: number = clampConcurrency(Number.NaN)) {
     // EventEmitter defaults to a 10-listener warning; a batch may legitimately
     // have more SSE subscribers, so lift the cap.
@@ -181,6 +211,11 @@ export class AuditQueue implements AuditQueueApi {
     const createdAt = now();
     const batchId = nanoid();
 
+    // Lift any credentials off the incoming options BEFORE they are pinned onto
+    // the batch — the batch is a client-facing object (see `batchCredentials`).
+    // `undefined` when the caller sent none, which is the overwhelming case.
+    const credentials = extractAuditCredentials(input.options);
+
     // Fan a `"both"` device selection out into per-(url, form-factor) jobs (PRD
     // §6 Phase 12). `"both"` is purely a batch-creation concern — the engine and
     // worker stay single-form-factor and never see it. Each URL yields one job
@@ -214,7 +249,15 @@ export class AuditQueue implements AuditQueueApi {
       // (the first resolved form factor) so single-device reads of
       // `batch.options.formFactor` keep working and it's never `"both"`. Each
       // job overrides this with its own `device` when the engine runs.
-      options: { ...input.options, formFactor: formFactors[0] },
+      //
+      // Redacted, not stripped: the header/cookie NAMES survive as provenance —
+      // so a run can honestly show WHICH credential it used — while the values
+      // are replaced by `[redacted]`. `credentials` above now holds the only
+      // copy of those values, for the life of this batch.
+      options: redactAuditOptions({
+        ...input.options,
+        formFactor: formFactors[0],
+      }),
       concurrency,
       // Re-run lineage (PRD §6 Phase 13): null/undefined for fresh batches.
       priorBatchId: input.priorBatchId,
@@ -229,6 +272,9 @@ export class AuditQueue implements AuditQueueApi {
     this.batches.set(batchId, batch);
     // One AbortController per batch; `cancelBatch` aborts it to kill running workers.
     this.batchControllers.set(batchId, new AbortController());
+    // Only batches that actually carry credentials get an entry, so the map is
+    // empty for every ordinary audit.
+    if (credentials) this.batchCredentials.set(batchId, credentials);
 
     // Index the freshly-created batch (pure side effect; never throws).
     recordBatch(batch);
@@ -300,6 +346,11 @@ export class AuditQueue implements AuditQueueApi {
 
     // SIGKILL any running worker children for this batch.
     this.batchControllers.get(id)?.abort();
+    // The batch is terminal, so no further job will ask for its credentials:
+    // drop them here (as `maybeFinalizeBatch` does on the completion path) so
+    // they live exactly as long as the batch rather than for the lifetime of
+    // the process.
+    this.batchCredentials.delete(id);
 
     // Mirror the terminal status to the persistence index.
     updateBatchStatus(id, { status: "cancelled", finishedAt });
@@ -380,10 +431,36 @@ export class AuditQueue implements AuditQueueApi {
       // Dispatch on the batch engine (PSI feature): PSI is an in-process HTTPS
       // call to Google (cancellable via the same AbortSignal); the local engine
       // forks an isolated Chrome worker. Both resolve to an AuditResult.
-      const result =
+      //
+      // Credentials (ROADMAP Phase B) are re-attached HERE and only here. The
+      // local engine forks Chrome on this machine, so it can reach a staging or
+      // logged-in page; PSI runs on Google's servers, which cannot — and must
+      // never be handed someone's session. `audits-schema` rejects that
+      // combination with a 400 up front; stripping on this branch is the
+      // defensive second layer (it also drops the redacted placeholders, so PSI
+      // never sees so much as a credential's name).
+      const engineResult =
         batch.source === "psi"
-          ? await runPsiAudit(job.url, jobOptions, signal)
-          : await runAuditInWorker(job.url, jobOptions, signal);
+          ? await runPsiAudit(job.url, stripAuditCredentials(jobOptions), signal)
+          : await runAuditInWorker(
+              job.url,
+              withAuditCredentials(
+                jobOptions,
+                this.batchCredentials.get(batchId),
+              ),
+              signal,
+            );
+      // The engine echoes the options it ran with back onto its result
+      // (`median.ts`), so the credentials just handed to the worker return on
+      // `result.options` — and from there would reach the stored result, the
+      // lite view every SSE payload carries, and the persisted `runs.options`.
+      // Redact once, here, and every downstream consumer is safe by
+      // construction. Idempotent, so it costs nothing when the worker already
+      // scrubbed, and cheap: a top-level spread leaves the ~1 MB lhr untouched.
+      const result: AuditResult = {
+        ...engineResult,
+        options: redactAuditOptions(engineResult.options),
+      };
       // A cancel that landed after the worker finished but before we recorded:
       // drop the result and mark the job cancelled (cancelBatch set it already,
       // but a late-completing worker would otherwise overwrite that here).
@@ -464,6 +541,10 @@ export class AuditQueue implements AuditQueueApi {
     const hasError = batch.jobs.some((j) => j.status === "error");
     batch.status = hasError ? "completed_with_errors" : "completed";
     batch.finishedAt = now();
+    // Every job has settled, so nothing will ask for this batch's credentials
+    // again — drop them (as `cancelBatch` does on the cancel path) so they live
+    // exactly as long as the batch rather than for the lifetime of the process.
+    this.batchCredentials.delete(batch.id);
     // Persist the terminal status / finishedAt for the History view.
     updateBatchStatus(batch.id, {
       status: batch.status,

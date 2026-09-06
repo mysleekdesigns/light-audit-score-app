@@ -21,6 +21,13 @@
  *    null without affecting the JSON path or the row.
  *  - **Sync where it can be.** `better-sqlite3` is synchronous, so DB writes/reads
  *    are sync; only file IO + the HTML generator make `recordRun` async.
+ *  - **Nothing credential-shaped is written down.** Audit credentials (ROADMAP
+ *    Phase B) belong to the site under audit, not to LightAudit Score, so every
+ *    write here passes its options through `redactAuditOptions` — names kept as
+ *    provenance, values replaced — and `recordRun` scrubs the LHR before the
+ *    report file is written. Both are idempotent backstops behind the queue's
+ *    structural guarantee (credentials never reach a `Batch` at all); this layer
+ *    is what makes a *future* caller unable to persist one by accident.
  */
 
 import { promises as fs } from "node:fs";
@@ -37,6 +44,10 @@ import {
   reportJsonPath,
 } from "@/lib/db/paths";
 import { batches, runs, type BatchRow, type RunRow } from "@/lib/db/schema";
+import {
+  redactAuditOptions,
+  scrubLhrCredentials,
+} from "@/lib/lighthouse/credentials";
 import type {
   AuditOptions,
   AuditResult,
@@ -165,7 +176,7 @@ export function recordBatch(batch: Batch): void {
         id: batch.id,
         status: batch.status,
         source: batch.source,
-        options: JSON.stringify(batch.options),
+        options: JSON.stringify(redactAuditOptions(batch.options)),
         concurrency: batch.concurrency,
         total: batch.jobs.length,
         priorBatchId: batch.priorBatchId ?? null,
@@ -214,6 +225,14 @@ export async function recordRun(
   try {
     await fs.mkdir(getReportsDir(), { recursive: true });
 
+    // Belt-and-braces credential scrub (ROADMAP Phase B). Lighthouse copies its
+    // resolved settings into the report verbatim, so an authenticated run's
+    // `Authorization`/`Cookie` header would otherwise be written into the JSON
+    // report, embedded in the HTML one, and read back by the AI analysis. The
+    // worker already scrubs before the LHR crosses the process boundary; this is
+    // the last gate before the value would land on disk, and it is idempotent.
+    scrubLhrCredentials(result.median.lhr);
+
     // Raw LHR JSON — exactly what `GET /api/reports/:runId` (default) serves.
     await fs.writeFile(
       reportJsonPath(job.id),
@@ -255,7 +274,11 @@ export async function recordRun(
         // value to null (never 0), so a run that didn't select Agentic Browsing
         // persists as unscored rather than as a zero score.
         scoreAgenticBrowsing: toScoreInt(scores["agentic-browsing"]),
-        options: JSON.stringify(result.options),
+        // Redacted at the boundary (ROADMAP Phase B): the engine echoes back the
+        // options it ran with, so an authenticated run's header/cookie values
+        // would land in this column. Names survive as provenance; the queue
+        // already redacts, and `redactAuditOptions` is idempotent.
+        options: JSON.stringify(redactAuditOptions(result.options)),
         metrics: JSON.stringify(result.median.metrics),
         field: result.field ? JSON.stringify(result.field) : null,
         benchmarkIndex: result.environment.benchmarkIndex,
@@ -301,7 +324,9 @@ export function recordFailedRun(batch: Batch, job: AuditJob): void {
         scoreBestPractices: null,
         scoreSeo: null,
         scoreAgenticBrowsing: null,
-        options: JSON.stringify(batch.options),
+        // Redacted like the success path — a failed run records which
+        // credential it tried, never the value (ROADMAP Phase B).
+        options: JSON.stringify(redactAuditOptions(batch.options)),
         metrics: null,
         field: null,
         benchmarkIndex: null,

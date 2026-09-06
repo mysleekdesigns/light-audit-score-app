@@ -142,3 +142,57 @@ describe("fetchRobots — best-effort", () => {
     expect(requested).toBe("https://example.com/robots.txt");
   });
 });
+
+describe("fetchRobots — credentials (ROADMAP Phase B)", () => {
+  /** Type the stub so `mock.calls` carries the init we assert on. */
+  function stubFetch(body: string, status = 200) {
+    const fetchMock = vi.fn<
+      (input: string, init?: RequestInit) => Promise<Response>
+    >(async () => new Response(body, { status }));
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("sends the credential the resolver allows for robots.txt", async () => {
+    const fetchMock = stubFetch("User-agent: *\nDisallow: /no");
+    const m = await fetchRobots("https://example.com", () => ({
+      Authorization: "Basic dGVzdA==",
+    }));
+    // A staging host commonly puts robots.txt behind the same auth as the rest
+    // of the site — reading it is what keeps the crawl polite.
+    expect(fetchMock.mock.calls[0][1]?.headers).toEqual({
+      "user-agent": ROBOTS_USER_AGENT,
+      Authorization: "Basic dGVzdA==",
+    });
+    expect(m.isAllowed("/no/x")).toBe(false);
+  });
+
+  it("never lets a credential replace the crawler's user-agent", async () => {
+    const fetchMock = stubFetch("");
+    await fetchRobots("https://example.com", () => ({
+      "User-Agent": "Impostor/1.0",
+    }));
+    // We match robots groups as ROBOTS_USER_AGENT, so we must also identify as
+    // it — and only once, whatever casing the credential used.
+    expect(fetchMock.mock.calls[0][1]?.headers).toEqual({
+      "user-agent": ROBOTS_USER_AGENT,
+    });
+  });
+
+  it("sends nothing extra when the resolver declines the URL", async () => {
+    const fetchMock = stubFetch("");
+    await fetchRobots("https://example.com", () => undefined);
+    expect(fetchMock.mock.calls[0][1]?.headers).toEqual({
+      "user-agent": ROBOTS_USER_AGENT,
+    });
+    expect(fetchMock.mock.calls[0][1]?.redirect).toBe("manual");
+  });
+
+  it("makes the unchanged request when no resolver is supplied", async () => {
+    const fetchMock = stubFetch("");
+    await fetchRobots("https://example.com");
+    const init = fetchMock.mock.calls[0][1];
+    expect(init?.headers).toEqual({ "user-agent": ROBOTS_USER_AGENT });
+    expect(init?.redirect).toBe("follow");
+  });
+});

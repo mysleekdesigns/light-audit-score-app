@@ -16,7 +16,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { getAnalysis, saveAnalysis } from "@/lib/db/analyses";
@@ -33,6 +33,8 @@ import {
   recordRun,
   updateBatchStatus,
 } from "@/lib/db/persistence";
+import { batches, runs } from "@/lib/db/schema";
+import { REDACTED } from "@/lib/lighthouse/credentials";
 import type { AuditOptions, AuditResult } from "@/lib/lighthouse/types";
 import type { AuditJob, Batch } from "@/lib/queue/types";
 
@@ -666,5 +668,161 @@ describe("deleteBatch (PRD §6 Phase 16)", () => {
 
   it("returns false for an unknown batch id", async () => {
     expect(await deleteBatch("does-not-exist")).toBe(false);
+  });
+});
+
+/**
+ * Credential redaction at the persistence boundary (ROADMAP Phase B).
+ *
+ * Audit credentials belong to the site under audit, not to LightAudit Score, so
+ * they must never reach SQLite or a report file (`.claude/rules/security.md`).
+ * The queue already keeps them off the `Batch` entirely; these tests cover the
+ * defensive layer — a caller that *does* hand this module a credential still
+ * cannot write it down. Assertions read the stored columns and the report file
+ * raw, not through the row parsers, so nothing can quietly re-add a value on
+ * the way back out.
+ */
+describe("persistence — credential redaction", () => {
+  const SECRET_HEADER_VALUE = "preview-token-do-not-persist";
+  const SECRET_COOKIE_VALUE = "session-value-do-not-persist";
+  const SECRET_PASSWORD = "basic-auth-password-do-not-persist";
+  const SECRET_AUTH_HEADER = "Basic do-not-persist-either";
+  const SECRETS = [
+    SECRET_HEADER_VALUE,
+    SECRET_COOKIE_VALUE,
+    SECRET_PASSWORD,
+    SECRET_AUTH_HEADER,
+  ];
+
+  const CREDENTIALED_OPTIONS: AuditOptions = {
+    ...OPTIONS,
+    extraHeaders: { "X-Preview-Token": SECRET_HEADER_VALUE },
+    cookies: { session: SECRET_COOKIE_VALUE },
+    basicAuth: { username: "staging", password: SECRET_PASSWORD },
+  };
+
+  /** Assert none of the fake credential values appears anywhere in `text`. */
+  function expectNoSecrets(text: string): void {
+    for (const secret of SECRETS) {
+      expect(text).not.toContain(secret);
+    }
+  }
+
+  /** The `runs.options` column exactly as stored (no parsing). */
+  function rawRunOptions(runId: string): string {
+    const [row] = getDb()
+      .select({ options: runs.options })
+      .from(runs)
+      .where(eq(runs.id, runId))
+      .all();
+    return row.options;
+  }
+
+  /** The `batches.options` column exactly as stored (no parsing). */
+  function rawBatchOptions(batchId: string): string {
+    const [row] = getDb()
+      .select({ options: batches.options })
+      .from(batches)
+      .where(eq(batches.id, batchId))
+      .all();
+    return row.options;
+  }
+
+  function credentialedBatch(id: string, jobs: AuditJob[]): Batch {
+    return { ...makeBatch(id, jobs), options: CREDENTIALED_OPTIONS };
+  }
+
+  /**
+   * A result carrying credentials the way an unredacted engine return would:
+   * echoed onto `result.options`, and copied by Lighthouse into the report's
+   * `configSettings.extraHeaders` (`core/runner.js`).
+   */
+  function credentialedResult(url: string): AuditResult {
+    const base = makeResult(url);
+    return {
+      ...base,
+      options: CREDENTIALED_OPTIONS,
+      median: {
+        ...base.median,
+        lhr: {
+          ...base.median.lhr,
+          configSettings: {
+            extraHeaders: { Authorization: SECRET_AUTH_HEADER },
+          },
+        },
+      },
+    };
+  }
+
+  it("recordBatch stores redacted options (names kept, values gone)", () => {
+    const job = makeJob("cred-batch-run", 0, "https://staging.test/");
+    recordBatch(credentialedBatch("cred-batch", [job]));
+
+    const stored = rawBatchOptions("cred-batch");
+    expectNoSecrets(stored);
+    expect(stored).toContain(REDACTED);
+    // The names survive as provenance, so the row still says WHICH credential.
+    expect(stored).toContain("X-Preview-Token");
+
+    const parsed = JSON.parse(stored) as AuditOptions;
+    expect(parsed.extraHeaders).toEqual({ "X-Preview-Token": REDACTED });
+    expect(parsed.cookies).toEqual({ session: REDACTED });
+    expect(parsed.basicAuth).toEqual({
+      username: REDACTED,
+      password: REDACTED,
+    });
+  });
+
+  it("recordRun stores redacted options and writes a credential-free report", async () => {
+    const job = makeJob("cred-run", 0, "https://staging.test/");
+    const batch = credentialedBatch("cred-run-batch", [job]);
+
+    recordBatch(batch);
+    await recordRun(batch, job, credentialedResult("https://staging.test/"));
+
+    const stored = rawRunOptions("cred-run");
+    expectNoSecrets(stored);
+    expect(stored).toContain(REDACTED);
+
+    // The stored LHR is what `GET /api/reports/:runId` serves and what the AI
+    // analysis reads, so the credential must be gone from the file on disk.
+    const report = await fs.readFile(reportJsonPath("cred-run"), "utf8");
+    expectNoSecrets(report);
+    const lhr = JSON.parse(report) as {
+      configSettings: { extraHeaders: unknown };
+    };
+    // Scrubbed to Lighthouse's own default for the setting, so the report is
+    // indistinguishable from an unauthenticated one.
+    expect(lhr.configSettings.extraHeaders).toBeNull();
+  });
+
+  it("recordFailedRun stores redacted options too", () => {
+    const job: AuditJob = {
+      ...makeJob("cred-fail", 0, "https://staging.test/"),
+      status: "error",
+      error: { message: "401 Unauthorized" },
+    };
+    const batch = credentialedBatch("cred-fail-batch", [job]);
+
+    recordBatch(batch);
+    recordFailedRun(batch, job);
+
+    const stored = rawRunOptions("cred-fail");
+    expectNoSecrets(stored);
+    expect(stored).toContain(REDACTED);
+    // A failed run still records which credential it tried.
+    expect(stored).toContain("X-Preview-Token");
+  });
+
+  it("leaves credential-free options untouched", async () => {
+    const job = makeJob("plain-run", 0, "https://plain.test/");
+    const batch = makeBatch("plain-batch", [job]);
+
+    recordBatch(batch);
+    await recordRun(batch, job, makeResult("https://plain.test/"));
+
+    // No empty placeholders, no `[redacted]` markers on an ordinary audit.
+    expect(rawBatchOptions("plain-batch")).not.toContain(REDACTED);
+    expect(JSON.parse(rawRunOptions("plain-run"))).toEqual(OPTIONS);
   });
 });

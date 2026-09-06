@@ -1,7 +1,9 @@
 # ROADMAP — Competitive differentiation plan (Phases A–H)
 
-> **Status (updated 2026-09-05):** **Phase A complete** — the Agentic Browsing category is
-> live end-to-end (engine → SQLite → UI → PSI → AI analysis). Phases B–H are unbuilt.
+> **Status (updated 2026-09-05):** **Phases A and B complete** — the Agentic Browsing category is
+> live end-to-end (engine → SQLite → UI → PSI → AI analysis), and audits can now authenticate
+> (basic auth, cookies, headers) for both auditing and crawl discovery, with credentials redacted
+> at every persistence boundary. Phases C–H are unbuilt; **C, D are unblocked and independent**.
 > This file is a **plan**, not a record — it was drafted from a competitor survey of the
 > free/local Lighthouse tooling space (Unlighthouse, Lighthouse CI, sitespeed.io,
 > Lighthouse Parade) and the commercial monitoring tier (DebugBear, Foo.software,
@@ -208,32 +210,154 @@ from the persisted `runs.options` JSON. Long-lived values belong in `.env`
 (`LH_AUDIT_BASIC_AUTH`, `LH_AUDIT_EXTRA_HEADERS`, `LH_AUDIT_COOKIES`), and Settings stays
 read-only status plus guidance — never a key-entry form.
 
-- [ ] **Extend the options contract**: add optional `extraHeaders`, `cookies` and `basicAuth`
+> *Added during the build, from the security review:* an `.env` credential is **ambient**, so it
+> also needs a host allow-list — `LH_AUDIT_CREDENTIAL_HOSTS`, without which the three variables
+> above are inert. Otherwise a credential set for one staging box rides along on every audit,
+> and a batch of competitor URLs each receives it.
+
+- [x] **Extend the options contract**: add optional `extraHeaders`, `cookies` and `basicAuth`
       to `AuditOptions`/`auditOptionsSchema`, threaded to the forked worker. Lighthouse only
       runs in the forked worker (`.claude/rules/engine-workers.md`) — the credentials travel
       with the job payload, not through a module global.
-- [ ] **Wire the engine**: map `extraHeaders` to Lighthouse's `extraHeaders` flag, `cookies`
+      *Done: `AuditOptions extends AuditCredentials`, validated by a shared `credentialShape`
+      (also reused by crawl discovery) that enforces RFC 7230 token grammar on names and bans
+      CR/LF/NUL — and `;` in a cookie value — so a header can never be forged from a field. They
+      reach the worker over **IPC**, not in the fork's environment: a process environment is
+      readable by anything running as the same user and inherited by every descendant, and this
+      worker launches Chrome. `LH_AUDIT_INPUT` carries credential-free options plus an
+      `awaitCredentials` flag; a real-fork test asserts the env holds neither the values nor even
+      the header names.*
+- [x] **Wire the engine**: map `extraHeaders` to Lighthouse's `extraHeaders` flag, `cookies`
       to the isolated Chrome profile before the navigation, and `basicAuth` to an
       `Authorization` header. Confirm interaction with `warmCache` (the warm-up navigation
       must carry the same credentials) and with the fresh `--user-data-dir` per run.
-- [ ] **Redaction seam**: a pure, unit-tested `redactAuditOptions()` applied at every
+      *Done, with one deliberate deviation: cookies are serialised into a `Cookie` request header
+      rather than seeded into the profile's cookie jar. Seeding would need our own CDP session
+      between launch and Lighthouse's navigation, and would behave differently for the FRESH
+      `--user-data-dir` a cold run creates than for the REUSED one warm-cache runs share. A header
+      is identical under both. All three mechanisms therefore collapse to Lighthouse's single
+      `extraHeaders` flag. `warmCache` verified rather than assumed: `median.ts` hands the same
+      options to the discarded warm-up and to every measured run, and the fixture's request log
+      confirms the warm-up authenticated — a 401'd warm-up would otherwise fill the reused profile
+      with an error page and every measured run would score that.*
+      **Known limitation, disclosed not hidden:** Chrome applies `extraHeaders` per PAGE, not per
+      origin, so the credential rides every request the page makes, third parties included.
+      Confining it would mean `Fetch.requestPaused` interception on every request, which distorts
+      the timings this engine exists to measure. Stated instead in the Authentication panel, in
+      `.env.example`, and in `buildCredentialFlags`.
+- [x] **Redaction seam**: a pure, unit-tested `redactAuditOptions()` applied at every
       persistence boundary (`recordBatch`, `recordRun`, `recordFailedRun`), plus assertions
       that a credential value never appears in a stored report file, a log line, an SSE
       event, or an AI analysis prompt.
-- [ ] **Crawl parity**: `src/lib/crawl/discover.ts` sends the same headers/cookies so
+      *Done, and made structural as well as defensive. `redactAuditOptions` keeps header/cookie
+      NAMES and replaces every VALUE — idempotent, so re-redacting never degrades the record — and
+      runs at all three persistence boundaries. But the load-bearing change is that credentials
+      never reach the `Batch` object at all: the queue holds them in a side map deleted when the
+      batch settles or is cancelled, because `POST /api/audits`, `GET /api/audits/:id` and the SSE
+      `batch-snapshot` all serialise the batch straight to the browser. Schedules **strip** rather
+      than redact (a schedule fires days later with no batch in memory, so named-but-unsupplied
+      credentials would be a lie). The report file needed its own fix: Lighthouse copies resolved
+      settings into the LHR verbatim (`core/runner.js:112`), so `scrubLhrCredentials` nulls
+      `configSettings.extraHeaders` in the worker — otherwise the value landed in
+      `data/reports/*.json`, the HTML report regenerated from it, and the AI prompt built from it.*
+- [x] **Crawl parity**: `src/lib/crawl/discover.ts` sends the same headers/cookies so
       discovery can walk a protected staging site, honouring the existing `robots.txt` and
       same-origin rules.
-- [ ] **UI**: an "Authentication" disclosure in the audit control bar (header pairs, cookie
+      *Done via `credentialedFetch`, shared by the seed/page, robots and sitemap fetches. It walks
+      redirects by hand (`redirect: "manual"`), re-asking a per-URL resolver at every hop: the
+      fetch spec strips only `Authorization`/`Cookie`/`Host`/`Proxy-Authorization` cross-origin, so
+      a custom `X-Preview-Token` would otherwise be handed to whatever a staging host redirects to.
+      An unauthenticated crawl takes the old single `redirect: "follow"` path unchanged. The gate
+      is `isSameCredentialSite` — same host (`www.`-stripped), same port, with one relaxation: an
+      `http:` scope may reach `https:` (upgrade yes, downgrade no), because a seed's http→https
+      redirect is the common case and it moves the credential onto the safer transport.
+      `canonicalize` now also strips `user:pass@` from discovered links.*
+- [x] **UI**: an "Authentication" disclosure in the audit control bar (header pairs, cookie
       pairs, basic-auth user/pass) that states plainly it is held for this batch only and
       never written to disk, with the `.env` route documented for values you reuse.
-- [ ] **Security review**: run the read-only `security-reviewer` agent over the whole diff and
+      *Done: collapsed by default with a live status chip on the trigger (`Off` / `Basic +2` /
+      `Check fields`), so a run that will authenticate never does so silently. State is plain
+      `useState` — deliberately NOT `useAuditDefaults` (`localStorage`) or the draft
+      (`sessionStorage`), with a comment on both sides so the inconsistency is not "fixed" later.
+      One memoised resolution feeds the panel, the submit gate, the crawl request and the readout,
+      so they cannot disagree. `run-config-card` gained an `Auth` cell reading NAMES only, which is
+      why the same component renders the live draft and a persisted `batch.options` whose values
+      are already `[redacted]`. No new colour, font or token.*
+- [x] **Security review**: run the read-only `security-reviewer` agent over the whole diff and
       resolve every Critical/High finding before the Gate is called green.
-- [ ] **Verify**: a page that returns 401 unauthenticated is audited successfully with basic
+      *Done — see the review note below the Gate.*
+- [x] **Verify**: a page that returns 401 unauthenticated is audited successfully with basic
       auth; a session-cookie-gated page scores like its public equivalent; a `grep` of
       `data/` (SQLite + report files) for the credential values finds nothing.
+      *Done against a purpose-built local site genuinely gated three ways, serving byte-identical
+      markup behind each gate and behind a public `/open`, so a score difference could only come
+      from the credential path. See the Gate note below.*
 
 **Gate:** a real protected URL audits end-to-end with each of the three mechanisms; the
 credential appears in no persisted artefact; `security-reviewer` reports no Critical/High.
+
+*Gate green (2026-09-05).* Verified against a local site genuinely protected three ways — `/basic`
+(401 without `Authorization`), `/cookie` (401 without a session cookie), `/header` (401 without
+`X-Preview-Token`) — plus a public `/open` serving byte-identical markup.
+
+- **Unauthenticated control fails**, which is what makes the rest mean anything: Lighthouse reports
+  "the page could not be loaded". All three mechanisms then audit end-to-end through the real stack
+  (HTTP API → queue → forked worker → Chrome → SQLite), each scoring **perf 100 · seo 100** —
+  identical to the public equivalent, so the credential path changes access, not measurement.
+- **No credential in any persisted artefact.** Zero hits for every secret — plaintext *and* its
+  base64 basic-auth encoding — across the SQLite DB, its WAL, every stored JSON report, every
+  regenerated HTML report, and the server log. What persists is provenance only:
+  `{"basicAuth":{"username":"[redacted]","password":"[redacted]"}}`,
+  `{"cookies":{"lh_fixture_session":"[redacted]"}}`,
+  `{"extraHeaders":{"X-Preview-Token":"[redacted]"}}`. Nothing leaked into an API/SSE payload either.
+- **The warm-up navigation authenticates**, confirmed from the fixture's own request log rather
+  than inferred.
+- **Crawl parity**, against a `sitemap.xml` that is itself gated: uncredentialed discovery returns
+  only the seed with "No URLs found in sitemap"; credentialed discovery returns both URLs tagged
+  `source: "sitemap"`, with zero warnings.
+- **`.env` route**, all three states: credential set with no `LH_AUDIT_CREDENTIAL_HOSTS` → not sent,
+  with a stderr warning naming the fix; host allow-listed → audits successfully; allow-listed for a
+  *different* host → not sent. An env-authenticated run (no per-batch credential at all) persists
+  its credential names, so it is never recorded as unauthenticated.
+- **UI**, driven in real Chrome: the disclosure opens, the trigger chip flips to `BASIC`, the audit
+  completes at `100/90/96/100/100`, the readout shows `AUTH · Basic`, and no secret appears in the
+  rendered DOM. **Zero console errors.**
+
+Suite: lint · typecheck · build · 909 tests, all green.
+
+*Security review (read-only `security-reviewer`, required by the checklist): **pass** — no Critical,
+and both High findings resolved before the Gate was called green.*
+
+- **H1 — an `.env` credential was applied to every host audited or discovered, unscoped.** Real and
+  serious: a `LH_AUDIT_BASIC_AUTH` set for a staging box would have been posted to all 30 hosts of a
+  competitor batch. Fixed with a required host allow-list (`LH_AUDIT_CREDENTIAL_HOSTS`); an empty or
+  missing list means NO host, never every host, and the misconfiguration that fails silently
+  (credential set, no list) prints a one-shot warning naming the fix. The re-review attacked
+  `matchesCredentialHost` over 21 cases — lookalike suffixes, apex-via-wildcard, `@`-userinfo host
+  confusion, bare `*`, trailing dot — and every one fails closed. Verified live in all three states.
+- **H2 — Chrome applies `extraHeaders` per PAGE, so the credential rides every request the page
+  makes, third parties included.** Not fixed in code, deliberately: the only real fix is
+  `Fetch.requestPaused` interception, which puts the Node process in front of every request and
+  distorts the metrics this tool exists to report. Disclosed instead — mechanism, consequence and
+  mitigation — in the Authentication panel, `.env.example`, and `buildCredentialFlags`. The reviewer
+  accepted the trade on re-review.
+
+Its Mediums were all fixed rather than deferred: an env-authenticated run recording no provenance
+and rendering "Auth: None" (M1); credentials travelling in the fork's **environment**, which is
+inherited by every descendant — including the Chrome process rendering untrusted content — now moved
+to IPC (M2); and `canonicalize` keeping `user:pass@` in discovered links, which would have put a
+password on screen and failed a whole batch (M3). Of its Lows, the silently-inert configs and the
+one defence-in-depth regression the M2 fix introduced were also fixed: default-port and pasted-URL
+allow-list entries now match (L4), IPv6 entries must be bracketed and fail closed otherwise (L5),
+IPC credentials are re-validated on receipt (L6), a wildcard must keep two labels so `*.com` cannot
+undo the allow-list (L7), and header maps are null-prototype so a header named `__proto__` is
+recorded rather than silently dropped (L3). Two Lows are accepted as behaviour and left: re-running a
+stored authenticated batch is refused with an explanation, since the values were never saved (L1),
+and a credentialed `http://` seed is sent in cleartext without a warning (L2).
+
+**Beyond the checklist:** a *fourth* credential channel that no slice owned — `https://user:pass@host`
+— is now rejected by both URL schemas. Chrome would have authenticated with it, and unlike the other
+three it was written down verbatim in `runs.url`, rendered in History, and used as the compare key.
 
 ---
 

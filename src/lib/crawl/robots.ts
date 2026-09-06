@@ -19,8 +19,14 @@
  *    discovery is best-effort and a fetch failure must never be fatal.
  *
  * Kept dependency-free (no node:*, no third-party): it only parses a string and
- * uses the global `fetch`, so it's import-safe and trivially testable.
+ * fetches through `credentialedFetch`, so it's import-safe and trivially
+ * testable.
  */
+
+import {
+  credentialedFetch,
+  type CredentialHeaderResolver,
+} from "./credentialedFetch";
 
 /** The user-agent token we identify as when matching robots groups. */
 export const ROBOTS_USER_AGENT = "LighthouseAuditBot";
@@ -181,17 +187,31 @@ export function parseRobots(text: string): RobotsMatcher {
  * Fetch + parse `<origin>/robots.txt`. Best-effort: any network error, timeout,
  * or non-200 yields an allow-all matcher (discovery proceeds, the caller may
  * warn). `origin` should be a normalized origin like `https://example.com`.
+ *
+ * `resolveCredentials` (ROADMAP Phase B) lets a protected site's own
+ * `robots.txt` be read with the audit credential — a staging environment
+ * commonly puts the whole host, `robots.txt` included, behind basic auth, and
+ * without this the crawl would fall back to "allow everything" on a site whose
+ * rules we could in fact have read. The URL is at `origin` by construction, so
+ * it is same-site by definition; the resolver still gates every hop of any
+ * redirect the host answers with, which is the case that isn't.
  */
-export async function fetchRobots(origin: string): Promise<RobotsMatcher> {
+export async function fetchRobots(
+  origin: string,
+  resolveCredentials?: CredentialHeaderResolver,
+): Promise<RobotsMatcher> {
   const url = `${origin.replace(/\/$/, "")}/robots.txt`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ROBOTS_FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: { "user-agent": ROBOTS_USER_AGENT },
-      redirect: "follow",
-    });
+    const res = await credentialedFetch(
+      url,
+      {
+        signal: controller.signal,
+        headers: { "user-agent": ROBOTS_USER_AGENT },
+      },
+      resolveCredentials,
+    );
     if (!res.ok) return allowAllMatcher();
     const text = await res.text();
     return parseRobots(text);

@@ -16,6 +16,7 @@
 
 import { z } from "zod";
 
+import { auditCredentialsSchema } from "@/lib/lighthouse/options";
 import type { ApiErrorIssue } from "@/lib/queue/types";
 
 import {
@@ -51,6 +52,20 @@ const httpUrlSchema = z
       ctx.addIssue({
         code: "custom",
         message: "URL must use the http or https protocol.",
+      });
+    }
+    // `https://user:pass@host` is legal, and Chrome would authenticate with it —
+    // which makes it a FOURTH credential channel, and the only one that gets
+    // written down: the URL is persisted verbatim in `runs.url`, rendered in
+    // History, and used as the compare/trend key. Phase B's whole point is that
+    // a credential never reaches SQLite, so this is refused with a pointer to
+    // the two channels that redact (ROADMAP Phase B).
+    if (parsed.username || parsed.password) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "URL must not embed a username or password — it would be stored in " +
+          "this run's history. Use the Authentication panel, or LH_AUDIT_BASIC_AUTH in .env.",
       });
     }
   });
@@ -104,6 +119,11 @@ export const discoverBodySchema = z.object({
     .max(MAX_EXCLUDE_PATHS, `At most ${MAX_EXCLUDE_PATHS} exclude paths allowed.`)
     .optional()
     .default([]),
+  // Credentials for a protected site (ROADMAP Phase B). Validated by exactly the
+  // rules the audit uses (`auditCredentialsSchema`) so discovery and the audit
+  // accept the same credential. Request-scoped and never persisted — an absent
+  // block is a public site.
+  auth: auditCredentialsSchema.optional(),
 });
 
 /**
@@ -145,10 +165,10 @@ export function parseDiscoverBody(raw: unknown): ParseDiscoverResult {
   if (!result.success) {
     return { ok: false, issues: toApiIssues(result.error) };
   }
-  const { url, useSitemap, useCrawl, maxDepth, maxPages, excludePaths } =
+  const { url, useSitemap, useCrawl, maxDepth, maxPages, excludePaths, auth } =
     result.data;
   return {
     ok: true,
-    value: { url, useSitemap, useCrawl, maxDepth, maxPages, excludePaths },
+    value: { url, useSitemap, useCrawl, maxDepth, maxPages, excludePaths, auth },
   };
 }

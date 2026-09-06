@@ -4,7 +4,9 @@
  * Hermetic: the global `fetch` is stubbed with a small router keyed by URL that
  * serves robots.txt, sitemaps, and HTML pages. No real network, no Chrome.
  * Covers: sitemap source, same-origin filtering, robots disallow (seed +
- * in-crawl), maxDepth/maxPages bounds + cap warning, and dedupe across sources.
+ * in-crawl), maxDepth/maxPages bounds + cap warning, dedupe across sources, and
+ * the Phase-B credential rules (which fetches carry the credential, which must
+ * never, and that none of it reaches the result).
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,44 +16,86 @@ import {
   compileExcludePathMatcher,
   type DiscoverInput,
 } from "@/lib/crawl/types";
+import type { AuditCredentials } from "@/lib/lighthouse/credentials";
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 const ORIGIN = "https://example.com";
 
-/** A single canned response: HTML page, sitemap XML, or robots text. */
+/** A single canned response: HTML page, sitemap XML, robots text, or a redirect. */
 interface Route {
   status?: number;
   contentType?: string;
   body: string;
+  /** When set, the route answers a redirect (default status 302) to this URL. */
+  location?: string;
+}
+
+/**
+ * `Response.url` is read-only and not settable via the constructor, so we patch
+ * it per-response — real `fetch` populates it with the URL the response came
+ * from, and `resolveSeed`/the crawl read it to pick their base URL.
+ */
+function withUrl(res: Response, url: string): Response {
+  Object.defineProperty(res, "url", { value: url, configurable: true });
+  return res;
 }
 
 /**
  * Install a fetch stub that serves `routes` keyed by exact URL. Anything not in
- * the map returns 404. robots.txt defaults to allow-all if unspecified.
+ * the map returns 404. robots.txt defaults to allow-all if unspecified. The mock
+ * records `[url, init]` for every call, which the credential tests assert on.
  */
 function stubRoutes(routes: Record<string, Route>) {
-  const fetchMock = vi.fn(async (input: string) => {
+  const fetchMock = vi.fn<
+    (input: string, init?: RequestInit) => Promise<Response>
+  >(async (input) => {
     const url = String(input);
     const route = routes[url];
     if (!route) {
       // Default robots.txt → empty (allow all).
       if (url.endsWith("/robots.txt")) {
-        return new Response("", { status: 200 });
+        return withUrl(new Response("", { status: 200 }), url);
       }
-      return new Response("", { status: 404 });
+      return withUrl(new Response("", { status: 404 }), url);
     }
-    return new Response(route.body, {
-      status: route.status ?? 200,
-      headers: {
-        "content-type": route.contentType ?? "text/html; charset=utf-8",
-      },
-    });
+    const headers: Record<string, string> = {
+      "content-type": route.contentType ?? "text/html; charset=utf-8",
+    };
+    if (route.location !== undefined) headers.location = route.location;
+    return withUrl(
+      new Response(route.body, {
+        status: route.status ?? (route.location === undefined ? 200 : 302),
+        headers,
+      }),
+      url,
+    );
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+/** The fetch stub `stubRoutes` installs. */
+type FetchStub = ReturnType<typeof stubRoutes>;
+
+/** Every set of request headers the stub was asked to send for `url`. */
+function allHeadersFor(
+  fetchMock: FetchStub,
+  url: string,
+): Record<string, string>[] {
+  return fetchMock.mock.calls
+    .filter((call) => String(call[0]) === url)
+    .map((call) => (call[1]?.headers ?? {}) as Record<string, string>);
+}
+
+/** The headers of the FIRST request the stub was asked to make for `url`. */
+function headersFor(fetchMock: FetchStub, url: string): Record<string, string> {
+  const all = allHeadersFor(fetchMock, url);
+  if (all.length === 0) throw new Error(`fetch was never called for ${url}`);
+  return all[0];
 }
 
 function input(overrides: Partial<DiscoverInput> = {}): DiscoverInput {
@@ -518,14 +562,6 @@ describe("discover — seed redirect resolution", () => {
     const APEX = "https://example.com";
     const WWW = "https://www.example.com";
 
-    // `Response.url` is read-only and not settable via constructor; we patch
-    // it per-response with Object.defineProperty so resolveSeed sees the
-    // post-redirect URL it would see in real `fetch()`.
-    function withUrl(res: Response, url: string): Response {
-      Object.defineProperty(res, "url", { value: url, configurable: true });
-      return res;
-    }
-
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string) => {
@@ -594,5 +630,319 @@ describe("discover — resilience", () => {
     const result = await discover(input({ useCrawl: true, maxDepth: 2 }));
     // Seed still recorded as a candidate, but no links extracted from non-HTML.
     expect(result.urls.map((u) => u.url)).toEqual([`${ORIGIN}/`]);
+  });
+});
+
+describe("discover — credentials (ROADMAP Phase B)", () => {
+  /** The request-scoped credential under test: all three mechanisms at once. */
+  const AUTH: AuditCredentials = {
+    basicAuth: { username: "audit-user", password: "audit-pass" },
+    cookies: { session: "session-value" },
+    extraHeaders: { "X-Preview-Token": "preview-value" },
+  };
+
+  /** What `buildCredentialHeaders` folds {@link AUTH} into, on the wire. */
+  const AUTH_HEADERS = {
+    Authorization: `Basic ${btoa("audit-user:audit-pass")}`,
+    Cookie: "session=session-value",
+    "X-Preview-Token": "preview-value",
+  };
+
+  /** The crawler's own headers — sent on every request, credential or not. */
+  const UA_HEADERS = { "user-agent": "LighthouseAuditBot" };
+
+  /** A fully-credentialed request's headers. */
+  const CREDENTIALED = { ...UA_HEADERS, ...AUTH_HEADERS };
+
+  it("sends the credential on the seed, robots, sitemap and crawled pages", async () => {
+    const fetchMock = stubRoutes({
+      [`${ORIGIN}/robots.txt`]: { body: `Sitemap: ${ORIGIN}/sitemap.xml` },
+      [`${ORIGIN}/sitemap.xml`]: SITEMAP_XML(`${ORIGIN}/listed`),
+      [`${ORIGIN}/`]: page(`${ORIGIN}/a`),
+      [`${ORIGIN}/a`]: page(),
+    });
+
+    const result = await discover(
+      input({ useSitemap: true, useCrawl: true, maxDepth: 2, auth: AUTH }),
+    );
+
+    // Every same-site fetch discovery makes carries the whole credential.
+    for (const url of [
+      `${ORIGIN}/`,
+      `${ORIGIN}/robots.txt`,
+      `${ORIGIN}/sitemap.xml`,
+      `${ORIGIN}/a`,
+    ]) {
+      expect(headersFor(fetchMock, url)).toEqual(CREDENTIALED);
+    }
+    // …and discovery itself is unaffected by carrying one.
+    expect(result.urls.map((u) => u.url)).toContain(`${ORIGIN}/listed`);
+    expect(result.urls.map((u) => u.url)).toContain(`${ORIGIN}/a`);
+  });
+
+  it("follows redirects by hand while credentialed (never `redirect: follow`)", async () => {
+    const fetchMock = stubRoutes({ [`${ORIGIN}/`]: page() });
+    await discover(input({ useCrawl: true, auth: AUTH }));
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(init?.redirect).toBe("manual");
+    }
+  });
+
+  it("keeps the crawler's user-agent when a credential tries to replace it", async () => {
+    // Header names are case-insensitive, so this must not end up sending BOTH
+    // (which `Headers` would join into "LighthouseAuditBot, Impostor/1.0").
+    const fetchMock = stubRoutes({ [`${ORIGIN}/`]: page() });
+    await discover(
+      input({
+        useCrawl: true,
+        auth: { extraHeaders: { "User-Agent": "Impostor/1.0" } },
+      }),
+    );
+    expect(headersFor(fetchMock, `${ORIGIN}/`)).toEqual(UA_HEADERS);
+  });
+
+  it("credentials a www. sitemap but not one on another subdomain", async () => {
+    const WWW = "https://www.example.com";
+    const OTHER = "https://cdn.example.net";
+    const fetchMock = stubRoutes({
+      [`${ORIGIN}/robots.txt`]: {
+        body: [
+          `Sitemap: ${WWW}/sitemap.xml`,
+          `Sitemap: ${OTHER}/sitemap.xml`,
+        ].join("\n"),
+      },
+      [`${WWW}/sitemap.xml`]: SITEMAP_XML(`${ORIGIN}/from-www`),
+      [`${OTHER}/sitemap.xml`]: SITEMAP_XML(`${ORIGIN}/from-cdn`),
+      [`${ORIGIN}/`]: page(),
+    });
+
+    const result = await discover(input({ useSitemap: true, auth: AUTH }));
+
+    // `www.example.com` is the same site as `example.com` (the crawler's own
+    // rule), so the credential goes with it…
+    expect(headersFor(fetchMock, `${WWW}/sitemap.xml`)).toEqual(CREDENTIALED);
+    // …but a genuinely different host gets the bare crawler request, even
+    // though the site itself declared that sitemap.
+    expect(headersFor(fetchMock, `${OTHER}/sitemap.xml`)).toEqual(UA_HEADERS);
+    // Both sitemaps are still read — withholding a credential is not skipping.
+    expect(result.urls.map((u) => u.url)).toEqual([
+      `${ORIGIN}/from-www`,
+      `${ORIGIN}/from-cdn`,
+    ]);
+  });
+
+  it("withholds the credential from a cross-site redirect and everything after it", async () => {
+    const OTHER = "https://elsewhere.example.net";
+    const fetchMock = stubRoutes({
+      // The seed redirects off-site — the case where `redirect: "follow"` would
+      // hand `X-Preview-Token` to a host the user never credentialed.
+      [`${ORIGIN}/`]: { location: `${OTHER}/landing`, body: "" },
+      [`${OTHER}/landing`]: page(`${OTHER}/a`),
+      [`${OTHER}/sitemap.xml`]: SITEMAP_XML(`${OTHER}/listed`),
+      [`${OTHER}/a`]: page(),
+    });
+
+    const result = await discover(
+      input({ useSitemap: true, useCrawl: true, maxDepth: 2, auth: AUTH }),
+    );
+
+    // The seed itself — the URL the user typed and credentialed — is sent
+    // authenticated…
+    expect(headersFor(fetchMock, `${ORIGIN}/`)).toEqual(CREDENTIALED);
+    // …and nothing on the redirect target ever is, including the redirect hop.
+    for (const url of [
+      `${OTHER}/landing`,
+      `${OTHER}/robots.txt`,
+      `${OTHER}/sitemap.xml`,
+      `${OTHER}/a`,
+    ]) {
+      for (const headers of allHeadersFor(fetchMock, url)) {
+        expect(headers).toEqual(UA_HEADERS);
+      }
+    }
+    // The run continues as an ordinary public crawl of where it landed.
+    expect(result.origin).toBe(OTHER);
+    expect(result.urls.map((u) => u.url)).toContain(`${OTHER}/listed`);
+    expect(
+      result.warnings.some((w) => /redirected to a different site/i.test(w)),
+    ).toBe(true);
+  });
+
+  it("keeps the credential across an http → https seed redirect", async () => {
+    // The upgrade nearly every site performs. Refusing it here would mean a
+    // user who typed `http://…` silently got an unauthenticated crawl.
+    const INSECURE = "http://example.com";
+    const fetchMock = stubRoutes({
+      [`${INSECURE}/`]: { location: `${ORIGIN}/`, body: "" },
+      [`${ORIGIN}/`]: page(),
+    });
+
+    const result = await discover(
+      input({ url: `${INSECURE}/`, useCrawl: true, auth: AUTH }),
+    );
+
+    expect(result.origin).toBe(ORIGIN);
+    expect(headersFor(fetchMock, `${INSECURE}/`)).toEqual(CREDENTIALED);
+    expect(headersFor(fetchMock, `${ORIGIN}/`)).toEqual(CREDENTIALED);
+    expect(headersFor(fetchMock, `${ORIGIN}/robots.txt`)).toEqual(CREDENTIALED);
+    expect(
+      result.warnings.some((w) => /redirected to a different site/i.test(w)),
+    ).toBe(false);
+  });
+
+  it("drops the credential when an https seed is redirected down to http", async () => {
+    // A downgrade would put the credential on the wire in plaintext, so it is
+    // treated exactly like a cross-site redirect.
+    const INSECURE = "http://example.com";
+    const fetchMock = stubRoutes({
+      [`${ORIGIN}/`]: { location: `${INSECURE}/`, body: "" },
+      [`${INSECURE}/`]: page(),
+    });
+
+    const result = await discover(
+      input({ url: `${ORIGIN}/`, useCrawl: true, auth: AUTH }),
+    );
+
+    expect(result.origin).toBe(INSECURE);
+    expect(headersFor(fetchMock, `${INSECURE}/`)).toEqual(UA_HEADERS);
+    expect(headersFor(fetchMock, `${INSECURE}/robots.txt`)).toEqual(UA_HEADERS);
+    expect(
+      result.warnings.some((w) => /redirected to a different site/i.test(w)),
+    ).toBe(true);
+  });
+
+  it("applies long-lived credentials from the environment when the request has none", async () => {
+    // The seed's host must be named in the allow-list, or an env credential is
+    // inert — see `LH_AUDIT_CREDENTIAL_HOSTS`.
+    vi.stubEnv("LH_AUDIT_CREDENTIAL_HOSTS", new URL(ORIGIN).hostname);
+    vi.stubEnv("LH_AUDIT_BASIC_AUTH", "env-user:env-password");
+    const fetchMock = stubRoutes({ [`${ORIGIN}/`]: page() });
+
+    await discover(input({ useCrawl: true }));
+
+    expect(headersFor(fetchMock, `${ORIGIN}/`)).toEqual({
+      ...UA_HEADERS,
+      Authorization: `Basic ${btoa("env-user:env-password")}`,
+    });
+  });
+
+  it("lets a request credential override the environment PER ENTRY", async () => {
+    vi.stubEnv("LH_AUDIT_CREDENTIAL_HOSTS", new URL(ORIGIN).hostname);
+    vi.stubEnv("LH_AUDIT_BASIC_AUTH", "env-user:env-password");
+    vi.stubEnv("LH_AUDIT_COOKIES", "session=env-session; theme=env-theme");
+    const fetchMock = stubRoutes({ [`${ORIGIN}/`]: page() });
+
+    await discover(
+      input({ useCrawl: true, auth: { cookies: { session: "request-session" } } }),
+    );
+
+    const headers = headersFor(fetchMock, `${ORIGIN}/`);
+    // The request wins for the cookie it names…
+    expect(headers.Cookie).toBe("session=request-session; theme=env-theme");
+    // …and leaves the rest of the environment's credential standing.
+    expect(headers.Authorization).toBe(
+      `Basic ${btoa("env-user:env-password")}`,
+    );
+  });
+
+  it("ignores an environment credential whose host is not allow-listed", async () => {
+    // The regression the host gate exists for: discovery of an unrelated site
+    // must not carry the staging credential sitting in `.env`.
+    vi.stubEnv("LH_AUDIT_CREDENTIAL_HOSTS", "staging.example.com");
+    vi.stubEnv("LH_AUDIT_BASIC_AUTH", "env-user:env-password");
+    const fetchMock = stubRoutes({ [`${ORIGIN}/`]: page() });
+
+    await discover(input({ useCrawl: true }));
+
+    expect(headersFor(fetchMock, `${ORIGIN}/`)).toEqual(UA_HEADERS);
+  });
+
+  it("ignores an environment credential when no hosts are listed at all", async () => {
+    vi.stubEnv("LH_AUDIT_BASIC_AUTH", "env-user:env-password");
+    const fetchMock = stubRoutes({ [`${ORIGIN}/`]: page() });
+
+    await discover(input({ useCrawl: true }));
+
+    expect(headersFor(fetchMock, `${ORIGIN}/`)).toEqual(UA_HEADERS);
+  });
+
+  it("never puts a credential value in the DiscoverResult", async () => {
+    vi.stubEnv("LH_AUDIT_EXTRA_HEADERS", '{"X-Env-Token":"env-token-value"}');
+    stubRoutes({
+      [`${ORIGIN}/robots.txt`]: { body: `Sitemap: ${ORIGIN}/sitemap.xml` },
+      [`${ORIGIN}/sitemap.xml`]: SITEMAP_XML(`${ORIGIN}/listed`),
+      // A failing child forces the warning path that names URLs, so the
+      // assertion below covers `warnings`, not just `urls`.
+      [`${ORIGIN}/`]: page(`${ORIGIN}/broken`),
+      [`${ORIGIN}/broken`]: { status: 500, body: "" },
+    });
+
+    const result = await discover(
+      input({ useSitemap: true, useCrawl: true, maxDepth: 2, auth: AUTH }),
+    );
+
+    expect(result.warnings.some((w) => /could not fetch/i.test(w))).toBe(true);
+    const serialized = JSON.stringify(result);
+    for (const secret of [
+      "audit-user",
+      "audit-pass",
+      btoa("audit-user:audit-pass"),
+      "session-value",
+      "preview-value",
+      "X-Preview-Token",
+      "env-token-value",
+      "X-Env-Token",
+      "Authorization",
+      "Cookie",
+    ]) {
+      expect(serialized).not.toContain(secret);
+    }
+  });
+
+  it("sends exactly the pre-Phase-B request when there is no credential", async () => {
+    // Defensive: a developer's own environment must not change the requests a
+    // public discovery run makes.
+    vi.stubEnv("LH_AUDIT_BASIC_AUTH", "");
+    vi.stubEnv("LH_AUDIT_COOKIES", "");
+    vi.stubEnv("LH_AUDIT_EXTRA_HEADERS", "");
+    const fetchMock = stubRoutes({
+      [`${ORIGIN}/robots.txt`]: { body: `Sitemap: ${ORIGIN}/sitemap.xml` },
+      [`${ORIGIN}/sitemap.xml`]: SITEMAP_XML(`${ORIGIN}/listed`),
+      [`${ORIGIN}/`]: page(`${ORIGIN}/a`),
+      [`${ORIGIN}/a`]: page(),
+    });
+
+    await discover(
+      input({ useSitemap: true, useCrawl: true, maxDepth: 2 }),
+    );
+
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(0);
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(Object.keys(init ?? {}).sort()).toEqual([
+        "headers",
+        "redirect",
+        "signal",
+      ]);
+      expect(init?.headers).toEqual(UA_HEADERS);
+      expect(init?.redirect).toBe("follow");
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+    }
+  });
+});
+
+describe("canonicalize — userinfo in discovered links (ROADMAP Phase B)", () => {
+  it("strips user:pass@ from a same-site link so it never reaches the batch", async () => {
+    // `POST /api/audits` refuses userinfo URLs, so leaving it in would let one
+    // crawled link fail the whole batch — and would print a credential in the
+    // curation table and in `runs.url`.
+    stubRoutes({
+      [`${ORIGIN}/`]: page("https://user:pass@example.com/secret-page"),
+    });
+
+    const result = await discover(input({ useCrawl: true }));
+
+    const urls = result.urls.map((u) => u.url);
+    expect(urls).toContain(`${ORIGIN}/secret-page`);
+    expect(JSON.stringify(result)).not.toContain("user:pass");
   });
 });

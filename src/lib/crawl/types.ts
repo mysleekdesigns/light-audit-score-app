@@ -14,6 +14,8 @@
  * fast-xml-parser, zod and Next imports so client UI can share the types.
  */
 
+import type { AuditCredentials } from "@/lib/lighthouse/credentials";
+
 // --- Bounds & defaults (mirror the queue's clamp-everything discipline) -----
 
 /** BFS depth: the seed page is depth 0; each link followed adds 1. */
@@ -175,6 +177,16 @@ export interface DiscoverRequest {
    * {@link MAX_EXCLUDE_PATHS} entries. See {@link compileExcludePathMatcher}.
    */
   excludePaths?: string[];
+  /**
+   * Credentials for a protected site (ROADMAP Phase B) — the same basic-auth /
+   * cookie / header block the audit itself runs with, so discovery can walk a
+   * staging environment instead of collecting its login page.
+   *
+   * Held for the life of ONE request: never persisted, never echoed back in the
+   * {@link DiscoverResult}, and only ever attached to same-site requests (see
+   * `discover.ts`). Omitted for a public site.
+   */
+  auth?: AuditCredentials;
 }
 
 /**
@@ -189,6 +201,12 @@ export interface DiscoverInput {
   useCrawl: boolean;
   maxDepth: number;
   maxPages: number;
+  /**
+   * Resolved credentials for a protected site, or `undefined` for a public one
+   * (ROADMAP Phase B). Request-scoped: the engine attaches them to same-site
+   * fetches only and never returns them in the {@link DiscoverResult}.
+   */
+  auth?: AuditCredentials;
   /**
    * Resolved same-origin exclude-path patterns (trimmed; always present, `[]`
    * when none). Feed to {@link compileExcludePathMatcher} to filter results.

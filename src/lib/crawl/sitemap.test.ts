@@ -182,3 +182,72 @@ describe("gatherSitemapUrls — recursion + bounding", () => {
     expect(urls).toEqual([]);
   });
 });
+
+describe("gatherSitemapUrls — credentials (ROADMAP Phase B)", () => {
+  const SAME_SITE = "https://a.com";
+  const CROSS_SITE = "https://cdn.example.net";
+  const CREDENTIAL = { Authorization: "Basic dGVzdA==" };
+
+  /** Serve `responses` by URL, recording the init of every call. */
+  function stubFetch(responses: Record<string, string>) {
+    const fetchMock = vi.fn<
+      (input: string, init?: RequestInit) => Promise<Response>
+    >(async (input) =>
+      new Response(responses[String(input)] ?? "", { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  /** Headers the stub was asked to send for `url`. */
+  function headersFor(
+    fetchMock: ReturnType<typeof stubFetch>,
+    url: string,
+  ): Record<string, string> | undefined {
+    const call = fetchMock.mock.calls.find((c) => String(c[0]) === url);
+    return call?.[1]?.headers as Record<string, string> | undefined;
+  }
+
+  it("credentials same-site documents and withholds from cross-site children", async () => {
+    // The URLs here are declared by the SITE (robots.txt / a sitemap index),
+    // not derived from the seed, so each one is gated individually.
+    const fetchMock = stubFetch({
+      [`${SAME_SITE}/index.xml`]: sitemapindex(
+        `${SAME_SITE}/s1.xml`,
+        `${CROSS_SITE}/s2.xml`,
+      ),
+      [`${SAME_SITE}/s1.xml`]: urlset(`${SAME_SITE}/1`),
+      [`${CROSS_SITE}/s2.xml`]: urlset(`${SAME_SITE}/2`),
+    });
+
+    const urls = await gatherSitemapUrls([`${SAME_SITE}/index.xml`], {
+      resolveCredentials: (url) =>
+        url.startsWith(`${SAME_SITE}/`) ? CREDENTIAL : undefined,
+    });
+
+    expect(headersFor(fetchMock, `${SAME_SITE}/index.xml`)).toEqual({
+      "user-agent": "LighthouseAuditBot",
+      ...CREDENTIAL,
+    });
+    expect(headersFor(fetchMock, `${SAME_SITE}/s1.xml`)).toEqual({
+      "user-agent": "LighthouseAuditBot",
+      ...CREDENTIAL,
+    });
+    // A CDN-hosted sitemap for a protected site is ordinary — read it, but
+    // never hand it the credential.
+    expect(headersFor(fetchMock, `${CROSS_SITE}/s2.xml`)).toEqual({
+      "user-agent": "LighthouseAuditBot",
+    });
+    expect(urls).toEqual([`${SAME_SITE}/1`, `${SAME_SITE}/2`]);
+  });
+
+  it("makes the unchanged request when no resolver is supplied", async () => {
+    const fetchMock = stubFetch({
+      [`${SAME_SITE}/sitemap.xml`]: urlset(`${SAME_SITE}/1`),
+    });
+    await gatherSitemapUrls([`${SAME_SITE}/sitemap.xml`]);
+    const init = fetchMock.mock.calls[0][1];
+    expect(init?.headers).toEqual({ "user-agent": "LighthouseAuditBot" });
+    expect(init?.redirect).toBe("follow");
+  });
+});

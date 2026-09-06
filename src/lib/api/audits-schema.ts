@@ -12,6 +12,11 @@
 
 import { z } from "zod";
 
+import {
+  hasAuditCredentials,
+  REDACTED,
+  type AuditCredentials,
+} from "@/lib/lighthouse/credentials";
 import { auditOptionsSchema } from "@/lib/lighthouse/options";
 import {
   clampConcurrency,
@@ -54,6 +59,20 @@ const httpUrlSchema = z
         message: "URL must use the http or https protocol.",
       });
     }
+    // `https://user:pass@host` is legal, and Chrome would authenticate with it —
+    // which makes it a FOURTH credential channel, and the only one that gets
+    // written down: the URL is persisted verbatim in `runs.url`, rendered in
+    // History, and used as the compare/trend key. Phase B's whole point is that
+    // a credential never reaches SQLite, so this is refused with a pointer to
+    // the two channels that redact (ROADMAP Phase B).
+    if (parsed.username || parsed.password) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "URL must not embed a username or password — it would be stored in " +
+          "this run's history. Use the Authentication panel, or LH_AUDIT_BASIC_AUTH in .env.",
+      });
+    }
   });
 
 /**
@@ -86,7 +105,55 @@ export const createBatchBodySchema = z.object({
   // Re-run lineage (PRD §6 Phase 13): the id of the batch this request re-runs.
   // Optional and free-form (a nanoid) — recorded for lineage, never executed on.
   priorBatchId: z.string().optional(),
-});
+})
+  // Credentials + PSI is a contradiction, not a preference (ROADMAP Phase B).
+  // A PSI audit is performed by Google's infrastructure, which has no route to a
+  // staging host, a private network, or the session the credential belongs to —
+  // and sending someone's cookie to a third party to be ignored is exactly the
+  // outcome this seam exists to prevent. Rejecting it here, with the reason,
+  // beats silently dropping the credential and returning a 401-flavoured score
+  // the user can't explain. The queue also strips on the PSI branch, defensively.
+  .superRefine((body, ctx) => {
+    if (body.source === "psi" && hasAuditCredentials(body.options)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["source"],
+        message:
+          "PageSpeed Insights runs on Google's servers, which can't reach a page " +
+          "only your machine can. Remove the credentials, or switch the engine to Local.",
+      });
+    }
+    // Placeholders read back out of a stored run (see `hasRedactedCredential`).
+    if (hasRedactedCredential(body.options)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["options"],
+        message:
+          "These credentials are the redacted placeholders from a stored run — " +
+          "the values were never saved. Enter them again to run this audit.",
+      });
+    }
+  });
+
+/**
+ * True when any credential VALUE is the {@link REDACTED} placeholder — i.e. the
+ * options were read back out of a persisted run rather than typed by the user.
+ *
+ * Re-run posts a stored run's options verbatim (`RerunBatchButton`), and a
+ * stored authenticated run keeps its header/cookie NAMES with `[redacted]` in
+ * place of the values. Submitting that would send the literal string
+ * `[redacted]` as an `Authorization` header and fail the audit with an
+ * unexplained 401. Neither silently dropping the credential (a quietly
+ * different audit than the one being re-run) nor sending the placeholder is
+ * honest, so the request is refused with the reason instead.
+ */
+function hasRedactedCredential(options: AuditCredentials): boolean {
+  return (
+    Object.values(options.extraHeaders ?? {}).includes(REDACTED) ||
+    Object.values(options.cookies ?? {}).includes(REDACTED) ||
+    options.basicAuth?.password === REDACTED
+  );
+}
 
 /** Discriminated result of {@link parseCreateBatchBody}. */
 export type ParseCreateBatchResult =

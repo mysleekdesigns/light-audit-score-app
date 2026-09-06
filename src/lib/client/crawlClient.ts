@@ -51,6 +51,15 @@ async function toApiError(response: Response): Promise<ApiError> {
  * surface a toast with the structured message. The route validates/clamps the
  * request, so the client sends options as-is (the panel normalizes the seed URL
  * scheme before calling — the server only accepts absolute http/https URLs).
+ *
+ * `input.auth` (ROADMAP Phase B) rides along like any other field, and is the
+ * one field that is a **secret**: it carries the basic-auth pair, cookies or
+ * preview header that let discovery walk a protected staging site. It is
+ * strictly request-scoped — this client never stores it (no `localStorage`, no
+ * module-level cache), the caller passes it in per call, and the server neither
+ * persists it nor echoes it back in the {@link DiscoverResult}. Anything that
+ * wants it to survive a reload belongs in the server's `.env`, which discovery
+ * already merges underneath the request (`resolveDiscoveryCredentials`).
  */
 export async function discoverSite(
   input: DiscoverRequest,

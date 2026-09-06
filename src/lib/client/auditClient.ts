@@ -30,6 +30,19 @@ export interface CreateBatchRequest {
    * `options.formFactor` (single-device run), keeping older callers working.
    */
   device?: DeviceSelection;
+  /**
+   * Audit options. `AuditOptions extends AuditCredentials`, so a batch for a
+   * protected site carries its `extraHeaders` / `cookies` / `basicAuth` here
+   * (ROADMAP Phase B) with no extra field on this request — which is why this
+   * type needed no change to support authenticated audits.
+   *
+   * They are the only part of this object that must never be written down: the
+   * queue holds them in a per-batch side map rather than on the `Batch` it
+   * serialises back, and every persistence boundary redacts them. Send them
+   * ABSENT (not as empty objects) for a public page — see
+   * `@/lib/lighthouse/credentials` and the Authentication disclosure that
+   * builds them, `@/components/audit/credential-draft`.
+   */
   options?: Partial<AuditOptions>;
   /**
    * Engine to run on (PSI feature). `"psi"` routes the batch through Google

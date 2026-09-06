@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { MAX_URLS, parseCreateBatchBody } from "@/lib/api/audits-schema";
+import { REDACTED } from "@/lib/lighthouse/credentials";
 import { DEFAULT_OPTIONS } from "@/lib/lighthouse/options";
 import {
   LIGHTHOUSE_CATEGORIES,
@@ -336,5 +337,125 @@ describe("parseCreateBatchBody — rejected bodies", () => {
   it("rejects a non-object body without throwing", () => {
     expect(() => parseCreateBatchBody("nonsense")).not.toThrow();
     expect(parseCreateBatchBody("nonsense").ok).toBe(false);
+  });
+});
+
+/**
+ * Credentials × engine (ROADMAP Phase B).
+ *
+ * A PSI audit is performed by Google's servers, which have no route to a
+ * staging host or a private network — so a credential sent with `source: "psi"`
+ * could only be forwarded to a third party to be ignored. That is a structured
+ * 400 explaining why, not a silent drop, so the user learns which of the two
+ * choices to change instead of debugging a 401-flavoured score.
+ */
+describe("parseCreateBatchBody — credentials", () => {
+  const CREDENTIALS = {
+    extraHeaders: { "X-Preview-Token": "preview-token-value" },
+    cookies: { session: "session-value" },
+    basicAuth: { username: "staging", password: "staging-password" },
+  };
+
+  it("passes credentials through for a local audit", () => {
+    const result = parseCreateBatchBody({
+      urls: ["https://staging.example.com"],
+      options: CREDENTIALS,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.source).toBe("local");
+    expect(result.value.options.extraHeaders).toEqual(
+      CREDENTIALS.extraHeaders,
+    );
+    expect(result.value.options.cookies).toEqual(CREDENTIALS.cookies);
+    expect(result.value.options.basicAuth).toEqual(CREDENTIALS.basicAuth);
+  });
+
+  it("rejects PSI + credentials with a reason the user can act on", () => {
+    const result = parseCreateBatchBody({
+      urls: ["https://staging.example.com"],
+      source: "psi",
+      options: CREDENTIALS,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    const issue = result.issues.find((i) => i.path === "source");
+    expect(issue).toBeDefined();
+    // The message must say WHY, and name both remedies.
+    expect(issue!.message).toMatch(/Google's servers/);
+    expect(issue!.message).toMatch(/Local/);
+  });
+
+  it("rejects PSI with any single credential mechanism", () => {
+    for (const credential of [
+      { extraHeaders: CREDENTIALS.extraHeaders },
+      { cookies: CREDENTIALS.cookies },
+      { basicAuth: CREDENTIALS.basicAuth },
+    ]) {
+      const result = parseCreateBatchBody({
+        urls: ["https://staging.example.com"],
+        source: "psi",
+        options: credential,
+      });
+      expect(result.ok).toBe(false);
+    }
+  });
+
+  it("rejects the redacted placeholders a stored run reads back", () => {
+    // Re-run posts a stored run's options verbatim; an authenticated run keeps
+    // its header/cookie names with "[redacted]" values, which must never be
+    // sent as a live header.
+    const result = parseCreateBatchBody({
+      urls: ["https://staging.example.com"],
+      options: {
+        extraHeaders: { "X-Preview-Token": REDACTED },
+        basicAuth: { username: REDACTED, password: REDACTED },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    const issue = result.issues.find((i) => i.path === "options");
+    expect(issue).toBeDefined();
+    expect(issue!.message).toMatch(/never saved/);
+  });
+
+  it("accepts PSI with no credentials, and with empty credential maps", () => {
+    const plain = parseCreateBatchBody({
+      urls: ["https://example.com"],
+      source: "psi",
+    });
+    expect(plain.ok).toBe(true);
+
+    // `{}` normalises to "no credential" in the options schema, so it is not a
+    // conflict — sending nothing and sending an empty map are the same request.
+    const empty = parseCreateBatchBody({
+      urls: ["https://example.com"],
+      source: "psi",
+      options: { extraHeaders: {}, cookies: {} },
+    });
+    expect(empty.ok).toBe(true);
+  });
+});
+
+describe("URLs with embedded credentials", () => {
+  // `https://user:pass@host` is a fourth credential channel and the only one
+  // that would be written down verbatim (`runs.url`), so it is refused rather
+  // than redacted — see the schema's superRefine.
+  it("rejects a URL carrying userinfo", () => {
+    const result = parseCreateBatchBody({
+      urls: ["https://staging:hunter2@example.com/"],
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.issues[0]?.message).toMatch(/must not embed a username/i);
+  });
+
+  it("rejects a URL carrying only a username", () => {
+    const result = parseCreateBatchBody({ urls: ["https://staging@example.com/"] });
+    expect(result.ok).toBe(false);
+  });
+
+  it("still accepts an ordinary URL", () => {
+    expect(parseCreateBatchBody({ urls: ["https://example.com/"] }).ok).toBe(true);
   });
 });

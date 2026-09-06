@@ -19,8 +19,12 @@
  */
 
 import type { ReactNode } from "react";
-import { Activity, Cpu, Gauge } from "lucide-react";
+import { Activity, Cpu, Gauge, KeyRound } from "lucide-react";
 
+import {
+  describeCredentialMechanisms,
+  summarizeCredentials,
+} from "@/components/audit/credential-draft";
 import {
   Readout,
   ReadoutCell,
@@ -28,6 +32,7 @@ import {
   ReadoutNote,
 } from "@/components/audit/readout";
 import type { Calibration } from "@/lib/lighthouse/calibrate";
+import type { AuditCredentials } from "@/lib/lighthouse/credentials";
 import type { Throttling } from "@/lib/lighthouse/types";
 
 /** Lighthouse's built-in CPU slowdown when no multiplier is pinned. */
@@ -46,6 +51,18 @@ export interface RunConfigCardProps {
   /** Calibration derived from the latest run's benchmarkIndex, or null when none. */
   calibration: Calibration | null;
   /**
+   * Credentials the run will authenticate with, or `undefined` for a public
+   * page (ROADMAP Phase B).
+   *
+   * **Provenance only — this component reads NAMES and never a value.** That is
+   * what lets the same prop take either source: the live draft from the
+   * Authentication disclosure (where the values are real) or a persisted
+   * `batch.options` (where `redactAuditOptions` has already replaced every value
+   * with the literal `[redacted]`). Both render identically, because
+   * {@link describeCredentialMechanisms} has no path to a value at all.
+   */
+  credentials?: AuditCredentials;
+  /**
    * Panel actions (Calibrate / Match DevTools / Save as daily) rendered inside
    * the strip. Keeping them in the same bezel as the numbers they act on turns
    * the readout plus a floating button stack into one instrument footer.
@@ -57,6 +74,7 @@ export function RunConfigCard({
   throttling,
   cpuSlowdownMultiplier,
   calibration,
+  credentials,
   actions,
 }: RunConfigCardProps) {
   const isPinned = typeof cpuSlowdownMultiplier === "number";
@@ -71,6 +89,12 @@ export function RunConfigCard({
     calibration != null &&
     isPinned &&
     cpuSlowdownMultiplier === calibration.recommendedMultiplier;
+
+  // Names of the credential mechanisms in play, e.g. ["basic auth",
+  // "Cookie: session", "X-Preview-Token"]. Empty for an unauthenticated run,
+  // which is the overwhelmingly common case — so the extra note only ever
+  // appears when there is genuinely something extra to say.
+  const mechanisms = describeCredentialMechanisms(credentials);
 
   return (
     <Readout className="@2xl:flex-row @2xl:items-center @2xl:justify-between @2xl:gap-6">
@@ -92,6 +116,12 @@ export function RunConfigCard({
             label="Suggested"
             value={recommendation}
           />
+          <ReadoutCell
+            icon={<KeyRound className="size-3" aria-hidden />}
+            label="Auth"
+            value={summarizeCredentials(credentials)}
+            tone={mechanisms.length > 0 ? "good" : "default"}
+          />
         </ReadoutCells>
         <ReadoutNote>
           {calibration
@@ -100,6 +130,12 @@ export function RunConfigCard({
               : `Latest host reads ${Math.round(calibration.benchmarkIndex)} — ${calibration.deviceClassLabel.toLowerCase()}. Calibrate to retarget mid-tier mobile.`
             : "Run an audit to read this host's benchmark, then calibrate."}
         </ReadoutNote>
+        {mechanisms.length > 0 ? (
+          <ReadoutNote>
+            Authenticating with {mechanisms.join(", ")}. Held for this batch
+            only — the history record keeps these names, never their values.
+          </ReadoutNote>
+        ) : null}
       </div>
       {actions ? (
         <div className="flex shrink-0 flex-wrap items-center gap-2 @2xl:justify-end">

@@ -9,6 +9,8 @@
  * Keep this file free of runtime/Chrome imports so it can be shared everywhere.
  */
 
+import type { AuditCredentials } from "@/lib/lighthouse/credentials";
+
 /**
  * Lighthouse v13 scoring categories (PWA was removed in v13).
  *
@@ -62,8 +64,17 @@ export const MAX_RUNS = 5;
 export const MIN_CPU_MULTIPLIER = 1;
 export const MAX_CPU_MULTIPLIER = 20;
 
-/** Validated audit configuration consumed by the engine. */
-export interface AuditOptions {
+/**
+ * Validated audit configuration consumed by the engine.
+ *
+ * Extends {@link AuditCredentials}, so `extraHeaders` / `cookies` / `basicAuth`
+ * are optional members of the options contract and travel with the job payload
+ * to the forked worker — never through a module global. They are the ONE part of
+ * this object that must never be written down: see
+ * `src/lib/lighthouse/credentials.ts` for the redaction seam that keeps them out
+ * of SQLite, report files, SSE events and the client bundle.
+ */
+export interface AuditOptions extends AuditCredentials {
   formFactor: FormFactor;
   throttling: Throttling;
   /** Categories to run; at least one. Order is not significant. */

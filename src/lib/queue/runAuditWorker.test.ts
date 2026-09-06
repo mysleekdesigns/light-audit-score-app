@@ -187,3 +187,99 @@ describe("runAuditInWorker failure surfacing (forked fixtures)", () => {
     expect(new WorkerAbortError("https://example.com/")).toBeInstanceOf(Error);
   });
 });
+
+describe("credential handoff (ROADMAP Phase B)", () => {
+  let dir: string;
+
+  beforeAll(() => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "lh-cred-test-"));
+  });
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+    delete process.env.LH_AUDIT_WORKER_SCRIPT;
+  });
+
+  /**
+   * A fixture worker that reports back exactly what it was handed: the raw
+   * `LH_AUDIT_INPUT` the parent put in its ENVIRONMENT, and the credentials it
+   * received over IPC. That lets one real fork prove both halves of the M2 fix
+   * — the env is clean, and the handoff still works.
+   */
+  const echoWorker = (): string => {
+    const file = path.join(dir, "echo-credentials.cjs");
+    writeFileSync(
+      file,
+      [
+        "const fs = require('node:fs');",
+        "const input = process.env.LH_AUDIT_INPUT;",
+        "const finish = (credentials) => {",
+        "  fs.writeFileSync(process.env.LH_AUDIT_OUTPUT, JSON.stringify({",
+        "    envInput: input,",
+        "    envKeys: Object.keys(process.env).filter((k) => k.startsWith('LH_AUDIT')),",
+        "    credentials: credentials ?? null,",
+        "  }));",
+        "  process.send({ ok: true }, () => process.exit(0));",
+        "};",
+        "if (JSON.parse(input).awaitCredentials) {",
+        "  process.on('message', (m) => { if (m && m.type === 'credentials') finish(m.credentials); });",
+        "} else { finish(null); }",
+      ].join("\n"),
+      "utf8",
+    );
+    return file;
+  };
+
+  const CREDENTIALED = {
+    ...OPTIONS,
+    basicAuth: { username: "staging", password: "hunter2-secret" },
+    cookies: { session: "cookie-secret" },
+    extraHeaders: { "X-Preview-Token": "header-secret" },
+  } as unknown as AuditOptions;
+
+  it("keeps every credential value OUT of the fork's environment", async () => {
+    process.env.LH_AUDIT_WORKER_SCRIPT = echoWorker();
+    const result = (await runAuditInWorker(
+      "https://staging.example.com/",
+      CREDENTIALED,
+    )) as unknown as { envInput: string; envKeys: string[] };
+
+    // The environment is inherited by every descendant, Chrome included.
+    for (const secret of ["hunter2-secret", "cookie-secret", "header-secret"]) {
+      expect(result.envInput).not.toContain(secret);
+    }
+    // Only the two documented variables — no new credential-bearing one.
+    expect(result.envKeys.sort()).toEqual([
+      "LH_AUDIT_INPUT",
+      "LH_AUDIT_OUTPUT",
+      "LH_AUDIT_WORKER_SCRIPT",
+    ]);
+    // The names are stripped too, not just the values.
+    expect(result.envInput).not.toContain("X-Preview-Token");
+    expect(JSON.parse(result.envInput).awaitCredentials).toBe(true);
+  });
+
+  it("delivers the credentials over IPC instead", async () => {
+    process.env.LH_AUDIT_WORKER_SCRIPT = echoWorker();
+    const result = (await runAuditInWorker(
+      "https://staging.example.com/",
+      CREDENTIALED,
+    )) as unknown as { credentials: Record<string, unknown> };
+
+    expect(result.credentials).toEqual({
+      basicAuth: { username: "staging", password: "hunter2-secret" },
+      cookies: { session: "cookie-secret" },
+      extraHeaders: { "X-Preview-Token": "header-secret" },
+    });
+  });
+
+  it("sends no credential message, and no flag, for an unauthenticated job", async () => {
+    process.env.LH_AUDIT_WORKER_SCRIPT = echoWorker();
+    const result = (await runAuditInWorker(
+      "https://example.com/",
+      OPTIONS,
+    )) as unknown as { credentials: unknown; envInput: string };
+
+    expect(result.credentials).toBeNull();
+    expect(JSON.parse(result.envInput).awaitCredentials).toBe(false);
+  });
+});

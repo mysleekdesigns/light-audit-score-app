@@ -17,6 +17,12 @@ import { parseUrls } from "@/lib/parseUrls";
 import type { CreateBatchRequest } from "@/lib/client/auditClient";
 import { selectedUrls, type DiscoverResult } from "@/lib/crawl/types";
 import { samplePerTemplate } from "@/lib/crawl/template";
+import { AuthDisclosure } from "@/components/audit/auth-disclosure";
+import {
+  type CredentialDraft,
+  emptyCredentialDraft,
+  resolveCredentialDraft,
+} from "@/components/audit/credential-draft";
 import { CrawlPanel } from "@/components/audit/crawl-panel";
 import {
   WorkspacePanel,
@@ -56,6 +62,7 @@ import {
 } from "@/lib/settings/defaults";
 import { useAuditDefaults } from "@/hooks/useAuditDefaults";
 import { useLocalAuditDraft } from "@/hooks/useAuditDraft";
+import { cn } from "@/lib/utils";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -208,6 +215,28 @@ export function NewAuditForm({
   // with the PSI form; drives the auto-selection of the discovered set.
   const [pagesPerTemplate, setPagesPerTemplate] = useState(0);
 
+  // Credentials for a protected site (ROADMAP Phase B).
+  //
+  // DELIBERATELY a plain `useState` — do NOT move this into `useAuditDefaults`
+  // (localStorage) or `useLocalAuditDraft` (sessionStorage) to make it
+  // consistent with every other control on this form. Both of those are files on
+  // disk that outlive the batch, and these are the AUDITED SITE's secrets, not
+  // ours: they are held in memory for one batch and must never be written down
+  // (`.claude/rules/security.md`, `@/lib/lighthouse/credentials`). The lost
+  // convenience — retyping a token after a reload — is the point, and `.env`
+  // (`LH_AUDIT_*`, read inside the worker) is the supported route for anything
+  // worth keeping.
+  const [credentialDraft, setCredentialDraft] =
+    useState<CredentialDraft>(emptyCredentialDraft);
+
+  // One resolution per keystroke, shared by the disclosure's messages, the
+  // submit gate, the crawl request and the run-config readout — so the panel and
+  // the gate can never disagree about whether the draft is valid.
+  const credentials = useMemo(
+    () => resolveCredentialDraft(credentialDraft),
+    [credentialDraft],
+  );
+
   // Seed device / runs / concurrency / categories from the persisted defaults
   // exactly once, the render after the hook has read localStorage (`loaded`
   // flips true). Adjusting state during render — guarded by a one-shot state
@@ -241,7 +270,10 @@ export function NewAuditForm({
   // The active tab is the single source of truth for what gets submitted.
   const urls = tab === "paste" ? pastedUrls : crawlUrls;
 
-  const canSubmit = urls.length > 0 && !isRunning;
+  // A malformed credential is a guaranteed 400 from `auditOptionsSchema`, so the
+  // gate refuses it here and the footer caption says why — the same discipline
+  // the URL count already gets.
+  const canSubmit = urls.length > 0 && !isRunning && !credentials.hasErrors;
 
   // Calibration is pure + cheap, but memoised so the derived recommendation is a
   // stable reference for the readout card across unrelated re-renders.
@@ -508,7 +540,20 @@ export function NewAuditForm({
     [urls],
   );
 
-  const canSaveSchedule = urls.length > 0 && !isRunning;
+  const canSaveSchedule = urls.length > 0 && !isRunning && !credentials.hasErrors;
+
+  // A schedule is PERSISTED, and a credential must never be — so a saved
+  // schedule carries the run config without one and fires unauthenticated
+  // unless the long-lived `LH_AUDIT_*` env vars are set (those are read inside
+  // the worker on every run, including a scheduled one). Say so on the trigger
+  // rather than letting a nightly run quietly start collecting login pages.
+  const saveScheduleTitle = credentials.hasErrors
+    ? "Fix the Authentication fields before saving as daily"
+    : !canSaveSchedule
+      ? "Add at least one URL before saving as daily"
+      : credentials.credentials
+        ? "Save these targets + options as a daily schedule. Credentials are not saved — a scheduled run authenticates only via .env"
+        : "Save these targets + options as a daily schedule";
 
   function handleSubmit() {
     if (!canSubmit) return;
@@ -529,6 +574,12 @@ export function NewAuditForm({
         // Best Practices parity levers: warm/cold cache + optional UA override.
         warmCache,
         emulatedUserAgent: resolveUserAgentPreset(userAgentPreset),
+        // Credentials for a protected site, spread in so an unauthenticated run
+        // sends no credential FIELDS at all — an absent field, not an empty
+        // object, is the only honest representation of "no credential". The
+        // queue holds them out-of-band and every persistence boundary redacts
+        // them (`@/lib/lighthouse/credentials`).
+        ...credentials.credentials,
       },
       concurrency,
       accuracyMode,
@@ -627,6 +678,11 @@ export function NewAuditForm({
                     result={crawlResult}
                     pagesPerTemplate={pagesPerTemplate}
                     onPagesPerTemplateChange={handlePagesPerTemplateChange}
+                    // Discovery walks the site with the SAME credentials the
+                    // audit will run with — otherwise a protected staging
+                    // environment discovers exactly one page: its login form.
+                    auth={credentials.credentials}
+                    authError={credentials.firstError}
                     disabled={isRunning}
                   />
                 </TabsContent>
@@ -875,6 +931,19 @@ export function NewAuditForm({
                 </FieldSet>
               </div>
 
+              {/* Authentication — collapsed by default, because the
+                  overwhelmingly common audit is unauthenticated and this must
+                  not add noise to the default instrument. It sits in Run config
+                  rather than Targets because a credential is a property of the
+                  run, and because BOTH target tabs need it: the crawl walks the
+                  protected site with the same block the audit runs with. */}
+              <AuthDisclosure
+                value={credentialDraft}
+                onChange={setCredentialDraft}
+                resolution={credentials}
+                disabled={isRunning}
+              />
+
               {/* Instrument footer, pinned to the bottom of the panel (`mt-auto`)
                   so the section reads as a console with a status bar rather than
                   trailing off into dead space beside the taller Targets column.
@@ -911,6 +980,9 @@ export function NewAuditForm({
                   throttling={throttling}
                   cpuSlowdownMultiplier={cpuSlowdownMultiplier}
                   calibration={calibration}
+                  // Provenance only — the readout names the mechanisms and
+                  // never renders a value (see `RunConfigCardProps`).
+                  credentials={credentials.credentials}
                   actions={
                     <>
                       <Button
@@ -945,11 +1017,7 @@ export function NewAuditForm({
                         size="sm"
                         onClick={() => setScheduleOpen(true)}
                         disabled={!canSaveSchedule}
-                        title={
-                          canSaveSchedule
-                            ? "Save these targets + options as a daily schedule"
-                            : "Add at least one URL before saving as daily"
-                        }
+                        title={saveScheduleTitle}
                       >
                         <CalendarPlus data-icon="inline-start" />
                         Save as daily
@@ -962,12 +1030,23 @@ export function NewAuditForm({
           </div>
         </CardContent>
         <CardFooter className="flex-col-reverse items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-center font-mono text-[0.65rem] uppercase tracking-[0.18em] text-muted-foreground sm:text-left">
-            {urls.length > 0
-              ? `${urls.length} ${urls.length === 1 ? "target" : "targets"} ready`
-              : tab === "paste"
-                ? "Paste at least one URL to begin"
-                : "Discover and select at least one URL to begin"}
+          {/* Why Run audit is disabled, in the place that already answers that
+              question. A credential problem outranks the URL count: it is the
+              one the user cannot see with the disclosure collapsed. */}
+          <p
+            aria-live="polite"
+            className={cn(
+              "text-center font-mono text-[0.65rem] uppercase tracking-[0.18em] sm:text-left",
+              credentials.hasErrors ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {credentials.hasErrors
+              ? "Fix the Authentication fields to run"
+              : urls.length > 0
+                ? `${urls.length} ${urls.length === 1 ? "target" : "targets"} ready`
+                : tab === "paste"
+                  ? "Paste at least one URL to begin"
+                  : "Discover and select at least one URL to begin"}
           </p>
           <Button
             type="button"

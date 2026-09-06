@@ -32,10 +32,18 @@ vi.mock("@/lib/db/persistence", () => ({
   updateBatchStatus: vi.fn(),
 }));
 
+// Mock the PSI engine too: the credential tests below drive the `source: "psi"`
+// branch, which must never reach Google (nor be given anything to send).
+vi.mock("@/lib/pagespeed/runPsiAudit", () => ({
+  runPsiAudit: vi.fn(),
+}));
+
 const { runAuditInWorker } = await import("@/lib/queue/runAuditWorker");
+const { runPsiAudit } = await import("@/lib/pagespeed/runPsiAudit");
 const persistence = await import("@/lib/db/persistence");
 const { AuditQueue, getAuditQueue } = await import("@/lib/queue/AuditQueue");
 
+import { REDACTED } from "@/lib/lighthouse/credentials";
 import {
   type AuditQueueApi,
   type Batch,
@@ -46,6 +54,7 @@ import {
 } from "@/lib/queue/types";
 
 const mockRunAudit = vi.mocked(runAuditInWorker);
+const mockRunPsi = vi.mocked(runPsiAudit);
 const mockRecordBatch = vi.mocked(persistence.recordBatch);
 const mockRecordRun = vi.mocked(persistence.recordRun);
 const mockRecordFailedRun = vi.mocked(persistence.recordFailedRun);
@@ -57,6 +66,55 @@ const OPTIONS: CreateBatchInput["options"] = {
   runs: 1,
   warmCache: true,
 };
+
+// --- Credential fixtures (ROADMAP Phase B) ---------------------------------
+
+/**
+ * Distinctive fake credential VALUES. Every leak assertion below is a substring
+ * search for these over `JSON.stringify` of a payload, which is exactly the
+ * shape of the real risk: the API routes and the SSE stream serialise batches
+ * and events wholesale, so a value that survives serialisation reaches the
+ * browser no matter which field it hid in.
+ */
+const SECRET_HEADER_VALUE = "preview-token-do-not-persist";
+const SECRET_COOKIE_VALUE = "session-value-do-not-persist";
+const SECRET_PASSWORD = "basic-auth-password-do-not-persist";
+const SECRETS = [SECRET_HEADER_VALUE, SECRET_COOKIE_VALUE, SECRET_PASSWORD];
+
+const CREDENTIALED_OPTIONS: CreateBatchInput["options"] = {
+  ...OPTIONS,
+  extraHeaders: { "X-Preview-Token": SECRET_HEADER_VALUE },
+  cookies: { session: SECRET_COOKIE_VALUE },
+  basicAuth: { username: "staging", password: SECRET_PASSWORD },
+};
+
+/** Assert no credential value survives serialising `payload`. */
+function expectNoSecrets(payload: unknown): void {
+  const serialised = JSON.stringify(payload);
+  for (const secret of SECRETS) {
+    expect(serialised).not.toContain(secret);
+  }
+}
+
+/**
+ * Peek at the queue's private per-batch credential side map. Reaching into a
+ * private is deliberate here: "the credential is gone once the batch settles" is
+ * a security invariant whose whole point is that it has no public surface.
+ */
+function credentialMap(queue: AuditQueueApi): Map<string, unknown> {
+  return (queue as unknown as { batchCredentials: Map<string, unknown> })
+    .batchCredentials;
+}
+
+/**
+ * A worker stub that echoes back the options it was called with, the way the
+ * real engine does (`median.ts` puts the resolved options on the AuditResult) —
+ * so these tests exercise the path a credential would actually take home.
+ */
+function echoingWorker(perf = 90) {
+  return (url: string, options: CreateBatchInput["options"]) =>
+    Promise.resolve({ ...makeResult(url, perf), options });
+}
 
 /**
  * Build a synthetic full {@link AuditResult} that DOES include a `median.lhr`
@@ -124,6 +182,7 @@ function awaitBatch(
 describe("AuditQueue", () => {
   beforeEach(() => {
     mockRunAudit.mockReset();
+    mockRunPsi.mockReset();
     mockRecordBatch.mockClear();
     mockRecordRun.mockClear();
     mockRecordFailedRun.mockClear();
@@ -635,5 +694,193 @@ describe("AuditQueue", () => {
   it("cancelBatch returns undefined for an unknown batch id", () => {
     const queue = new AuditQueue();
     expect(queue.cancelBatch("does-not-exist")).toBeUndefined();
+  });
+});
+
+/**
+ * Credential handling (ROADMAP Phase B).
+ *
+ * The load-bearing claim is structural, not cosmetic: a credential never goes
+ * onto the `Batch` at all, so every existing serialisation boundary (`POST
+ * /api/audits`, `GET /api/audits/:id`, the SSE `batch-snapshot`) is safe by
+ * construction rather than by anyone remembering to redact. These tests assert
+ * that from the outside — over `JSON.stringify` of the very payloads those
+ * routes send — and then assert the credential still reaches the one consumer
+ * that legitimately needs it: the forked local worker.
+ */
+describe("AuditQueue — audit credentials", () => {
+  beforeEach(() => {
+    mockRunAudit.mockReset();
+    mockRunPsi.mockReset();
+    mockRecordBatch.mockClear();
+    mockRecordRun.mockClear();
+    mockRecordFailedRun.mockClear();
+  });
+
+  it("keeps credential values off the snapshot, getBatch and every progress event", async () => {
+    mockRunAudit.mockImplementation(echoingWorker());
+    const queue = new AuditQueue();
+
+    const initial = queue.createBatch({
+      urls: ["https://staging.test/"],
+      device: "mobile",
+      options: CREDENTIALED_OPTIONS,
+      concurrency: 1,
+    });
+    const { events, done } = awaitBatch(queue, initial.id);
+    await done;
+
+    // The three client-facing surfaces, serialised exactly as the routes do.
+    expectNoSecrets(initial);
+    expectNoSecrets(queue.getBatch(initial.id));
+    expectNoSecrets(events);
+
+    // Names survive as provenance — a run can say WHICH credential it used,
+    // never what it was.
+    expect(initial.options.extraHeaders).toEqual({
+      "X-Preview-Token": REDACTED,
+    });
+    expect(initial.options.cookies).toEqual({ session: REDACTED });
+    expect(initial.options.basicAuth).toEqual({
+      username: REDACTED,
+      password: REDACTED,
+    });
+  });
+
+  it("redacts the options the engine echoes back before they reach persistence", async () => {
+    // The engine returns the options it ran with on the AuditResult, so without
+    // the queue's redaction the real values would ride home into `runs.options`
+    // and onto the job's lite result (which every SSE payload carries).
+    mockRunAudit.mockImplementation(echoingWorker(42));
+    const queue = new AuditQueue();
+
+    const initial = queue.createBatch({
+      urls: ["https://staging.test/"],
+      device: "mobile",
+      options: CREDENTIALED_OPTIONS,
+      concurrency: 1,
+    });
+    const { done } = awaitBatch(queue, initial.id);
+    await done;
+
+    expect(mockRecordRun).toHaveBeenCalledTimes(1);
+    const [, , persisted] = mockRecordRun.mock.calls[0];
+    expectNoSecrets(persisted.options);
+    expect(persisted.options.extraHeaders).toEqual({
+      "X-Preview-Token": REDACTED,
+    });
+
+    // The in-memory full result (served via `getJobResult`) is redacted too.
+    const jobId = queue.getBatch(initial.id)!.jobs[0].id;
+    expectNoSecrets(queue.getJobResult(jobId)?.options);
+  });
+
+  it("hands the real credential values to the local worker", async () => {
+    mockRunAudit.mockImplementation(echoingWorker());
+    const queue = new AuditQueue();
+
+    const initial = queue.createBatch({
+      urls: ["https://staging.test/"],
+      device: "mobile",
+      options: CREDENTIALED_OPTIONS,
+      concurrency: 1,
+    });
+    const { done } = awaitBatch(queue, initial.id);
+    await done;
+
+    expect(mockRunAudit).toHaveBeenCalledTimes(1);
+    const [url, workerOptions] = mockRunAudit.mock.calls[0];
+    expect(url).toBe("https://staging.test/");
+    expect(workerOptions.extraHeaders).toEqual({
+      "X-Preview-Token": SECRET_HEADER_VALUE,
+    });
+    expect(workerOptions.cookies).toEqual({ session: SECRET_COOKIE_VALUE });
+    expect(workerOptions.basicAuth).toEqual({
+      username: "staging",
+      password: SECRET_PASSWORD,
+    });
+  });
+
+  it("never hands a credential to PageSpeed Insights", async () => {
+    // `audits-schema` rejects source=psi + credentials with a 400 explaining
+    // why; this is the queue's defensive second layer, which also drops the
+    // redacted placeholders so PSI never sees even a credential's name.
+    mockRunPsi.mockImplementation(echoingWorker(80));
+    const queue = new AuditQueue();
+
+    const initial = queue.createBatch({
+      urls: ["https://public.test/"],
+      device: "mobile",
+      options: CREDENTIALED_OPTIONS,
+      source: "psi",
+      concurrency: 1,
+    });
+    const { events, done } = awaitBatch(queue, initial.id);
+    await done;
+
+    expect(mockRunPsi).toHaveBeenCalledTimes(1);
+    const [, psiOptions] = mockRunPsi.mock.calls[0];
+    expect(psiOptions.extraHeaders).toBeUndefined();
+    expect(psiOptions.cookies).toBeUndefined();
+    expect(psiOptions.basicAuth).toBeUndefined();
+    expectNoSecrets(events);
+    // The local worker is never involved on the PSI branch.
+    expect(mockRunAudit).not.toHaveBeenCalled();
+  });
+
+  it("holds the credential only while the batch is unsettled", async () => {
+    mockRunAudit.mockImplementation(echoingWorker());
+    const queue = new AuditQueue();
+
+    const initial = queue.createBatch({
+      urls: ["https://staging.test/"],
+      device: "mobile",
+      options: CREDENTIALED_OPTIONS,
+      concurrency: 1,
+    });
+    // Present for the life of the batch...
+    expect(credentialMap(queue).has(initial.id)).toBe(true);
+
+    const { done } = awaitBatch(queue, initial.id);
+    await done;
+
+    // ...and gone the moment it settles.
+    expect(credentialMap(queue).has(initial.id)).toBe(false);
+  });
+
+  it("drops the credential when the batch is cancelled", () => {
+    mockRunAudit.mockImplementation(echoingWorker());
+    const queue = new AuditQueue();
+
+    const initial = queue.createBatch({
+      urls: ["https://staging.test/"],
+      device: "mobile",
+      options: CREDENTIALED_OPTIONS,
+      concurrency: 1,
+    });
+    expect(credentialMap(queue).has(initial.id)).toBe(true);
+
+    const cancelled = queue.cancelBatch(initial.id);
+    expect(cancelled?.status).toBe("cancelled");
+    expect(credentialMap(queue).has(initial.id)).toBe(false);
+    expectNoSecrets(cancelled);
+  });
+
+  it("stores nothing for a batch created without credentials", () => {
+    mockRunAudit.mockImplementation(echoingWorker());
+    const queue = new AuditQueue();
+
+    const initial = queue.createBatch({
+      urls: ["https://plain.test/"],
+      device: "mobile",
+      options: OPTIONS,
+      concurrency: 1,
+    });
+
+    expect(credentialMap(queue).size).toBe(0);
+    // Credential-free options pass through untouched (no empty placeholders).
+    expect(initial.options.extraHeaders).toBeUndefined();
+    expect(initial.options.cookies).toBeUndefined();
+    expect(initial.options.basicAuth).toBeUndefined();
   });
 });

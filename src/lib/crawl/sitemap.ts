@@ -21,6 +21,11 @@
 
 import { XMLParser } from "fast-xml-parser";
 
+import {
+  credentialedFetch,
+  type CredentialHeaderResolver,
+} from "./credentialedFetch";
+
 /** Hard cap on sitemap documents fetched in one discovery run (index + leaves). */
 export const MAX_SITEMAPS = 20;
 
@@ -111,15 +116,21 @@ export function parseSitemapXml(xml: string): ParsedSitemap {
 }
 
 /** Fetch one sitemap document's text. Best-effort: returns `null` on any failure. */
-async function fetchSitemapText(url: string): Promise<string | null> {
+async function fetchSitemapText(
+  url: string,
+  resolveCredentials?: CredentialHeaderResolver,
+): Promise<string | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SITEMAP_FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: { "user-agent": "LighthouseAuditBot" },
-      redirect: "follow",
-    });
+    const res = await credentialedFetch(
+      url,
+      {
+        signal: controller.signal,
+        headers: { "user-agent": "LighthouseAuditBot" },
+      },
+      resolveCredentials,
+    );
     if (!res.ok) return null;
     return await res.text();
   } catch {
@@ -135,6 +146,19 @@ export interface GatherSitemapOptions {
   maxUrls?: number;
   /** Hard cap on documents fetched (defaults to {@link MAX_SITEMAPS}). */
   maxSitemaps?: number;
+  /**
+   * Per-URL credential decision (ROADMAP Phase B), so a protected site's
+   * sitemap can be read with the audit credential.
+   *
+   * This is the one place in discovery where the URLs being fetched are
+   * *declared by the site*, not derived from the seed: the seeds come from
+   * `robots.txt` `Sitemap:` lines and the children from a `<sitemapindex>`, both
+   * of which may name any absolute URL at all. Every document URL is therefore
+   * passed to the resolver individually, and one that points off-site is fetched
+   * without the credential rather than skipped — a public CDN-hosted sitemap for
+   * a protected site is a perfectly ordinary arrangement.
+   */
+  resolveCredentials?: CredentialHeaderResolver;
 }
 
 /**
@@ -160,7 +184,7 @@ export async function gatherSitemapUrls(
     if (next === undefined || visited.has(next)) continue;
     visited.add(next);
 
-    const text = await fetchSitemapText(next);
+    const text = await fetchSitemapText(next, options.resolveCredentials);
     fetched++;
     if (text === null) continue;
 

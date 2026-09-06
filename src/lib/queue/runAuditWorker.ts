@@ -27,6 +27,10 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import {
+  extractAuditCredentials,
+  stripAuditCredentials,
+} from "@/lib/lighthouse/credentials";
 import type { AuditOptions, AuditResult } from "@/lib/lighthouse/types";
 
 /**
@@ -187,9 +191,26 @@ export async function runAuditInWorker(
     execArgv.push("--import", pathToFileURL(aliasHooks).href);
   }
 
+  // Credentials (ROADMAP Phase B) travel over IPC, NOT in the fork's
+  // environment. A process's environment is readable by anything running as the
+  // same user AND is inherited by every descendant — and this worker launches
+  // Chrome, so an `LH_AUDIT_INPUT` carrying the site's `Authorization` value
+  // would put it in the environment of the very process that renders untrusted
+  // web content. The IPC channel below is already open for the completion
+  // signal; a message on it is process-private and lives only as long as the
+  // handler that reads it. So the env carries credential-FREE options, and the
+  // values are sent separately, immediately after fork.
+  const credentials = extractAuditCredentials(options);
   const forkEnv: NodeJS.ProcessEnv = {
     ...process.env,
-    LH_AUDIT_INPUT: JSON.stringify({ url, options }),
+    LH_AUDIT_INPUT: JSON.stringify({
+      url,
+      options: credentials ? stripAuditCredentials(options) : options,
+      // Tells the worker to WAIT for the credential message rather than racing
+      // ahead and auditing the page unauthenticated (which would 401 and look
+      // like a broken credential instead of a broken handoff).
+      awaitCredentials: credentials !== undefined,
+    }),
     LH_AUDIT_OUTPUT: outFile,
   };
 
@@ -202,6 +223,12 @@ export async function runAuditInWorker(
       // Keep IPC for the completion signal; capture stderr for error context.
       stdio: ["ignore", "ignore", "pipe", "ipc"],
     });
+
+    // Hand the credentials over the private channel. `child.send` before the
+    // channel is ready is buffered by Node, so this cannot race the fork.
+    if (credentials) {
+      child.send({ type: "credentials", credentials });
+    }
 
     let settled = false;
     let timedOut = false;

@@ -1,15 +1,57 @@
-import { describe, expect, it } from "vitest";
+import { type LighthouseFlags } from "lighthouse";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  ENV_BASIC_AUTH,
+  ENV_CREDENTIAL_HOSTS,
+  ENV_COOKIES,
+  ENV_EXTRA_HEADERS,
+} from "@/lib/lighthouse/credentials";
+import {
+  buildCredentialFlags,
   buildThrottlingFlags,
   parseCategoryAudits,
   parseEnvironment,
   parseLhr,
+  resolveEngineCredentials,
+  runSingleAudit,
 } from "@/lib/lighthouse/runAudit";
 import {
   type AuditOptions,
   type LighthouseResult,
 } from "@/lib/lighthouse/types";
+
+/**
+ * Stub the engine's two side-effecting imports so the credential wiring can be
+ * exercised end-to-end without a browser: `chrome-launcher.launch` returns a
+ * fake port, and `lighthouse` itself returns a fabricated LHR. Everything else
+ * in the `lighthouse` namespace is kept real via `importActual` — the throttling
+ * tests below read `defaultConfig`/`desktopConfig` from it, and those must stay
+ * Lighthouse's genuine profiles.
+ *
+ * `vi.hoisted` is what lets the mock factories close over these fns: `vi.mock`
+ * is hoisted above the imports, so a plain `const` would still be in its TDZ
+ * when the factory runs.
+ */
+const { lighthouseRun, launchChrome } = vi.hoisted(() => ({
+  lighthouseRun:
+    vi.fn<
+      (
+        url: string,
+        flags: LighthouseFlags,
+        config?: Record<string, unknown>,
+      ) => Promise<{ lhr: LighthouseResult; report: string[] }>
+    >(),
+  launchChrome: vi.fn<() => Promise<{ port: number; kill: () => void }>>(),
+}));
+
+vi.mock("lighthouse", async () => {
+  const actual =
+    await vi.importActual<typeof import("lighthouse")>("lighthouse");
+  return { ...actual, default: lighthouseRun };
+});
+
+vi.mock("chrome-launcher", () => ({ launch: launchChrome }));
 
 /** A small but representative in-memory LHR. No Chrome is launched here. */
 function sampleLhr(): LighthouseResult {
@@ -356,5 +398,202 @@ describe("parseEnvironment", () => {
       throttlingMethod: "simulate",
       cpuSlowdownMultiplier: null,
     });
+  });
+});
+
+/** A URL on an allow-listed host, so env credentials are in scope. */
+const AUDIT_URL = "https://staging.example.com/page";
+
+describe("resolveEngineCredentials", () => {
+  it("returns undefined when neither the environment nor the options carry one", () => {
+    expect(resolveEngineCredentials(baseOptions(), {}, AUDIT_URL)).toBeUndefined();
+    // An empty header map is not a credential (see hasAuditCredentials).
+    expect(
+      resolveEngineCredentials(baseOptions({ extraHeaders: {} }), {}, AUDIT_URL),
+    ).toBeUndefined();
+  });
+
+  it("resolves long-lived credentials from the environment alone", () => {
+    const credentials = resolveEngineCredentials(
+      baseOptions(),
+      {
+        [ENV_CREDENTIAL_HOSTS]: "staging.example.com",
+        [ENV_BASIC_AUTH]: "staging:hunter2",
+        [ENV_COOKIES]: "session=env-session; csrf=env-csrf",
+        [ENV_EXTRA_HEADERS]: '{"X-Preview":"env-preview"}',
+      },
+      AUDIT_URL,
+    );
+    expect(credentials).toEqual({
+      basicAuth: { username: "staging", password: "hunter2" },
+      cookies: { session: "env-session", csrf: "env-csrf" },
+      extraHeaders: { "X-Preview": "env-preview" },
+    });
+  });
+
+  it("resolves per-batch credentials from the options alone", () => {
+    const credentials = resolveEngineCredentials(
+      baseOptions({
+        cookies: { session: "batch-session" },
+        basicAuth: { username: "batch", password: "pw" },
+      }),
+      {},
+      AUDIT_URL,
+    );
+    expect(credentials).toEqual({
+      cookies: { session: "batch-session" },
+      basicAuth: { username: "batch", password: "pw" },
+    });
+  });
+
+  it("layers the options over the environment, per entry", () => {
+    const credentials = resolveEngineCredentials(
+      baseOptions({
+        cookies: { session: "batch-session" },
+        basicAuth: { username: "batch", password: "batch-pw" },
+      }),
+      {
+        [ENV_CREDENTIAL_HOSTS]: "staging.example.com",
+        [ENV_BASIC_AUTH]: "env-user:env-pw",
+        [ENV_COOKIES]: "session=env-session; csrf=env-csrf",
+        [ENV_EXTRA_HEADERS]: '{"X-Preview":"env-preview"}',
+      },
+      AUDIT_URL,
+    );
+    expect(credentials).toEqual({
+      // `session` overridden by the batch, `csrf` inherited from the env…
+      cookies: { session: "batch-session", csrf: "env-csrf" },
+      // …a header the batch never mentioned survives untouched…
+      extraHeaders: { "X-Preview": "env-preview" },
+      // …and basicAuth is replaced wholesale, never half-merged.
+      basicAuth: { username: "batch", password: "batch-pw" },
+    });
+  });
+
+  it("ignores malformed environment entries instead of throwing", () => {
+    // A typo in `.env` must degrade to "no credential" (and a visible 401),
+    // never break every audit with a parse error.
+    expect(
+      resolveEngineCredentials(
+        baseOptions(),
+        {
+          [ENV_CREDENTIAL_HOSTS]: "staging.example.com",
+          [ENV_BASIC_AUTH]: "no-colon-here",
+          [ENV_EXTRA_HEADERS]: "{not json",
+        },
+        AUDIT_URL,
+      ),
+    ).toBeUndefined();
+  });
+});
+
+describe("buildCredentialFlags", () => {
+  it("emits NO flag when there is nothing to send", () => {
+    expect(buildCredentialFlags(undefined)).toEqual({});
+    expect(buildCredentialFlags({})).toEqual({});
+    expect("extraHeaders" in buildCredentialFlags({ cookies: {} })).toBe(false);
+  });
+
+  it("folds basic auth into an Authorization header", () => {
+    const flags = buildCredentialFlags({
+      basicAuth: { username: "user", password: "pw" },
+    });
+    // base64("user:pw") — the same encoding a browser sends.
+    expect(flags.extraHeaders).toEqual({ Authorization: "Basic dXNlcjpwdw==" });
+  });
+
+  it("folds every cookie into ONE Cookie header", () => {
+    const flags = buildCredentialFlags({
+      cookies: { session: "abc", csrf: "def" },
+    });
+    expect(flags.extraHeaders).toEqual({ Cookie: "session=abc; csrf=def" });
+  });
+
+  it("combines all three mechanisms into a single header map", () => {
+    const flags = buildCredentialFlags({
+      basicAuth: { username: "user", password: "pw" },
+      cookies: { session: "abc" },
+      extraHeaders: { "X-Preview": "token" },
+    });
+    expect(flags.extraHeaders).toEqual({
+      Authorization: "Basic dXNlcjpwdw==",
+      Cookie: "session=abc",
+      "X-Preview": "token",
+    });
+  });
+
+  it("lets an explicit header override the basicAuth/cookie sugar", () => {
+    // The escape hatch always wins: sugar can never clobber a header the user
+    // typed by hand.
+    const flags = buildCredentialFlags({
+      basicAuth: { username: "user", password: "pw" },
+      cookies: { session: "abc" },
+      extraHeaders: {
+        Authorization: "Bearer explicit-token",
+        Cookie: "session=explicit",
+      },
+    });
+    expect(flags.extraHeaders).toEqual({
+      Authorization: "Bearer explicit-token",
+      Cookie: "session=explicit",
+    });
+  });
+});
+
+/**
+ * End-to-end wiring check for the credential path, with `lighthouse` and
+ * `chrome-launcher` stubbed (see the mocks at the top of this file) so no
+ * browser is launched. The stub mimics the one behaviour that makes scrubbing
+ * necessary: Lighthouse copies its resolved settings into the report verbatim
+ * (`core/runner.js`: `configSettings: settings`), so whatever we send as
+ * `extraHeaders` comes straight back inside the LHR.
+ */
+describe("runSingleAudit credential wiring", () => {
+  const SESSION_VALUE = "abc123-session-value-do-not-persist";
+
+  beforeEach(() => {
+    lighthouseRun.mockReset();
+    launchChrome.mockReset();
+    launchChrome.mockResolvedValue({ port: 9222, kill: () => undefined });
+    lighthouseRun.mockImplementation((_url, flags) =>
+      Promise.resolve({
+        lhr: {
+          ...sampleLhr(),
+          configSettings: { extraHeaders: flags.extraHeaders ?? null },
+        },
+        report: [],
+      }),
+    );
+    // Long-lived credentials are read from the real environment, so pin the
+    // three vars off to keep these assertions independent of the dev's `.env`.
+    vi.stubEnv(ENV_BASIC_AUTH, undefined);
+    vi.stubEnv(ENV_COOKIES, undefined);
+    vi.stubEnv(ENV_EXTRA_HEADERS, undefined);
+  });
+
+  it("sends the folded header to Lighthouse and scrubs it back out of the LHR", async () => {
+    const result = await runSingleAudit(
+      "https://example.com/",
+      baseOptions({ cookies: { session: SESSION_VALUE } }),
+    );
+
+    // It reached Chrome…
+    const flags = lighthouseRun.mock.calls[0][1];
+    expect(flags.extraHeaders).toEqual({
+      Cookie: `session=${SESSION_VALUE}`,
+    });
+
+    // …and it is gone from everything the run hands back. `configSettings
+    // .extraHeaders` is reset to Lighthouse's own default (null), so the stored
+    // report is indistinguishable from an unauthenticated one.
+    const configSettings = result.lhr.configSettings as Record<string, unknown>;
+    expect(configSettings.extraHeaders).toBeNull();
+    expect(JSON.stringify(result)).not.toContain(SESSION_VALUE);
+  });
+
+  it("passes no extraHeaders flag at all for an unauthenticated audit", async () => {
+    await runSingleAudit("https://example.com/", baseOptions());
+    const flags = lighthouseRun.mock.calls[0][1];
+    expect("extraHeaders" in flags).toBe(false);
   });
 });

@@ -10,6 +10,15 @@
 import { z } from "zod";
 
 import {
+  COOKIE_NAME_PATTERN,
+  COOKIE_VALUE_FORBIDDEN,
+  HEADER_NAME_PATTERN,
+  HEADER_VALUE_FORBIDDEN,
+  MAX_CREDENTIAL_ENTRIES,
+  MAX_HEADER_NAME_LENGTH,
+  MAX_HEADER_VALUE_LENGTH,
+} from "@/lib/lighthouse/credentials";
+import {
   type AuditOptions,
   type DeviceSelection,
   type FormFactor,
@@ -30,6 +39,134 @@ const CATEGORY_VALUES = [...LIGHTHOUSE_CATEGORIES] as [
 function clampCpuMultiplier(n: number): number {
   return Math.min(MAX_CPU_MULTIPLIER, Math.max(MIN_CPU_MULTIPLIER, n));
 }
+
+// --- Credential sub-schemas (ROADMAP Phase B) ------------------------------
+//
+// `extraHeaders` / `cookies` / `basicAuth` are validated here so a malformed
+// credential is a structured 400 the user can read, never an opaque engine
+// failure — and so CR/LF can never reach a header map whatever the transport
+// does with it. The grammars themselves live in `credentials.ts` next to the
+// code that folds all three into one header map.
+
+/** A header/cookie value: length-bounded and free of the CR/LF/NUL injection vector. */
+function credentialValueSchema(forbidden: RegExp, message: string) {
+  return z
+    .string()
+    .max(
+      MAX_HEADER_VALUE_LENGTH,
+      `Value must be at most ${MAX_HEADER_VALUE_LENGTH} characters.`,
+    )
+    .refine((value) => !forbidden.test(value), message);
+}
+
+const headerValueSchema = credentialValueSchema(
+  HEADER_VALUE_FORBIDDEN,
+  "Header value must not contain line breaks or null bytes.",
+);
+
+const cookieValueSchema = credentialValueSchema(
+  COOKIE_VALUE_FORBIDDEN,
+  "Cookie value must not contain ';', line breaks or null bytes.",
+);
+
+/**
+ * Schema for one credential map (`extraHeaders` / `cookies`).
+ *
+ * Names are validated in a `superRefine` rather than via `z.record`'s key
+ * schema, because zod reports a key failure as the generic "Invalid key in
+ * record" — useless in a form. Here each bad name carries its own message at its
+ * own path. Names are NOT trimmed: whitespace is outside the RFC 7230 `token`
+ * grammar, so `" X-Token"` is rejected with an explanation instead of silently
+ * becoming a different header than the one the user typed.
+ *
+ * An EMPTY map normalises to `undefined`, so `{ extraHeaders: {} }` is
+ * indistinguishable from sending nothing — the credential layer then has exactly
+ * one representation of "no credential".
+ */
+function credentialRecordSchema(
+  valueSchema: z.ZodType<string>,
+  namePattern: RegExp,
+  label: "Header" | "Cookie",
+  plural: string,
+) {
+  return z
+    .record(z.string(), valueSchema)
+    .superRefine((record, ctx) => {
+      const names = Object.keys(record);
+      if (names.length > MAX_CREDENTIAL_ENTRIES) {
+        ctx.addIssue({
+          code: "custom",
+          message: `Provide at most ${MAX_CREDENTIAL_ENTRIES} ${plural}.`,
+        });
+      }
+      for (const name of names) {
+        if (name.length > MAX_HEADER_NAME_LENGTH) {
+          ctx.addIssue({
+            code: "custom",
+            path: [name],
+            message: `${label} name must be at most ${MAX_HEADER_NAME_LENGTH} characters.`,
+          });
+        } else if (!namePattern.test(name)) {
+          ctx.addIssue({
+            code: "custom",
+            path: [name],
+            message: `${label} name may only contain letters, digits and !#$%&'*+-.^_\`|~`,
+          });
+        }
+      }
+    })
+    .transform((record) =>
+      Object.keys(record).length === 0 ? undefined : record,
+    )
+    .optional();
+}
+
+/**
+ * The three credential fields as a reusable zod shape.
+ *
+ * Optional, no defaults: the overwhelmingly common audit is unauthenticated, and
+ * an absent field is the only honest representation of "no credential". These
+ * are the site-under-audit's secrets, not ours — held for the life of one batch
+ * and redacted at every persistence boundary (see `./credentials.ts`). The local
+ * Chrome engine applies them; PageSpeed Insights cannot (Google's servers can't
+ * reach a page only your machine can), so the PSI form never offers them.
+ *
+ * Shared as a shape so `auditOptionsSchema` and crawl discovery
+ * (`@/lib/crawl/schema`) validate a credential by exactly the same rules —
+ * discovery has to walk the protected site with the same headers the audit uses.
+ */
+const credentialShape = {
+  extraHeaders: credentialRecordSchema(
+    headerValueSchema,
+    HEADER_NAME_PATTERN,
+    "Header",
+    "extra headers",
+  ),
+  cookies: credentialRecordSchema(
+    cookieValueSchema,
+    COOKIE_NAME_PATTERN,
+    "Cookie",
+    "cookies",
+  ),
+  basicAuth: z
+    .object({
+      username: credentialValueSchema(
+        HEADER_VALUE_FORBIDDEN,
+        "Basic-auth username must not contain line breaks or null bytes.",
+      ).refine((value) => value.length > 0, "Basic-auth username must not be empty."),
+      password: credentialValueSchema(
+        HEADER_VALUE_FORBIDDEN,
+        "Basic-auth password must not contain line breaks or null bytes.",
+      ),
+    })
+    .optional(),
+} as const;
+
+/**
+ * Standalone schema for an {@link AuditCredentials} block, for callers that take
+ * credentials WITHOUT the rest of the audit options (crawl discovery).
+ */
+export const auditCredentialsSchema = z.object(credentialShape);
 
 /**
  * Zod schema for raw audit options. Every field has a default, so an empty
@@ -69,6 +206,8 @@ export const auditOptionsSchema = z.object({
   // Chrome engine ignores it. No default → PSI uses its own default locale.
   // See AuditOptions.locale.
   locale: z.string().optional(),
+  // Credentials (ROADMAP Phase B) — see `credentialShape` above.
+  ...credentialShape,
 });
 
 /**

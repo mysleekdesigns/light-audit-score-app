@@ -333,3 +333,45 @@ describe("parseUpdateScheduleBody — partial updates", () => {
     expect(parseUpdateScheduleBody("nope").ok).toBe(false);
   });
 });
+
+/**
+ * Credentials on a schedule body (ROADMAP Phase B).
+ *
+ * The schedule schema reuses `auditOptionsSchema`, so a body may syntactically
+ * carry credentials — but a schedule is never *stored* with them: it fires days
+ * later with no batch in memory to re-attach anything from, so `src/lib/db/
+ * schedules.ts` strips the fields at the persistence boundary (proved in
+ * `src/lib/db/schedules.test.ts`) and the long-lived route is `.env`. These
+ * tests pin that the validation layer stays permissive, so the strip is the one
+ * place the rule lives.
+ */
+describe("schedule bodies — credentials", () => {
+  const CREDENTIALS = {
+    extraHeaders: { "X-Preview-Token": "preview-token-value" },
+    basicAuth: { username: "staging", password: "staging-password" },
+  };
+
+  it("validates a credential-bearing body (the DB layer is what strips it)", () => {
+    const result = parseCreateScheduleBody({
+      time: "09:00",
+      target: URL_TARGET,
+      options: CREDENTIALS,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.options.extraHeaders).toEqual(
+      CREDENTIALS.extraHeaders,
+    );
+  });
+
+  it("still rejects a malformed credential (bad header name)", () => {
+    const result = parseCreateScheduleBody({
+      time: "09:00",
+      target: URL_TARGET,
+      options: { extraHeaders: { "Bad Header": "value" } },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.issues.some((i) => i.path.startsWith("options"))).toBe(true);
+  });
+});

@@ -213,3 +213,18 @@ describe("parseDiscoverBody — rejected bodies", () => {
     expect(parseDiscoverBody("nonsense").ok).toBe(false);
   });
 });
+
+describe("seed URLs with embedded credentials", () => {
+  // Mirrors `audits-schema`: discovery must not accept a credential it would
+  // then persist in the audit it feeds (ROADMAP Phase B).
+  it("rejects a seed URL carrying userinfo", () => {
+    const result = parseDiscoverBody({ url: "https://staging:hunter2@example.com/" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.issues[0]?.message).toMatch(/must not embed a username/i);
+  });
+
+  it("still accepts an ordinary seed URL", () => {
+    expect(parseDiscoverBody({ url: "https://example.com/" }).ok).toBe(true);
+  });
+});

@@ -49,6 +49,7 @@ import {
   PAGES_PER_TEMPLATE_OPTIONS,
 } from "@/lib/crawl/template";
 import { ApiError } from "@/lib/client/auditClient";
+import type { AuditCredentials } from "@/lib/lighthouse/credentials";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -141,6 +142,24 @@ export interface CrawlPanelProps {
   pagesPerTemplate: number;
   /** Sets the sampling cap; the parent re-samples the selection live. */
   onPagesPerTemplateChange: (n: number) => void;
+  /**
+   * The batch's credentials (ROADMAP Phase B), owned by the parent's
+   * Authentication disclosure and shared verbatim with the audit.
+   *
+   * Discovery has to walk the protected site with the same headers the audit
+   * will run with, or a staging environment yields one page: its login form.
+   * Forwarded straight into {@link DiscoverRequest.auth}, which the route
+   * validates by the same schema as `options` — held for the life of that one
+   * request and never echoed back in the result. `undefined` for a public site.
+   */
+  auth?: AuditCredentials;
+  /**
+   * The Authentication disclosure's first validation message, or null when the
+   * credential block is clean. Discovery refuses to fire while this is set —
+   * the request would be a guaranteed 400, and firing it half-authenticated
+   * would quietly discover the login page instead.
+   */
+  authError?: string | null;
   /** Locks inputs while a batch from this form is running. */
   disabled?: boolean;
 }
@@ -150,6 +169,8 @@ export function CrawlPanel({
   result,
   pagesPerTemplate,
   onPagesPerTemplateChange,
+  auth,
+  authError = null,
   disabled = false,
 }: CrawlPanelProps) {
   const seedId = useId();
@@ -196,6 +217,12 @@ export function CrawlPanel({
       toast.error("Enter a domain or seed URL to crawl.");
       return;
     }
+    if (authError) {
+      toast.error("Fix the Authentication fields before discovering.", {
+        description: authError,
+      });
+      return;
+    }
     setIsDiscovering(true);
     try {
       const res = await discoverSite({
@@ -205,6 +232,10 @@ export function CrawlPanel({
         maxDepth: depth,
         maxPages,
         excludePaths: parseExcludePaths(excludeText),
+        // Same credential block the audit runs with — omitted entirely for a
+        // public site, so an unauthenticated discovery is byte-for-byte the
+        // request it has always been.
+        auth,
       });
       // Hand the result up — the parent stores it, selects everything by default,
       // and renders the curation list full-width in the workspace below.
@@ -221,7 +252,17 @@ export function CrawlPanel({
     } finally {
       setIsDiscovering(false);
     }
-  }, [seed, useSitemap, useCrawl, depth, maxPages, excludeText, onDiscover]);
+  }, [
+    seed,
+    useSitemap,
+    useCrawl,
+    depth,
+    maxPages,
+    excludeText,
+    auth,
+    authError,
+    onDiscover,
+  ]);
 
   return (
     // Own container so every band below measures *this* panel, which is half the

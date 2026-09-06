@@ -6,6 +6,21 @@
  * log + swallow. Reconstructing a {@link Schedule} from a row parses the JSON
  * columns (`urls`, `crawl_spec`, `options`) defensively; an unparseable row is
  * dropped from listings rather than crashing the Archive view.
+ *
+ * ## Schedules carry NO credentials (ROADMAP Phase B)
+ *
+ * `persistence.ts` *redacts* audit credentials — it keeps the header/cookie
+ * names, so a stored run can say which credential it used. A schedule is
+ * different in kind: it fires days later, with no batch in memory to re-attach
+ * anything from, so a record naming a credential it cannot supply would be a lie
+ * about what the next fire will actually do. Both write paths here therefore
+ * {@link stripAuditCredentials} outright, and the {@link Schedule} they return
+ * matches what a later read gives back.
+ *
+ * The supported route for a schedule that must authenticate is the environment
+ * (`LH_AUDIT_BASIC_AUTH` / `LH_AUDIT_EXTRA_HEADERS` / `LH_AUDIT_COOKIES`, read
+ * inside the forked worker via `credentialsFromEnv`): a long-lived credential
+ * belongs in the gitignored `.env`, never in SQLite.
  */
 
 import { desc, eq } from "drizzle-orm";
@@ -13,6 +28,7 @@ import { nanoid } from "nanoid";
 
 import { getDb } from "@/lib/db/client";
 import { schedules, type ScheduleRow } from "@/lib/db/schema";
+import { stripAuditCredentials } from "@/lib/lighthouse/credentials";
 import type {
   AuditOptions,
   DeviceSelection,
@@ -107,6 +123,9 @@ export function createSchedule(input: CreateScheduleInput): Schedule | null {
     const id = nanoid();
     const now = nowIso();
     const cols = targetColumns(input.target);
+    // A schedule never carries credentials (see the module docblock): strip them
+    // here, and return the stripped options so the caller's echo matches the row.
+    const options = stripAuditCredentials(input.options);
     getDb()
       .insert(schedules)
       .values({
@@ -117,7 +136,7 @@ export function createSchedule(input: CreateScheduleInput): Schedule | null {
         time: input.time,
         urls: cols.urls,
         crawlSpec: cols.crawlSpec,
-        options: JSON.stringify(input.options),
+        options: JSON.stringify(options),
         concurrency: input.concurrency,
         device: input.device,
         accuracyMode: input.accuracyMode,
@@ -131,6 +150,7 @@ export function createSchedule(input: CreateScheduleInput): Schedule | null {
     return {
       id,
       ...input,
+      options,
       lastFiredAt: null,
       lastBatchId: null,
       createdAt: now,
@@ -155,6 +175,10 @@ export function updateSchedule(
       ...patch,
       // Re-derive target columns from the chosen target (existing's if not provided).
       target: patch.target ?? existing.target,
+      // Strip on the update path too (see the module docblock): a patch that
+      // introduces credentials must not turn a credential-free schedule into one
+      // that records them.
+      options: stripAuditCredentials(patch.options ?? existing.options),
       updatedAt: nowIso(),
     };
     const cols = targetColumns(next.target);
