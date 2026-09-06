@@ -1,6 +1,6 @@
 # ROADMAP — Competitive differentiation plan (Phases A–H)
 
-> **Status (updated 2026-09-06):** **Phases A–F complete.**
+> **Status (updated 2026-09-06):** **Phases A–G complete. H is the only one left.**
 >
 > - **A** — the Agentic Browsing category is live end-to-end (engine → SQLite → UI → PSI → AI).
 > - **B** — audits authenticate (basic auth, cookies, headers) for both auditing and crawl
@@ -15,14 +15,20 @@
 > - **F** — the same engine runs as a build gate: `npm run ci` audits a URL list, a URL file or a
 >   crawl, compares each page to a budget, exits 0/1/2, and archives every run to the same
 >   History the app reads.
+> - **G** — the app is an **MCP server**: four tools (`audit_url`, `get_history`, `compare_runs`,
+>   `check_budget`) over a stdio pipe, so a coding agent audits the page it just changed and
+>   compares it against the same local history the app shows. No port, no session token, no SDK —
+>   the JSON-RPC layer is hand-written so nothing in the import graph can bind a socket.
 >
-> **Phases G and H are unbuilt. G is next in dependency order** — F's headless, server-free,
-> token-free seam is what it reuses — and **H has all three of its prerequisites (D, E and now the
-> reporters seam)**.
-> E's `security-reviewer` pass came back with no Critical and no High; its one Medium and all
-> five Lows were fixed before the phase closed, including a pre-existing one (a deleted run stayed
-> readable from the queue's in-memory results) that Phase E's centralised read path made the right
-> moment to fix. D's pass was likewise clean across two independent reviewers.
+> **Phase H is the only one unbuilt, and it has all three of its prerequisites (D, E and the
+> reporters seam).**
+> G's `security-reviewer` pass came back with no Critical and no High; both Mediums and five of
+> six Lows were fixed before the phase closed — the notable one being that every ERROR path had
+> its own weaker sanitiser than the payloads did, which is now one shared pipeline
+> (`src/lib/text/displaySafe.ts`) used by the tools, the wire format, the URL normaliser and the
+> CLI alike. E's pass was likewise clean, with its one Medium and all five Lows fixed (including a
+> pre-existing one: a deleted run stayed readable from the queue's in-memory results). D's was
+> clean across two independent reviewers.
 > This file is a **plan**, not a record — it was drafted from a competitor survey of the
 > free/local Lighthouse tooling space (Unlighthouse, Lighthouse CI, sitespeed.io,
 > Lighthouse Parade) and the commercial monitoring tier (DebugBear, Foo.software,
@@ -1181,24 +1187,109 @@ audit a page *during development* and compare it against months of your own base
 "did my change regress the page?" answered from real local history. Given the app is already
 AI-native, this is the most defensible item on the list.
 
-- [ ] **Server**: a stdio MCP server entry point (`scripts/mcp-server.ts`) run under the same
+- [x] **Server**: a stdio MCP server entry point (`scripts/mcp-server.ts`) run under the same
       native-TS invocation as the other scripts (never `tsx` — see README Requirements).
-- [ ] **Tools**: `audit_url` (run and return scores), `get_history` (recent runs for a URL),
+      *Done, and `npm run mcp` is the same launcher line the other scripts use. The protocol
+      layer is HAND-WRITTEN (`src/lib/mcp/protocol.ts`), which was the phase's one real
+      build-or-buy decision: `@modelcontextprotocol/sdk` pulls `express`, `hono`, `cors`, `jose`
+      and `eventsource` — an HTTP server and an OAuth stack — to expose four local tools over a
+      pipe, and this phase's security clause is "must not open a port". The strongest way to keep
+      that promise is for nothing in the import graph to be ABLE to, which also makes it
+      auditable by reading one directory instead of a lockfile. Line-delimited JSON-RPC is small
+      enough to own; the same argument the repo already made for `src/lib/http/localGate.ts`.
+      Two invariants the entry point exists to hold: stdout carries frames and nothing else (one
+      stray `console.log` anywhere in the 44-file import graph drops the connection), and the
+      process `chdir`s to the project root at startup — an MCP client launches its servers from
+      ITS cwd, and without that an agent's audits would accumulate in a second, invisible
+      database, destroying the one thing this phase is for.*
+- [x] **Tools**: `audit_url` (run and return scores), `get_history` (recent runs for a URL),
       `compare_runs` (Phase-E diff between two run ids), `check_budget` (Phase-F assertion,
       structured pass/fail). Keep the tool surface small and the payloads compact — an agent
       pays for every token of a Lighthouse report.
-- [ ] **Reuse, don't fork**: the tools call the same queue, persistence and diff modules as
+      *Done. Four tools, no more: every description sits in the model's context for the whole
+      session whether it is called or not. `audit_url` returns scores and Core Web Vitals and
+      never an LHR; `compare_runs` projects the `RunDiff` down and drops the request URL lists
+      (unbounded, page-controlled, and mostly analytics churn) in favour of counts and byte
+      deltas, keeping a `truncated` block so a model cannot mistake "3 audits moved" for "3 of 60".
+      One deliberate divergence from the app: `audit_url` defaults to `runs: 1`, not 3 — an agent
+      blocks synchronously inside the call with no progress to watch, so median-of-3 triples a
+      wait it cannot see; the description says so and says to pass `runs: 3` before trusting a
+      performance number.*
+- [x] **Reuse, don't fork**: the tools call the same queue, persistence and diff modules as
       the app. No second engine, no duplicated scoring.
-- [ ] **Security**: the MCP server is a *local* process speaking stdio — it must not open a
+      *Done, and it cost two extractions rather than any new logic. `src/lib/ci/runBatch.ts` now
+      holds the headless "create a batch, wait for it, read back the PERSISTED rows" seam that
+      Phase F had written inside `scripts/audit-cli.ts`, so the CLI and `audit_url` share one
+      settlement rule and one definition of what a verdict is computed from; the CLI keeps the
+      verdict itself, because a build's exit code is its own. `src/lib/urls/normalizeAuditUrl.ts`
+      holds the URL normaliser for the same reason, and that one is load-bearing: its return
+      value is the key History groups by, so two callers with two normalisers would file the same
+      page under two URLs and quietly split the archive this phase exists to compare against.
+      `compare_runs` calls `extractRunDiff`, `check_budget` calls `resolveBudgets`/
+      `evaluateBudgets` — including its inverted precedence — and no tool touches Drizzle directly.*
+- [x] **Security**: the MCP server is a *local* process speaking stdio — it must not open a
       port, must not require or expose the session token, and must not read or forward any
       third-party credential. `security-reviewer` must review it before the Gate is green.
-- [ ] **Docs**: a copy-pasteable `.mcp.json` / `claude mcp add` snippet, and a short
+      *Done; **no Critical and no High**. All three clauses verified rather than asserted: the
+      import graph references no `node:net`/`node:http`/`createServer`/`.listen(`, and
+      `lsof -nP -a -p <pid> -i` against the live server returns nothing (an `audit_url` does fork
+      a worker that gives Chrome a loopback DevTools port — the engine's behaviour on every audit
+      path, and not this process). No `LH_SESSION_TOKEN`, `lh_session` or `localGate` anywhere in
+      the graph; the gate lives in `src/proxy.ts`, which is not imported. No CrawlForge/Anthropic
+      path is reachable and the documented `.mcp.json` snippet carries no `env` block.
+      Both Mediums were fixed before the phase closed. **M1** was the interesting one: `safeText`
+      guarded every payload, but each ERROR path had its own weaker strip that removed C0/C1 and
+      left the bidi class — so a refused `ftp://…/<RTL>gnp.exe` reached the transcript reading as
+      `…/exe.png`. The fix was to stop having six sanitisers: one pipeline now lives in
+      `src/lib/text/displaySafe.ts`, imports nothing (so even the dependency-free wire format can
+      use it), and is shared by the tools, the JSON-RPC error path, the URL normaliser and the
+      CLI's terminal output. **M2** was retention and concurrency: the queue keeps every run's
+      ~1 MB LHR and the app's deletion paths are what prune it, which is harmless for a request
+      and a slow leak for a process that lives a whole coding session — `audit_url` now releases
+      it once the report is on disk (and only then, so a failed write keeps its last reader) —
+      plus a ceiling of four in-flight `tools/call`s, with `initialize`/`ping`/`tools/list`
+      exempt so the server stays answerable under load. Five of six Lows fixed too: the echoed
+      `runId` now goes through the sanitiser, `check_budget` reads one indexed row instead of the
+      whole archive, `get_history`'s ceiling dropped 50 → 25 once its worst case was priced
+      honestly, and the README stopped listing only what the server does NOT do (an agent you
+      connect can read your entire audit history, and `.env` audit credentials still apply to an
+      allow-listed host). The sixth is accepted and recorded rather than fixed: `finalUrl` gives
+      an audited page ~300 characters in the model's context, which is the price of telling the
+      agent a redirect happened at all.*
+- [x] **Docs**: a copy-pasteable `.mcp.json` / `claude mcp add` snippet, and a short
       "audit-driven development" walkthrough.
-- [ ] **Verify**: a real Claude Code session adds the server, audits a local dev URL, reads
+      *Done: README `## MCP: audits from your coding agent` — both setup forms (with the warning
+      that relative paths resolve against the AGENT's cwd, not the checkout's), a tool table with
+      what each costs, the walkthrough written as the prompts a person actually types rather than
+      as JSON-RPC, a Security section, and a Traps section. The trap that matters most is the one
+      the code already defends: which directory the server runs from decides which archive it
+      writes to, and an `LH_DATA_DIR` that disagrees with the app's gives you two histories.*
+- [x] **Verify**: a real Claude Code session adds the server, audits a local dev URL, reads
       that URL's history, and reports a regression against a stored baseline.
+      *Done — see the Gate note below.*
 
 **Gate:** a live agent session drives all four tools end-to-end against a real local site;
 `security-reviewer` reports no Critical/High; no port is opened and no token is required.
+
+*Gate green (2026-09-06), re-run after the security fixes.* `claude mcp add lightaudit -- node …
+scripts/mcp-server.ts` registers, and `claude mcp get lightaudit` reports **✔ Connected** against
+Claude Code 2.1.x — the hand-written protocol talking to the real client, not a test double.
+
+- **All four tools, driven by a live `claude -p` session** against a local fixture served on
+  127.0.0.1: `audit_url` (11.9 s for one run, real headless Chrome) → `get_history` → the
+  `compare_runs` of those two ids → `check_budget`. The fixture was edited between the two audits
+  to regress it (a blocking script, an unsized image, low-contrast text), and the agent reported
+  the regression from the diff rather than from the scores: performance 100 → 74, accessibility
+  85 → 66, seo 91 → 83, with FCP/LCP/Speed Index the top movers and `unsized-images` newly
+  failing — and it inferred the cause (one added, paint-blocking image) from the resource summary.
+- **`check_budget` reproduced the CI contract's decision 2 without being told it:** with three
+  categories audited and a blanket bar of 90, the two categories the run never scored came back
+  as violations, not passes, and the agent explained why in those terms.
+- **No port, no token.** `lsof -nP -a -p <server pid> -i` → nothing, checked while the server was
+  live and idle. The server ran with no `LH_SESSION_TOKEN` in its environment.
+- **The shared archive is real, not asserted.** The agent's runs went into the app's own
+  `data/lighthouse.db` — the same 274-run archive — and `get_history` found the app's earlier runs
+  alongside the agent's own.
 
 ---
 

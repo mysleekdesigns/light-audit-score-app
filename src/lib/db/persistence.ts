@@ -529,6 +529,26 @@ export function listHistory(): HistoryRow[] {
   }
 }
 
+/**
+ * One persisted run by id, or `undefined`.
+ *
+ * Beside {@link listHistory} rather than derived from it, because the derived
+ * version is what the MCP server was doing and it costs the whole table: every
+ * row read and every options/metrics/environment JSON column parsed, to answer a
+ * lookup SQLite already has an index for (Phase G security review, L-d). That is
+ * invisible on a fresh archive and grows with the thing this product exists to
+ * accumulate.
+ */
+export function getHistoryRow(runId: string): HistoryRow | undefined {
+  try {
+    const row = getDb().select().from(runs).where(eq(runs.id, runId)).get();
+    return row ? rowToHistory(row) : undefined;
+  } catch (err) {
+    warn("getHistoryRow", err);
+    return undefined;
+  }
+}
+
 /** Every persisted batch, newest first. Returns `[]` on any error. */
 export function listBatches(): BatchInfo[] {
   try {

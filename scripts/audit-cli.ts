@@ -71,6 +71,7 @@ import { pathToFileURL } from "node:url";
 
 import { BudgetError, evaluateBudgets, resolveBudgets } from "@/lib/ci/budgets";
 import { renderCiReport } from "@/lib/ci/reporters";
+import { runBatchToCompletion } from "@/lib/ci/runBatch";
 import {
   CI_REPORTERS,
   EXIT_FAIL,
@@ -94,7 +95,6 @@ import {
   clampPages,
   type DiscoverInput,
 } from "@/lib/crawl/types";
-import { listHistory, type HistoryRow } from "@/lib/db/persistence";
 import { resolveAuditOptions } from "@/lib/lighthouse/options";
 import {
   type AuditOptions,
@@ -108,11 +108,13 @@ import { getAuditQueue } from "@/lib/queue/AuditQueue";
 import {
   DEFAULT_CONCURRENCY,
   clampConcurrency,
-  type AuditQueueApi,
   type AuditResultLite,
-  type Batch,
-  type ProgressEvent,
 } from "@/lib/queue/types";
+import { safeText } from "@/lib/text/displaySafe";
+import {
+  UrlNormalizeError,
+  normalizeAuditUrl,
+} from "@/lib/urls/normalizeAuditUrl";
 
 /** Longest untrusted message echoed into our own output. */
 const MAX_MESSAGE_LENGTH = 200;
@@ -276,60 +278,18 @@ export function parseFlags(argv: string[]): ParsedFlags {
  * rather than thirty seconds inside Chrome.
  */
 export function normalizeUrl(raw: string): string {
-  const trimmed = raw.trim();
-
-  // Refuse control characters outright, rather than canonicalising them away.
-  //
-  // WHATWG `URL` STRIPS tab/CR/LF while parsing, so `https://x.test/<CR>y`
-  // validates cleanly and then — because this function deliberately returns the
-  // string as typed (see below) — a raw CR would travel on into `runs.url`.
-  // Canonicalising instead would fix that and break something worse: the stored
-  // URL would stop matching what the web path stores, splitting the archive.
-  // Refusing keeps both properties, and nothing legitimate is lost — no real
-  // target contains a control character.
-  //
-  if (/[\u0000-\u001f\u007f-\u009f]/.test(trimmed)) {
-    throw new CliUsageError(
-      `A URL must not contain control characters: ${clampForMessage(trimmed)}`,
-    );
-  }
-  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
-    ? trimmed
-    : `https://${trimmed}`;
-
-  let url: URL;
+  // Thin wrapper over the shared normaliser (Phase G): the rules — refuse
+  // control characters, refuse a non-http scheme, refuse embedded credentials,
+  // and return the string AS TYPED so the archive doesn't split — moved to
+  // `@/lib/urls/normalizeAuditUrl` when the MCP server became a second door into
+  // the same History. Only the error TYPE is this file's, because `main` routes
+  // `CliUsageError` to exit code 2 (a bad invocation), not 1 (a regression).
   try {
-    url = new URL(withScheme);
-  } catch {
-    throw new CliUsageError(`Not a URL: ${clampForMessage(trimmed)}`);
+    return normalizeAuditUrl(raw);
+  } catch (error) {
+    if (error instanceof UrlNormalizeError) throw new CliUsageError(error.message);
+    throw error;
   }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new CliUsageError(
-      `Only http and https URLs can be audited: ${clampForMessage(trimmed)}`,
-    );
-  }
-  if (url.username !== "" || url.password !== "") {
-    throw new CliUsageError(
-      "A URL must not carry a username or password — it would be written to " +
-        "this run's history and into any report you publish. Put credentials in " +
-        "LH_AUDIT_BASIC_AUTH (with LH_AUDIT_CREDENTIAL_HOSTS) instead; see .env.example.",
-    );
-  }
-
-  // The PARSED url is used to validate and then thrown away; what is returned is
-  // the string as typed. That is deliberate, and matters more than it looks:
-  // `URL.toString()` canonicalises, so `https://example.com` comes back as
-  // `https://example.com/`. `POST /api/audits` validates the same way and
-  // returns the original (`src/lib/api/audits-schema.ts`), and `runs.url` is the
-  // key History groups by and Compare trends on — so canonicalising here would
-  // file a CLI run and a UI run of the same page under two different URLs and
-  // quietly split the shared archive this phase exists to build.
-  //
-  // The cost is that a control character in the input survives into the string
-  // (`parseUrlList` splits on `\r?\n`, so a lone CR can reach here). That is
-  // handled where it matters — at the point of ECHO, via `sanitizeMessage` —
-  // rather than by mangling the address that gets audited and stored.
-  return withScheme;
 }
 
 /**
@@ -602,34 +562,19 @@ export function parseCliArgs(argv: string[]): CliOptions {
  * wrong one for a URL.
  */
 export function displayUrl(raw: string): string {
-  const cleaned = [...raw]
-    .map((char) => {
-      const code = char.codePointAt(0) ?? 0;
-      return code < 0x20 || (code >= 0x7f && code <= 0x9f) ? " " : char;
-    })
-    .join("")
-    .replace(/\s+/g, " ")
-    .trim();
-  return cleaned.length > MAX_MESSAGE_LENGTH
-    ? `${cleaned.slice(0, MAX_MESSAGE_LENGTH - 1)}…`
-    : cleaned;
+  // `safeText` rather than a local strip since Phase G's security review (M1):
+  // the control class alone leaves a bidi override intact, so a URL printed here
+  // could read as `…/exe.png` while the audit ran against `…/gnp.exe`. Shared
+  // with the MCP tools and the URL normaliser so the three cannot drift.
+  return safeText(raw, MAX_MESSAGE_LENGTH);
 }
 
 export function sanitizeMessage(raw: string | null | undefined): string {
   if (!raw) return "unknown error";
-  const cleaned = [...raw]
-    .map((char) => {
-      const code = char.codePointAt(0) ?? 0;
-      const isControl = code < 0x20 || (code >= 0x7f && code <= 0x9f);
-      return isControl ? " " : char;
-    })
-    .join("")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (cleaned === "") return "unknown error";
-  return cleaned.length > MAX_MESSAGE_LENGTH
-    ? `${cleaned.slice(0, MAX_MESSAGE_LENGTH - 1)}…`
-    : cleaned;
+  // Same shared pipeline as `displayUrl`; the only difference is the fallback,
+  // which is why these are two functions and not one (see above).
+  const cleaned = safeText(raw, MAX_MESSAGE_LENGTH);
+  return cleaned === "" ? "unknown error" : cleaned;
 }
 
 /** A thrown value as a readable string. */
@@ -792,70 +737,14 @@ async function resolveTargets(options: CliOptions): Promise<string[]> {
 /* Batch execution                                                             */
 /* -------------------------------------------------------------------------- */
 
-/** Terminal batch statuses — the point at which every job has settled. */
-function isTerminal(status: Batch["status"]): boolean {
-  return (
-    status === "completed" ||
-    status === "completed_with_errors" ||
-    status === "cancelled"
-  );
-}
-
-/**
- * Await a batch's terminal event, logging progress as it goes.
- *
- * Every terminal state is handled, not just the happy one: `batch-completed`
- * covers both `completed` and `completed_with_errors` (a failed job settles the
- * batch, it doesn't stall it), and `batch-cancelled` resolves too — a CI job that
- * waits forever on a cancelled batch is strictly worse than one that fails.
- *
- * The subscription is registered right after `createBatch`, which is safe by the
- * queue's own contract: it defers every job past the current microtask so a
- * caller subscribing immediately catches every event. The terminal re-check
- * below closes the one remaining gap (a batch finalised inline, before any
- * listener could exist) so this can never hang.
+/*
+ * Submitting a batch, waiting for it, and reading back the rows it archived now
+ * live in `@/lib/ci/runBatch` (imported above). They were written here in Phase
+ * F and moved out in Phase G, when the MCP server became a second caller: the
+ * settlement rule and the "judge what was PERSISTED" rule are the CI contract
+ * itself, and a second copy of either is exactly the fork Phase G forbids. The
+ * verdict below stays here, because a build's exit code is this command's alone.
  */
-function awaitBatchSettlement(
-  queue: AuditQueueApi,
-  batchId: string,
-  onEvent: (event: ProgressEvent) => void,
-): Promise<Batch> {
-  return new Promise((resolve) => {
-    let unsubscribe: (() => void) | null = null;
-    const settle = (batch: Batch): void => {
-      unsubscribe?.();
-      unsubscribe = null;
-      resolve(batch);
-    };
-    unsubscribe = queue.subscribe(batchId, (event) => {
-      onEvent(event);
-      if (event.type === "batch-completed" || event.type === "batch-cancelled") {
-        settle(event.batch);
-      }
-    });
-    const snapshot = queue.getBatch(batchId);
-    if (snapshot && isTerminal(snapshot.status)) settle(snapshot);
-  });
-}
-
-/**
- * The batch's persisted runs, in batch order.
- *
- * This is decision 1 of the CI contract made concrete: the rows judged are the
- * rows in SQLite, read back through the same `listHistory()` the archive UI
- * uses. A run id IS its job id, so the batch's job order sorts them; anything
- * unrecognised sorts last rather than being dropped.
- */
-function persistedRows(batch: Batch): HistoryRow[] {
-  const order = new Map(batch.jobs.map((job) => [job.id, job.index]));
-  return listHistory()
-    .filter((row) => row.batchId === batch.id)
-    .sort(
-      (a, b) =>
-        (order.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
-        (order.get(b.id) ?? Number.MAX_SAFE_INTEGER),
-    );
-}
 
 /* -------------------------------------------------------------------------- */
 /* Verdict                                                                     */
@@ -1064,30 +953,33 @@ async function main(): Promise<void> {
 
   const queue = getAuditQueue();
   const device = options.device ?? auditOptions.formFactor;
-  const startedAt = new Date().toISOString();
-  const batch = queue.createBatch({
-    urls,
-    device,
-    options: auditOptions,
-    concurrency: options.concurrency,
-    accuracyMode: options.accuracyMode,
-  });
 
   // Ctrl-C cancels through the queue rather than orphaning Chrome children: the
   // batch goes terminal, the workers are killed, and the runs that DID finish
-  // stay in History and still get reported below.
-  const onInterrupt = (): void => {
-    console.error("\n… cancelling batch");
-    queue.cancelBatch(batch.id);
-  };
-  process.once("SIGINT", onInterrupt);
-  process.once("SIGTERM", onInterrupt);
+  // stay in History and still get reported below. The handler is installed from
+  // `onBatchCreated` because it needs the batch id, and that is the first moment
+  // one exists.
+  let onInterrupt: (() => void) | null = null;
 
   // With a reporter in play stdout belongs to the report, so progress and the
   // per-URL detail go to stderr; without one this is the Phase-1 developer tool
   // and prints exactly what it always did.
   const quiet = options.reporter !== null;
-  const settled = await awaitBatchSettlement(queue, batch.id, (event) => {
+  const outcome = await runBatchToCompletion(queue, {
+    urls,
+    device,
+    options: auditOptions,
+    concurrency: options.concurrency,
+    accuracyMode: options.accuracyMode,
+    onBatchCreated: (created) => {
+      onInterrupt = (): void => {
+        console.error("\n… cancelling batch");
+        queue.cancelBatch(created.id);
+      };
+      process.once("SIGINT", onInterrupt);
+      process.once("SIGTERM", onInterrupt);
+    },
+    onEvent: (event) => {
     if (event.type === "job-started") {
       console.error(
         `→ Auditing ${displayUrl(event.job.url)} [${event.job.device}] ` +
@@ -1114,12 +1006,14 @@ async function main(): Promise<void> {
           sanitizeMessage(event.job.error?.message),
       );
     }
+    },
   });
-  process.off("SIGINT", onInterrupt);
-  process.off("SIGTERM", onInterrupt);
-  const finishedAt = new Date().toISOString();
+  if (onInterrupt !== null) {
+    process.off("SIGINT", onInterrupt);
+    process.off("SIGTERM", onInterrupt);
+  }
 
-  const rows = persistedRows(settled);
+  const { batch: settled, rows, settledJobs, startedAt, finishedAt } = outcome;
   if (rows.length === 0) {
     // Decision 1 in action: no rows means nothing was archived, so there is
     // nothing to judge. Fail loudly rather than report a green build over an
@@ -1145,9 +1039,6 @@ async function main(): Promise<void> {
   //
   // Cancelled batches are exempt: they are SUPPOSED to have fewer rows than
   // jobs, and the branch below reports that honestly.
-  const settledJobs = settled.jobs.filter(
-    (job) => job.status === "done" || job.status === "error",
-  ).length;
   if (settled.status !== "cancelled" && rows.length < settledJobs) {
     console.error(
       `✗ Only ${rows.length} of ${settledJobs} finished run(s) reached the archive — ` +

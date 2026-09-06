@@ -330,6 +330,138 @@ Two notes on that workflow:
 - History lives in `data/` under the checkout, which a runner throws away. Point `LH_DATA_DIR` at
   a cached or mounted directory if you want the archive to build up across runs.
 
+## MCP: audits from your coding agent
+
+The same engine once more, this time as an **MCP server** your coding agent drives while you
+work: audit the page you just changed, then ask whether it regressed. Other Lighthouse MCP
+servers are stateless single-page wrappers — they audit, they answer, they forget. This one is
+backed by the local audit history, so "did my change make this worse?" is answered against runs
+you already have, including the ones you did by hand in the app. The shared archive is the whole
+difference.
+
+### Setup
+
+From this checkout:
+
+```bash
+claude mcp add lightaudit -- node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/alias-hooks.mjs ./scripts/mcp-server.ts
+```
+
+The same thing declared in `.mcp.json` (gitignored here — it is a machine-local file and is never
+committed):
+
+```json
+{
+  "mcpServers": {
+    "lightaudit": {
+      "command": "node",
+      "args": [
+        "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON",
+        "--import",
+        "./scripts/alias-hooks.mjs",
+        "./scripts/mcp-server.ts"
+      ]
+    }
+  }
+}
+```
+
+Those relative paths resolve against the **agent's** working directory, not this one, so they only
+hold when the agent starts inside the checkout. Anywhere else, spell both out in full —
+`/path/to/light-audit-score-app/scripts/alias-hooks.mjs` and
+`/path/to/light-audit-score-app/scripts/mcp-server.ts`. Verified against Claude Code 2.1.x, where
+`claude mcp get lightaudit` reports `✔ Connected`.
+
+It needs exactly what the rest of the app needs — **Node.js v24+ and Google Chrome** — and nothing
+else: no server running, no session token, no port, no API key. The invocation is the native-TS
+one described in [Requirements](#requirements), **not** `tsx`, for the same reason.
+
+### The tools
+
+| Tool | What it does | What it costs |
+|---|---|---|
+| `audit_url` | Runs a real Lighthouse audit and returns the category scores plus Core Web Vitals, with the `runId` it was archived under | headless Chrome, ~15–60s per run |
+| `get_history` | Recent runs for a URL, or the most recent runs across every URL | a SQLite read; effectively free |
+| `compare_runs` | The audit-level diff between two run ids — which audits moved, and what that did to the score | reads two stored reports |
+| `check_budget` | Asserts an already-persisted run against a bar and returns structured pass/fail | a SQLite read |
+
+`audit_url` takes `url` (required), `device` (`mobile` or `desktop`, default `mobile`),
+`categories` (default: all five), and `runs` (1–5, **default 1**). That default is the one
+deliberate divergence from the app, which takes a median of 3: an agent blocks on the call for as
+long as the audit takes, so a single run is the sane default in a conversation. Pass `runs: 3`
+when you want a number directly comparable to the app's. Every audit it runs lands in the same
+History the app reads.
+
+`get_history` takes `url`, `limit` (1–25, default 10), `device` and `status` — this is the tool
+that finds you a baseline. `compare_runs` takes `baselineRunId` and `comparisonRunId`, bounded by
+`maxAudits` and `maxOpportunities`; it returns that bounded projection and never the raw report,
+because an agent pays for every token of a Lighthouse JSON.
+
+`check_budget` takes either `runId` or `url` (the latest run for that page), plus `budget` (one
+bar for everything) and/or `budgets` (per category). **Precedence runs the opposite way to most
+config formats, and is worth reading twice:** the blanket `budget` is the floor and `budgets` is
+the exception list, so `budget: 90` with `budgets: {"performance": 70}` reads as "90 everywhere,
+except performance only needs 70". That is the same rule as the CI config, for the reason given
+under [Budgets](#budgets) above. A budget that fails is a normal answer, not an error — the tool
+reports the miss and the agent carries on with it.
+
+### Audit-driven development
+
+The loop, written as the things you actually type:
+
+```
+> Audit http://localhost:3000/pricing and give me the scores.
+      audit_url — launches Chrome, archives the run, hands back a run id.
+
+  … you make the change …
+
+> Audit it again, then compare the two runs.
+      audit_url, then compare_runs — which audits moved, and why the score did.
+
+> How has that page trended this week?
+      get_history — the stored baselines, app runs and agent runs alike.
+
+> Can we ship it? 90 everywhere, performance only needs 80.
+      check_budget — pass/fail against the run just persisted.
+```
+
+You describe the intent; the agent picks the tools. Because both halves write to the same archive,
+a baseline you audited by hand in the app on Monday is a legitimate comparison point for a run the
+agent does on Friday.
+
+### Security
+
+- It is a **local child process speaking stdio** — a pipe to whoever launched it. It opens no
+  port, so there is nothing to reach.
+- It requires **no session token**. The app's loopback gate protects an HTTP server; there is no
+  HTTP here for it to protect.
+- It holds **no credential of its own** and forwards none. The only outbound request it makes is
+  the audit itself, to a URL you asked it to audit. One precision, since it is easy to assume
+  otherwise: if you have configured `.env` audit credentials (`LH_AUDIT_BASIC_AUTH` and friends —
+  see `.env.example`), an agent's audit of a host you allow-listed in `LH_AUDIT_CREDENTIAL_HOSTS`
+  uses them, exactly as the app's own audits do. The credential never reaches the agent; the
+  authenticated page does.
+- It is **not read-only**, and that is the point: its audits write to the same local SQLite
+  database as the app, so an agent adds rows to your History, and its runs show up in the UI
+  beside your own.
+- **Any agent you connect can read that whole archive.** `get_history` with no `url` returns
+  your most recent runs whatever they were — every address you have audited, from the app as
+  well as from the agent, staging and internal hosts included. That is what makes "compare this
+  against your baselines" work, and it is worth knowing before you connect a server to a model
+  that also reads the web.
+
+### Traps
+
+- **Which directory it runs from decides which archive it writes to.** The server anchors itself
+  to the project root at startup, so this is handled. But `LH_DATA_DIR` still wins where you set
+  it, and it must be the *same* value the app uses — otherwise the agent and the app quietly keep
+  two separate histories.
+- **Chrome still launches.** "No server" does not mean "no browser": `audit_url` starts a headless
+  Chrome exactly like every other audit path here, and takes just as long.
+- **`npm run mcp` is for launching it by hand**, to check that it starts and to read its stderr.
+  You would not normally run it yourself — the agent launches it, and on your terminal it just
+  sits waiting for JSON-RPC frames on stdin.
+
 ## How to use
 
 - **New Audit** — paste URLs (one per line / CSV) or switch to **Crawl a site** (domain + depth +
@@ -509,8 +641,10 @@ src/
     crawl/          # site discovery: robots, sitemap, BFS crawl
     compare/        # pure run-diff helpers
     batch-summary/  # pure batch averages / pass-fail helpers
+    ci/             # budgets, reporters + the headless batch seam the CLI and MCP share
+    mcp/            # MCP server: JSON-RPC protocol, dispatch, and the four tools
     export/         # JSON/CSV exporters + download helpers
     settings/       # persisted audit defaults (device, runs, concurrency, thresholds)
-scripts/            # audit-cli.ts, audit-worker.ts, alias-hooks.mjs
+scripts/            # audit-cli.ts, mcp-server.ts, audit-worker.ts, alias-hooks.mjs
 drizzle/            # committed SQL migrations (applied at runtime)
 ```
