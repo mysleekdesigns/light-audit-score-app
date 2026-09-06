@@ -39,6 +39,7 @@ import { getRunReport } from "@/lib/db/persistence";
 import type { LighthouseResult } from "@/lib/lighthouse/types";
 import { getAuditQueue } from "@/lib/queue/AuditQueue";
 import { extractRunTrace } from "@/lib/reports/extract";
+import type { RunTrace } from "@/lib/reports/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -56,17 +57,97 @@ async function readPersistedFile(path: string): Promise<string | null> {
   }
 }
 
+/**
+ * Refuse to read a report far larger than one can legitimately be. Observed max
+ * in this repo is 1.5 MB, so 32 MB is not a limit anyone meets by accident — it
+ * exists so a corrupt or hostile file on disk cannot be pulled into memory in
+ * full before anything gets to reject it.
+ */
+const MAX_REPORT_BYTES = 32 * 1024 * 1024;
+
+/** Whether the file at `path` is small enough to read. Missing file → let the read fall through. */
+async function withinSizeLimit(path: string): Promise<boolean> {
+  try {
+    return (await fs.stat(path)).size <= MAX_REPORT_BYTES;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Bounded memo of projections, keyed by run id.
+ *
+ * A finished run's report is immutable — the docblock above says so and
+ * `useRunTrace` caches on exactly that basis — but the server was re-reading and
+ * re-parsing a ~690 KB file on every request, and that parse is synchronous, so
+ * it occupies the event loop. That matters more than a single user implies:
+ * cookies ignore ports and `SameSite=Strict` is scoped to the site rather than
+ * the port, so a page on ANOTHER loopback port can fire credentialed GETs at
+ * this route. CORS stops it reading the response; it does not stop it causing
+ * the work. Sixteen entries is comfortably more than a session opens and bounds
+ * the memory at a few MB of projections.
+ */
+const TRACE_CACHE_LIMIT = 16;
+const traceCache = new Map<string, RunTrace>();
+
+function cacheGet(runId: string): RunTrace | undefined {
+  const hit = traceCache.get(runId);
+  // Re-insert so the eviction below is least-recently-USED, not merely oldest.
+  if (hit !== undefined) {
+    traceCache.delete(runId);
+    traceCache.set(runId, hit);
+  }
+  return hit;
+}
+
+function cacheSet(runId: string, trace: RunTrace): void {
+  traceCache.set(runId, trace);
+  while (traceCache.size > TRACE_CACHE_LIMIT) {
+    const oldest = traceCache.keys().next();
+    if (oldest.done) break;
+    traceCache.delete(oldest.value);
+  }
+}
+
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ runId: string }> },
 ): Promise<Response> {
   const { runId } = await params;
 
+  const persisted = getRunReport(runId);
+
+  // A memo hit is honoured only while the run STILL RESOLVES. Deleting a run —
+  // or "Clear history" — must actually remove it, and an in-process cache is
+  // exactly how a deleted run's URLs keep being served for the life of the
+  // process; ROADMAP Phase C's M2 (clearing history left audited URLs behind in
+  // `schedule_alerts`) is the standing precedent. The cheap DB lookup above
+  // stays authoritative for EXISTENCE; the memo only saves the expensive part,
+  // which is the ~690 KB read and parse.
+  const resolves =
+    persisted?.jsonPath != null ||
+    getAuditQueue().getJobResult(runId) !== undefined;
+  if (!resolves) {
+    traceCache.delete(runId);
+    return notFound(
+      "report_not_found",
+      "No completed report found for that run.",
+    );
+  }
+
+  const cached = cacheGet(runId);
+  if (cached !== undefined) return Response.json(cached, { status: 200 });
+
   let lhr: LighthouseResult | null = null;
 
   // 1. The persisted LHR on disk.
-  const persisted = getRunReport(runId);
   if (persisted?.jsonPath) {
+    if (!(await withinSizeLimit(persisted.jsonPath))) {
+      return serverError(
+        "report_unreadable",
+        "The stored report for that run is too large to read.",
+      );
+    }
     const json = await readPersistedFile(persisted.jsonPath);
     if (json !== null) {
       try {
@@ -98,7 +179,13 @@ export async function GET(
   // (a hand-edited file, a truncated write), which must still be a structured
   // 500 and never an unhandled rejection.
   try {
-    return Response.json(extractRunTrace(lhr, runId), { status: 200 });
+    // Echo the DB-round-tripped id, never the caller's string. A 200 is only
+    // reachable for an id that already matched a row or a queue key, so the two
+    // are equal in practice — but "no request data is reflected" should be true
+    // of the success body as well, not just the error bodies.
+    const trace = extractRunTrace(lhr, persisted?.id ?? runId);
+    cacheSet(runId, trace);
+    return Response.json(trace, { status: 200 });
   } catch {
     return serverError(
       "trace_extraction_failed",

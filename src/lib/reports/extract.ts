@@ -87,6 +87,41 @@ function asCount(value: unknown): number | null {
   return count === null || count < 0 ? null : count;
 }
 
+/**
+ * Strip characters that let an audited site FORGE a row label rather than merely
+ * occupy one: C0/C1 controls, and the bidi/invisible set (RTL override and
+ * friends) that can reverse a rendered filename so `…/gnp.exe` reads as
+ * `…/exe.png`.
+ *
+ * This exists because of a subtlety worth writing down: for a URL that PARSES,
+ * none of this is reachable — the WHATWG `URL` parser already percent-encodes
+ * the path (U+202E becomes `%E2%80%AE`) and punycodes the host (a Cyrillic
+ * homograph becomes `xn--…`). The safety there comes from `URL`, not from any
+ * check of ours. It is the FALLBACK branch — a URL too malformed to parse, where
+ * we show the raw string — that gets none of that normalisation, and that is the
+ * branch an attacker picks. Applied uniformly anyway: it is a no-op on already-
+ * normalised output, and a uniform rule cannot be reasoned wrong later.
+ *
+ * Deliberately NOT `sanitizeUntrusted` from `@/lib/analysis/extract`, which
+ * covers the same character class: that one also defangs `<` and deletes the
+ * `«»` prompt guards, which are correct for an LLM prompt and wrong for a URL
+ * (React escapes markup here, so defanging only corrupts a legitimate address),
+ * and it would couple this module to the analysis layer. Same threat, different
+ * output medium.
+ */
+function displaySafe(value: string): string {
+  // C0/C1 controls, then the invisible + bidi-control set (soft hyphen, ALM,
+  // zero-width and directional marks, LRE..RLO, the isolates and their pop).
+  // Written as explicit escapes so the class survives a copy-paste or a
+  // formatter — the same characters written literally are invisible in a diff.
+  return value.replace(
+     
+    /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069]/g,
+    "",
+  );
+}
+
+
 /** A URL split for display, plus the origin used for first-party comparison. */
 interface UrlParts {
   host: string;
@@ -112,14 +147,14 @@ function splitUrl(url: string): UrlParts {
   try {
     parsed = new URL(url);
   } catch {
-    return { host: "", path: url, origin: null };
+    return { host: "", path: displaySafe(url), origin: null };
   }
   const origin =
     parsed.origin === "" || parsed.origin === "null" ? null : parsed.origin;
-  if (parsed.hostname === "") return { host: "", path: url, origin };
+  if (parsed.hostname === "") return { host: "", path: displaySafe(url), origin };
   return {
-    host: parsed.hostname,
-    path: `${parsed.pathname}${parsed.search}`,
+    host: displaySafe(parsed.hostname),
+    path: displaySafe(`${parsed.pathname}${parsed.search}`),
     origin,
   };
 }
@@ -233,16 +268,23 @@ export function extractWaterfall(lhr: LighthouseResult): WaterfallData {
     const resourceSize = asCount(raw.resourceSize);
     const startTime = asNumber(raw.networkRequestTime);
     const endTime = asNumber(raw.networkEndTime);
-    const entity = asString(raw.entity) ?? "";
-    const thirdParty = isThirdParty(entity, url, entities, origin);
+    // Stripped for display, but matched against the entity table on the RAW
+    // value — the table's own names come from the same report, so normalising
+    // one side of the join and not the other would silently unmatch entities.
+    const rawEntity = asString(raw.entity) ?? "";
+    const entity = displaySafe(rawEntity);
+    const thirdParty = isThirdParty(rawEntity, url, entities, origin);
 
     requests.push({
       index,
       url,
       path,
       host,
-      resourceType: asString(raw.resourceType) ?? "",
-      mimeType: asString(raw.mimeType) ?? "",
+      // The remaining page-authored strings that reach a row label. `entity`
+      // below gets the same treatment: none of these pass through `URL`, so
+      // none of them are normalised for us.
+      resourceType: displaySafe(asString(raw.resourceType) ?? ""),
+      mimeType: displaySafe(asString(raw.mimeType) ?? ""),
       transferSize,
       resourceSize,
       statusCode: asCount(raw.statusCode),
@@ -316,9 +358,18 @@ export function extractFilmstrip(lhr: LighthouseResult): FilmstripData {
     if (!isRecord(raw)) continue;
     const timingMs = asNumber(raw.timing);
     const data = asString(raw.data);
-    // The frame goes straight into an `<img src>`, so accept only an inline
-    // image URI — the one thing that is both renderable and inert there.
-    if (timingMs === null || data === undefined || !data.startsWith("data:image/")) {
+    // The frame goes straight into an `<img src>`, so accept only the exact
+    // shape Lighthouse emits. `data:image/` would also admit `svg+xml`, which is
+    // inert through `<img src>` (no script, no external fetch) but only if that
+    // stays true and the URI never reaches an `href`, `iframe` or `object` — a
+    // property of every future caller, which this module cannot enforce. Pinning
+    // the prefix removes the need to reason about it at all, and costs nothing:
+    // all 1792 frames across this repo's 224 stored reports are exactly this.
+    if (
+      timingMs === null ||
+      data === undefined ||
+      !data.startsWith("data:image/jpeg;base64,")
+    ) {
       continue;
     }
     frames.push({ timingMs, data, isLcp: false });

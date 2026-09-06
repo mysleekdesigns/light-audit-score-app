@@ -22,7 +22,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GET } from "@/app/api/reports/[runId]/trace/route";
 import { resetDbForTests } from "@/lib/db/client";
 import { reportJsonPath } from "@/lib/db/paths";
-import { recordBatch, recordRun } from "@/lib/db/persistence";
+import { deleteRun, recordBatch, recordRun } from "@/lib/db/persistence";
 import type {
   AuditOptions,
   AuditResult,
@@ -427,5 +427,62 @@ describe("GET /api/reports/:runId/trace", () => {
     await fs.writeFile(reportJsonPath("run-reflect"), "nope", "utf8");
     const serverErrorBody = await (await callGet("run-reflect")).text();
     expect(serverErrorBody).not.toContain("run-reflect");
+  });
+  /**
+   * Hardening added after the Phase D security review (its L1/L2).
+   */
+  describe("hardening", () => {
+    it("serves a repeat read from the memo instead of re-reading the file", async () => {
+      await seedRun("run-cached", makeLhr("https://trace.test/"));
+      const first = (await (await callGet("run-cached")).json()) as RunTrace;
+
+      // Corrupt the file on disk but leave the DB row. A route that re-read per
+      // request would now 500; the memo answers identically, because a finished
+      // run's report is immutable and that is the premise of caching it.
+      await fs.writeFile(reportJsonPath("run-cached"), "{ broken", "utf8");
+
+      const res = await callGet("run-cached");
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(first);
+    });
+
+    it("stops serving a cached trace once the run is deleted", async () => {
+      // The privacy half of the memo. Deleting a run (or clearing history) has
+      // to actually remove it — an in-process cache is exactly how a deleted
+      // run's URLs would keep being served. ROADMAP Phase C's M2 is the
+      // precedent for taking this seriously rather than assuming it.
+      await seedRun("run-evicted", makeLhr("https://trace.test/"));
+      expect((await callGet("run-evicted")).status).toBe(200);
+
+      await deleteRun("run-evicted");
+
+      const res = await callGet("run-evicted");
+      expect(res.status).toBe(404);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe("report_not_found");
+    });
+
+    it("refuses a report far larger than one can legitimately be", async () => {
+      await seedRun("run-huge", makeLhr("https://trace.test/"));
+      // 33 MB of valid JSON — over the 32 MB ceiling, and never read into memory.
+      const padding = "x".repeat(33 * 1024 * 1024);
+      await fs.writeFile(
+        reportJsonPath("run-huge"),
+        JSON.stringify({ audits: {}, padding }),
+        "utf8",
+      );
+
+      const res = await callGet("run-huge");
+      expect(res.status).toBe(500);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe("report_unreadable");
+      expect(await res.text().catch(() => "")).not.toContain("run-huge");
+    });
+
+    it("echoes the stored run id, not the caller's string", async () => {
+      await seedRun("run-echo", makeLhr("https://trace.test/"));
+      const body = (await (await callGet("run-echo")).json()) as RunTrace;
+      expect(body.runId).toBe("run-echo");
+    });
   });
 });

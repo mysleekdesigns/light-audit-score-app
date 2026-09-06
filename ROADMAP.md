@@ -9,8 +9,8 @@
 > read lazily from the report already on disk — data every audit has always captured and
 > Lighthouse's own report never shows. Phases E–H are unbuilt. **E is next in dependency order**
 > and is now unblocked, since it reuses D's stored-report readers; **F is independent of it.**
-> One item is carried forward: the `security-reviewer` agent did not return a report for D (see
-> its Gate note), so a review pass over that diff is still owed.
+> D's `security-reviewer` pass came back clean (no Critical/High/Medium); its four Lows were fixed
+> before the phase closed.
 > This file is a **plan**, not a record — it was drafted from a competitor survey of the
 > free/local Lighthouse tooling space (Unlighthouse, Lighthouse CI, sitespeed.io,
 > Lighthouse Parade) and the commercial monitoring tier (DebugBear, Foo.software,
@@ -596,15 +596,55 @@ five categories — `perf 85 · a11y 90 · bp 100 · seo 92 · agentic 46`.
   capture one") rather than merely that. No throw, no console error. The fixture was removed from
   the archive afterwards.
 
-Suite: lint · typecheck · build · **1184 tests**, all green (1039 → 1184).
+Suite: lint · typecheck · build · **1194 tests**, all green (1039 → 1194).
 
-*Security checks.* The phase adds a route to the local HTTP server, which is what
-`.claude/rules/security.md` flags. **The `security-reviewer` agent was launched twice and neither
-run returned a report** — a session-level fault, not a verdict: the four implementation agents'
-final reports did not arrive either, though their work did. So the review's substance was carried
-out directly, and the following are the checks actually performed and their evidence. **They are
-not a substitute for the agent's judgement, and a `security-reviewer` pass over this diff is still
-owed.**
+*Security review (read-only `security-reviewer`, required by `.claude/rules/security.md` because
+the phase adds a route to the local HTTP server): **pass — no Critical, no High, no Medium.** All
+four Lows were fixed here rather than deferred.* (Its report arrived only after a long delivery
+delay, during which the checks listed further below were performed independently; the reviewer
+also revised its own initial Medium down to Low on seeing the linearity data, noting the browser's
+~6-connection-per-origin cap bounds the blind-fetch vector.)
+
+- **L1 — the route re-read and re-parsed a ~690 KB report on every request, uncached and
+  unbounded.** The parse is synchronous, so it occupies the event loop, and the route is reachable
+  *blind* cross-origin: cookies ignore ports and `SameSite=Strict` is scoped to the site, not the
+  port, so a page on another loopback port passes every gate check (a GET is in `SAFE_METHODS`, so
+  `isTrustedWrite` never consults `Sec-Fetch-Site`) and CORS stops it reading the body but not
+  causing the work. Notably this was *not* inherited posture — the sibling `/api/reports/:runId`
+  passes the file through verbatim and never parses. Fixed with a 16-entry LRU memo plus an
+  `fs.stat` ceiling (32 MB, ~20× the largest report observed) so an oversized file is never read
+  into memory at all. Repeat reads went from a full 931 KB read+parse to **~3.4 ms**.
+  **A second-order risk the fix introduced, caught here rather than shipped:** an in-process memo
+  is exactly how a *deleted* run keeps serving its URLs, which is Phase C's M2 all over again. The
+  DB lookup stays authoritative for existence and the memo only saves the expensive part, so
+  deleting a run — or clearing history — evicts it; there is a regression test for precisely that.
+- **L2 — the 200 body echoed the caller's raw `runId`.** Unexploitable (a 200 is only reachable for
+  an id that already matched a row), but the route's own docblock promises the run id is never
+  reflected, and the success path quietly undercut it. Now echoes the DB-round-tripped value.
+- **L3 — the genuinely instructive one, and a gap in my own testing.** The waterfall's safety
+  against display spoofing comes from WHATWG `URL`, not from any check of ours: it percent-encodes
+  the path (U+202E → `%E2%80%AE`) and punycodes the host (a Cyrillic homograph → `xn--…`). The
+  *fallback* branch — a URL too malformed to parse, where the raw string is shown — got none of
+  that, and every URL in my hostile fixture parsed, so my Chrome test could not have caught it. A
+  focused control/bidi strip now runs on `path`/`host`/`entity`/`resourceType`/`mimeType`, with the
+  untouched original kept for the hover title. Verified live: `ht!tp://evil<RLO>gnp.exe` renders as
+  `ht!tp://evilgnp.exe`, and zero displayed fields carry a bidi or control character. Deliberately
+  *not* the reviewer's suggested `sanitizeUntrusted` — that one also defangs `<` and strips prompt
+  guards, which is right for an LLM prompt and wrong for a URL (React escapes markup here, so
+  defanging only corrupts a legitimate address), and it would couple this module to the analysis
+  layer. Same threat, different output medium.
+- **L4 — the filmstrip guard accepted any `data:image/`, including `svg+xml`.** Inert as written,
+  but only while the URI reaches nothing but `<img src>` — a property of every *future* caller,
+  which this module cannot enforce. Pinned to `data:image/jpeg;base64,`, which all 1,792 frames
+  across the 224 stored reports already use, so the SVG-in-`img` semantics stop needing to be
+  reasoned about.
+
+The reviewer also confirmed, against the installed Lighthouse rather than by assumption, that the
+filmstrip is capped at 8 frames and `data:` URLs are elided to ~100 chars — so the 234 KB payload
+is not attacker-inflatable.
+
+The checks below were performed directly while the report was outstanding, and stand as
+independent corroboration:
 
 - **Path traversal on the `runId` route parameter: fails closed.** Eight live payloads
   (`../../../../etc/passwd`, single- and double-encoded, `%00`, absolute, `....//`) all returned

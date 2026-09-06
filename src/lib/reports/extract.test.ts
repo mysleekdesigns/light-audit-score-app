@@ -589,3 +589,98 @@ describe("tolerance", () => {
     expect(JSON.stringify(report)).toBe(before);
   });
 });
+
+/**
+ * Display-spoofing defence (Phase D security review, L3/L4).
+ *
+ * A row label is built from strings the AUDITED PAGE chose. For a URL that
+ * parses, WHATWG `URL` already neutralises the dangerous ones — it
+ * percent-encodes the path and punycodes the host — so the exposure lives in the
+ * branch where the URL does NOT parse and the raw string is shown instead. These
+ * tests pin both halves: that the parser really is doing that work, and that the
+ * fallback no longer skips it.
+ */
+describe("untrusted display strings", () => {
+  const RLO = "\u202e";
+  const ZWSP = "\u200b";
+
+  it("relies on URL normalisation for a parseable URL (and it holds)", () => {
+    const [row] = extractWaterfall(
+      lhr({ requests: [request({ url: `https://example.com/${RLO}gnp.exe` })] }),
+    ).requests;
+    // Percent-encoded by the parser, so nothing is left to strip.
+    expect(row.path).toBe("/%E2%80%AEgnp.exe");
+    expect(row.path).not.toContain(RLO);
+  });
+
+  it("punycodes a homograph host rather than showing the lookalike", () => {
+    const [row] = extractWaterfall(
+      lhr({ requests: [request({ url: "https://\u0440aypal.com/x" })] }),
+    ).requests;
+    expect(row.host).toBe("xn--aypal-uye.com");
+  });
+
+  it("strips bidi controls from a URL too malformed to parse", () => {
+    // This is the branch the parser never sees: `ht!tp:` is not a valid scheme,
+    // so `new URL` throws and the raw string becomes the label.
+    const hostile = `ht!tp://evil${RLO}gnp.exe`;
+    const [row] = extractWaterfall(
+      lhr({ requests: [request({ url: hostile })] }),
+    ).requests;
+    expect(row.path).not.toContain(RLO);
+    expect(row.path).toBe("ht!tp://evilgnp.exe");
+    // The untouched original stays available for the hover title.
+    expect(row.url).toBe(hostile);
+  });
+
+  it("strips control and zero-width characters from entity and type labels", () => {
+    const [row] = extractWaterfall(
+      lhr({
+        requests: [
+          request({
+            entity: `evil${ZWSP}.com`,
+            resourceType: `Scr\u0000ipt`,
+            mimeType: `text/${RLO}html`,
+          }),
+        ],
+      }),
+    ).requests;
+    expect(row.entity).toBe("evil.com");
+    expect(row.resourceType).toBe("Script");
+    expect(row.mimeType).toBe("text/html");
+  });
+
+  it("still joins the entity table on the raw value, so stripping cannot unmatch", () => {
+    // Both sides of the join come from the same report. If the row were matched
+    // on the STRIPPED name while the table keeps the raw one, a first-party
+    // entity would silently be reported third-party.
+    const name = `exam${ZWSP}ple.com`;
+    const data = extractWaterfall({
+      mainDocumentUrl: PAGE,
+      finalDisplayedUrl: PAGE,
+      entities: [{ name, origins: ["https://example.com"], isFirstParty: true }],
+      audits: {
+        "network-requests": {
+          details: { items: [request({ entity: name })] },
+        },
+      },
+    });
+    expect(data.requests[0].thirdParty).toBe(false);
+    expect(data.requests[0].entity).toBe("example.com");
+  });
+
+  it("accepts only Lighthouse's own JPEG frame URI", () => {
+    const frames = [
+      { timing: 100, data: FRAME },
+      { timing: 200, data: "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=" },
+      { timing: 300, data: "data:text/html,<script>x</script>" },
+      { timing: 400, data: "https://evil.example/tracker.gif" },
+      { timing: 500, data: "javascript:alert(1)" },
+    ];
+    const out = extractFilmstrip(lhr({ frames }));
+    expect(out.frames).toHaveLength(1);
+    expect(out.frames[0].data).toBe(FRAME);
+    // Present-but-all-rejected is still a report that HAD the audit.
+    expect(out.unavailable).toBe(false);
+  });
+});
