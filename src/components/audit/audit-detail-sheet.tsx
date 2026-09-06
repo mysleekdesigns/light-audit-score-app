@@ -7,6 +7,7 @@ import {
   FileJson,
   Info,
   Minus,
+  RotateCw,
   Sparkles,
   TriangleAlert,
   X,
@@ -15,6 +16,8 @@ import {
 import { AnalysisPanel } from "@/components/audit/analysis-panel";
 import { DriftWarning } from "@/components/audit/drift-warning";
 import { EnvironmentBadge } from "@/components/audit/environment-badge";
+import { LoadingFilmstrip } from "@/components/audit/loading-filmstrip";
+import { RequestWaterfall } from "@/components/audit/request-waterfall";
 import { FieldDataPanel } from "@/components/pagespeed/field-data-panel";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -46,6 +49,7 @@ import {
   ToggleGroup,
   ToggleGroupItem,
 } from "@/components/ui/toggle-group";
+import { useRunTrace } from "@/hooks/useRunTrace";
 import type { AnalysisCategory } from "@/lib/analysis/types";
 import { reportHtmlUrl, reportJsonUrl } from "@/lib/client/auditClient";
 import {
@@ -688,17 +692,92 @@ function defaultAnalysisCategory(result: AuditResultLite): AnalysisCategory {
   return worst?.category ?? "performance";
 }
 
+/** The detail sheet's panes. Ordered as the tab strip reads, left to right. */
+type DetailTab = "report" | "trace" | "analysis";
+
+/** Narrow Radix's `string` tab value back to {@link DetailTab}; anything else is Report. */
+function asDetailTab(value: string): DetailTab {
+  return value === "trace" || value === "analysis" ? value : "report";
+}
+
 /**
- * A completed job's body: a Report / Analysis tab split. "Report" is the full
- * audit readout; "Analysis" is the AI "explain & fix this score" flow. Clicking a
- * category score in the Report tab jumps to Analysis pre-targeted to it; a
- * category toggle switches which score is analyzed without leaving the tab. Both
- * panes are `forceMount`ed so an in-flight analysis survives tab switches; the
- * `AnalysisPanel` is keyed by `${runId}:${category}` so it resets cleanly when
- * either changes. Keyed by job id upstream so a device flip remounts it.
+ * The Trace tab's body (ROADMAP Phase D): the loading filmstrip over the request
+ * waterfall, both projected from ONE read of the run's stored report.
+ *
+ * **This is the phase's "lazy read" clause, and the reason it is a clause.** A
+ * stored report here averages ~690 KB and reaches 1.5 MB, and every audited URL
+ * has one. Reading them eagerly — with the history row, or merely on opening the
+ * sheet — would put megabytes of disk read and JSON parse behind a page that
+ * currently costs a single SQLite query. So nothing is read until `active` says
+ * the user actually opened this tab, and `useRunTrace` then reads once and keeps
+ * the result: a finished run's report is immutable, so a second fetch could only
+ * ever return the same bytes.
+ *
+ * The pane is still `forceMount`ed like its siblings, which is not in tension
+ * with that — `active` gates the fetch, not the mount, so the waterfall's sort
+ * order and the filmstrip's enlarged frame survive a trip to Analysis and back.
+ */
+function TracePanel({ runId, active }: { runId: string; active: boolean }) {
+  const { status, trace, error, retry } = useRunTrace(runId, active);
+
+  // Idle is the pane sitting force-mounted behind another tab, never yet opened.
+  // It has nothing to say and must not imply a read is happening.
+  if (status === "idle") return null;
+
+  if (status === "error") {
+    return (
+      <div className="p-4">
+        <Alert variant="destructive">
+          <TriangleAlert />
+          <AlertTitle>Trace unavailable</AlertTitle>
+          <AlertDescription className="flex flex-col items-start gap-3">
+            <span>
+              {error?.message ??
+                "The stored report for this run could not be read."}
+            </span>
+            <Button size="sm" variant="outline" onClick={retry}>
+              <RotateCw data-icon="inline-start" />
+              Retry
+            </Button>
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
+  if (status === "loading" || trace === null) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+        <Spinner className="text-primary" />
+        <p className="text-sm text-muted-foreground">Reading the stored report…</p>
+      </div>
+    );
+  }
+
+  return (
+    <ScrollArea className="min-h-0 flex-1 overscroll-contain">
+      <div className="flex flex-col gap-6 p-4">
+        <LoadingFilmstrip data={trace.filmstrip} />
+        <Separator />
+        <RequestWaterfall data={trace.waterfall} finalUrl={trace.finalUrl} />
+      </div>
+    </ScrollArea>
+  );
+}
+
+/**
+ * A completed job's body: a Report / Trace / Analysis tab split. "Report" is the
+ * full audit readout; "Trace" is the request waterfall + loading filmstrip read
+ * lazily from the stored report; "Analysis" is the AI "explain & fix this score"
+ * flow. Clicking a category score in the Report tab jumps to Analysis
+ * pre-targeted to it; a category toggle switches which score is analyzed without
+ * leaving the tab. All three panes are `forceMount`ed so an in-flight analysis —
+ * and a loaded trace — survive tab switches; the `AnalysisPanel` is keyed by
+ * `${runId}:${category}` so it resets cleanly when either changes. Keyed by job
+ * id upstream so a device flip remounts it.
  */
 function JobDetail({ job, result }: { job: AuditJob; result: AuditResultLite }) {
-  const [tab, setTab] = useState<"report" | "analysis">("report");
+  const [tab, setTab] = useState<DetailTab>("report");
   const [category, setCategory] = useState<AnalysisCategory>(() =>
     defaultAnalysisCategory(result),
   );
@@ -711,13 +790,16 @@ function JobDetail({ job, result }: { job: AuditJob; result: AuditResultLite }) 
   return (
     <Tabs
       value={tab}
-      onValueChange={(value) => setTab(value === "analysis" ? "analysis" : "report")}
+      onValueChange={(value) => setTab(asDetailTab(value))}
       className="flex min-h-0 flex-1 flex-col gap-0"
     >
       <div className="border-b border-border/60 px-4 py-2">
         <TabsList variant="line" className="h-8 w-full justify-start">
           <TabsTrigger value="report" className="flex-none px-3">
             Report
+          </TabsTrigger>
+          <TabsTrigger value="trace" className="flex-none px-3">
+            Trace
           </TabsTrigger>
           <TabsTrigger value="analysis" className="flex-none px-3">
             <Sparkles data-icon="inline-start" />
@@ -733,6 +815,16 @@ function JobDetail({ job, result }: { job: AuditJob; result: AuditResultLite }) 
       >
         <div className="flex h-full min-h-0 flex-col">
           <DoneBody job={job} result={result} onAnalyze={handleAnalyze} />
+        </div>
+      </TabsContent>
+
+      <TabsContent
+        value="trace"
+        forceMount
+        className="min-h-0 flex-1 outline-none data-[state=inactive]:hidden"
+      >
+        <div className="flex h-full min-h-0 flex-col">
+          <TracePanel runId={job.id} active={tab === "trace"} />
         </div>
       </TabsContent>
 

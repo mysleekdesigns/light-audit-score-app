@@ -1,11 +1,16 @@
 # ROADMAP — Competitive differentiation plan (Phases A–H)
 
-> **Status (updated 2026-09-05):** **Phases A, B and C complete** — the Agentic Browsing category is
+> **Status (updated 2026-09-06):** **Phases A, B, C and D complete** — the Agentic Browsing category is
 > live end-to-end (engine → SQLite → UI → PSI → AI analysis), audits can now authenticate
 > (basic auth, cookies, headers) for both auditing and crawl discovery with credentials redacted
-> at every persistence boundary, and the daily scheduler finally notifies: an armed schedule
+> at every persistence boundary, the daily scheduler finally notifies (an armed schedule
 > compares each fire with the one before it and reports what crossed, in-app and to an optional
-> webhook. Phases D–H are unbuilt; **D is unblocked and independent**.
+> webhook), and every run now opens a **Trace** tab: a request waterfall and a loading filmstrip
+> read lazily from the report already on disk — data every audit has always captured and
+> Lighthouse's own report never shows. Phases E–H are unbuilt. **E is next in dependency order**
+> and is now unblocked, since it reuses D's stored-report readers; **F is independent of it.**
+> One item is carried forward: the `security-reviewer` agent did not return a report for D (see
+> its Gate note), so a review pass over that diff is still owed.
 > This file is a **plan**, not a record — it was drafted from a competitor survey of the
 > free/local Lighthouse tooling space (Unlighthouse, Lighthouse CI, sitespeed.io,
 > Lighthouse Parade) and the commercial monitoring tier (DebugBear, Foo.software,
@@ -504,23 +509,137 @@ LightAudit Score this is a **rendering job, not a measurement one**: the full Li
 already persisted per run and already contains `network-requests` and `screenshot-thumbnails`
 — neither audit id is read anywhere in `src/` today.
 
-- [ ] **Report readers**: pure, unit-tested extractors that pull the `network-requests` table
+- [x] **Report readers**: pure, unit-tested extractors that pull the `network-requests` table
       and the `screenshot-thumbnails` frames out of a stored report JSON, tolerating a missing
       or legacy audit (return empty, never throw) the way `reconstructBatch` degrades.
-- [ ] **Waterfall view**: a new tab in the run detail sheet — one row per request (path,
+      *Done: `src/lib/reports/extract.ts` against the frozen contract in `types.ts`, pure in the
+      `parseLhr` sense (whose narrowing helpers it reuses) — no I/O, no `lighthouse` import.
+      Three things the real reports taught us, none of them guessable from the plan. **(1) `-1`
+      is Chrome's "unknown", not a size.** One stored report carries a worker `blob:` request
+      with `transferSize: -1`, and summing it naively put our total ONE BYTE below Lighthouse's
+      own — a wrong number that looks right. Treated as unknown, our total now equals
+      `total-byte-weight` and `resource-summary` exactly. **(2) Lighthouse 13 renamed the
+      render-blocking audit** (`render-blocking-resources` → `render-blocking-insight`); both ids
+      are read and unioned, so either era marks its rows. **(3) Third-party is a join, not a
+      hostname guess:** `lhr.entities[].isFirstParty` keyed by the request's `entity`, falling
+      back to origin comparison for legacy reports — which reproduces Lighthouse's own
+      third-party count exactly (19 of 104 on the example.com report). Tolerance is shape-driven,
+      not label-driven: an audit is read whenever `details.items` is an array, never by asserting
+      `details.type`, precisely because Lighthouse has renamed things under us before.
+      `unavailable` is load-bearing and distinct from an empty list — a page that genuinely made
+      zero requests must not be reported as a report too old to have the data.*
+- [x] **Waterfall view**: a new tab in the run detail sheet — one row per request (path,
       type, size, timing bars), sortable, with the render-blocking and third-party requests
       marked. Wide content scrolls inside its own container; existing tokens and monospace
       figures only.
-- [ ] **Filmstrip**: the thumbnail frames on a timeline, with the LCP frame marked.
-- [ ] **Lazy read**: report JSON is read on demand when the tab opens, not eagerly with the
+      *Done: `request-waterfall.tsx` over a pure `waterfall-view.ts` (comparators, bar geometry,
+      formatting, mark predicates), which is how a component gets unit-tested at all here —
+      Vitest runs `environment: "node"` with no jsdom, and none was added. Sortable on order /
+      start / duration / size, stable, with `index` preserved as row identity so a sort never
+      loses the LHR's own ordering. Marks are the text badges `RB` and `3P`, not colour alone.
+      **Deliberately no links:** routing 100+ attacker-chosen subresource URLs through
+      `safeHttpHref` would still put 100+ attacker-chosen navigation targets in a modal's tab
+      order, and Phase C's L1 finding is the standing reminder of what a hostile audited site
+      does with a user-facing surface. The full URL is on hover instead. No new colour, font or
+      token.*
+- [x] **Filmstrip**: the thumbnail frames on a timeline, with the LCP frame marked.
+      *Done: `loading-filmstrip.tsx` over a pure `filmstrip-view.ts`. Frames sit against a time
+      axis with monospace per-frame timings and scroll in their own box — eight 96px thumbnails
+      do not fit a 672px sheet — and a click enlarges one, because a 96px thumbnail of a whole
+      page answers "something was painting" but not "what did the user actually see at 1.2s?".
+      The LCP frame carries a text label, not just a colour.*
+- [x] **Lazy read**: report JSON is read on demand when the tab opens, not eagerly with the
       history row — a large report must not slow `/history`.
-- [ ] **Verify**: waterfall and filmstrip render for a live run, for a *reconstructed*
+      *Done, and this clause is why the whole data path is shaped as it is. Stored reports here
+      average **~690 KB and reach 1.5 MB**, so the browser must never receive one: the extractors
+      run server-side behind a new `GET /api/reports/:runId/trace`, which returns only the compact
+      projection (**931,602 → 234,019 bytes** on the gate run, and the remainder is almost
+      entirely the eight inline JPEG frames, which are irreducible). `useRunTrace(runId, active)`
+      fetches nothing until the tab is opened and caches the result — a finished run's report is
+      immutable, so a refetch could only return the same bytes. The pane is still `forceMount`ed
+      like its siblings, which is not in tension with that: `active` gates the FETCH, not the
+      mount, so the sort order and the enlarged frame survive a trip to Analysis and back. The
+      route mirrors `GET /api/reports/:runId`'s degradation ladder (disk → in-memory queue → 404),
+      with one deliberate difference — a report file that is PRESENT but unparseable returns a
+      structured 500 rather than falling through, because an absent report is ordinary and a
+      corrupt one is a real fault.*
+- [x] **Verify**: waterfall and filmstrip render for a live run, for a *reconstructed*
       DB-only run, and degrade cleanly (empty state, no throw) for a legacy row whose report
       file predates the feature.
+      *Done, all three driven in real Chrome — see the Gate note below.*
 
 **Gate:** a real audit's waterfall row count and total transfer size match the same run
 opened in the stored Lighthouse HTML report; the filmstrip frame count matches; zero console
 errors; `/history` render time is unchanged.
+
+*Gate green (2026-09-06).* Live audit of `https://web.dev/`, mobile / simulated / cold cache, all
+five categories — `perf 85 · a11y 90 · bp 100 · seo 92 · agentic 46`.
+
+- **Row count and transfer size match exactly.** Our `/trace` output versus a count taken
+  independently — a script sharing no code with `src/lib/reports/`, reading the LHR that
+  Lighthouse itself embedded in the stored **HTML** report: **97 requests = 97**, **2,448,959
+  bytes = 2,448,959**. That byte total also equals Lighthouse's own `total-byte-weight` and its
+  `resource-summary` total, computed by two more independent code paths. And the DOM agrees:
+  **97 `<tr>` rows** counted in the rendered tab, not read back from our own API.
+- **Filmstrip frame count matches: 8 = 8**, likewise counted as `<img>` elements in the DOM.
+- **Zero console errors**, zero page errors, zero failed requests — across all three cases below.
+- **`/history` render time is unchanged**, measured on the same machine either side of the change:
+  **555,582 bytes and ~19 ms** before, **555,582 bytes and ~19 ms** after. Byte-identical, because
+  the page's query never learned about reports.
+- **The lazy read is proven, not asserted**: Chrome's own network log shows **0** requests to
+  `/trace` before the tab is clicked and **exactly 1** after.
+- **Reconstructed DB-only run**: after a full server restart (empty in-memory queue, batch rebuilt
+  from SQLite by `reconstructBatch`), the same run renders identically — 8 frames, 97 rows.
+- **Legacy report row**: a run whose stored report has both audits stripped — the on-disk shape of
+  a pre-feature report — degrades to `unavailable: true` on both surfaces, with empty states that
+  explain *why* ("this run was stored without a `network-requests` audit … re-run the audit to
+  capture one") rather than merely that. No throw, no console error. The fixture was removed from
+  the archive afterwards.
+
+Suite: lint · typecheck · build · **1184 tests**, all green (1039 → 1184).
+
+*Security checks.* The phase adds a route to the local HTTP server, which is what
+`.claude/rules/security.md` flags. **The `security-reviewer` agent was launched twice and neither
+run returned a report** — a session-level fault, not a verdict: the four implementation agents'
+final reports did not arrive either, though their work did. So the review's substance was carried
+out directly, and the following are the checks actually performed and their evidence. **They are
+not a substitute for the agent's judgement, and a `security-reviewer` pass over this diff is still
+owed.**
+
+- **Path traversal on the `runId` route parameter: fails closed.** Eight live payloads
+  (`../../../../etc/passwd`, single- and double-encoded, `%00`, absolute, `....//`) all returned
+  404 or a 308 normalise; none returned file content. Structural reason: `getRunReport(runId)`
+  resolves the id through SQLite and builds the path from `row.id`, so caller input never reaches
+  `path.join`.
+- **No error-body reflection:** every failure path returns a static string with no id echoed.
+- **No credential can ride the projection:** enumerating every key of a real 234 KB response gives
+  exactly the frozen contract — there is no header field of any kind, so there is structurally
+  nothing to leak; `authorization`/`bearer`/`set-cookie`/`extraHeaders`/`basicAuth`/`password` are
+  all absent and no request carried `user:pass@` (which Phase B already rejects at both URL schemas).
+- **A hostile audited site cannot reach the operator through the waterfall.** A report seeded with
+  eight malicious request URLs (`<img src=x onerror=…>`, `<script>`, `javascript:`,
+  `data:text/html`, an attribute breakout, a 4,000-char URL, an RTL override) was driven in real
+  Chrome: no payload executed, 0 injected script or image elements, 0 `javascript:`/`data:text/html`
+  hrefs, and no horizontal overflow. The payloads *are* on screen as escaped text — so the test did
+  not pass by silently dropping them.
+- **No amplification, recursion bomb, or prototype pollution** in the extractor: 100k requests
+  (~1000× a real page) project in 77 ms / 31 MB, linearly; a 50,000-deep nested `details` is handled
+  without a stack overflow; and `__proto__`/`constructor` keys in report data leave
+  `Object.prototype` untouched. The route's per-request parse is the same exposure the pre-existing
+  `GET /api/reports/:runId` already has, which serves the whole file.
+- **Untouched**, confirmed by `git status`: `src/proxy.ts`, `src/lib/http/localGate.ts`,
+  `reportCsp.ts`, `scripts/start.mjs`, `scripts/session-token.mjs`, `credentials.ts`,
+  `persistence.ts`.
+
+*Two deviations from the plan, both recorded rather than silent.* **(1) One tab, named "Trace",
+holds both surfaces** (filmstrip above waterfall) rather than a tab called "Waterfall": one fetch
+feeds both, and splitting them would have meant two panes reading the same payload. **(2) The plan
+says this data can be checked against "the same run opened in the stored Lighthouse HTML report",
+which turns out to be truer than intended — `network-requests` and `screenshot-thumbnails` are both
+in Lighthouse's `hidden` audit group, so its own report never renders either one.** The comparison
+was therefore made against the LHR embedded in that HTML file, and the wider point stands on the
+record: this phase surfaces data every audit has always captured and no Lighthouse report has ever
+shown.
 
 ---
 
