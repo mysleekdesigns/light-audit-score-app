@@ -500,7 +500,10 @@ const ResourceRow = memo(function ResourceRow({
           "font-mono text-[0.65rem] uppercase tracking-[0.08em] whitespace-nowrap text-muted-foreground",
         )}
       >
-        {row.resourceType || ABSENT}
+        {/* Chrome's own `ResourceType` enum, not page-authored, and already
+            through `displaySafe` — clamped anyway so every string in this table
+            has a ceiling, and so it matches the prompt path's own 40. */}
+        {row.resourceType ? clampText(row.resourceType, 40) : ABSENT}
       </TableCell>
       <TableCell className={cn(BODY_CELL, FIGURE_CELL, "text-muted-foreground")}>
         {formatBytes(row.baselineTransferSize)}

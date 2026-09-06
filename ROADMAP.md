@@ -901,6 +901,26 @@ and all five Lows were fixed rather than deferred.*
   nanoid job key exactly, which is a different reason and now says so. An overclaimed guarantee is
   worse than none: it is the note a later author cites to skip a check.
 
+Its four hardening suggestions were taken too, in a follow-up commit. Two are worth naming:
+the diff route and its hook keyed their caches on a **literal NUL byte in the source**, which is
+correct but is exactly what a formatter or a copy-paste silently eats — and losing it would
+re-admit the `("ab","c")` / `("a","bc")` collision with nothing visible in the diff, so both are
+now written as a `\u0000` escape, the rule this repo already applies to the control/bidi class in
+`displaySafe`. And `apiError` now sets `Cache-Control: no-store` on every error envelope
+app-wide: a bare 4xx is heuristically cacheable under RFC 9111, and a cached
+`404 report_not_found` for a run id that exists a moment later — a run still finishing, a report
+still being written — is a correctness bug rather than merely a security nicety. Also: the
+Requests table's `resourceType` is now clamped like every other string beside it, and the two
+prompt fields that sit OUTSIDE the `«…»` guards (`fetchTime`, the Lighthouse versions) carry a
+comment saying why — they are Lighthouse's own fields in our own artefact, and guarding them
+would tell the model to distrust the one part of that section it can rely on.
+
+**One suggestion was declined, deliberately:** a global ceiling on concurrent analyses
+(`inFlight.size >= 4`). L5 was that Phase E had REMOVED the per-`(runId, category)` bound, and
+that bound is restored; a global cap is a different, pre-existing question, it would refuse the
+legitimate act of analysing several different runs at once, and the number would be arbitrary.
+Recorded here rather than silently skipped.
+
 The reviewer confirmed the diff leaves untouched `src/proxy.ts`, `src/lib/http/localGate.ts`,
 `reportCsp.ts`, `scripts/start.mjs`, `scripts/session-token.mjs` and the Phase B credential paths
 (`persistence.ts` was modified deliberately, for M1), and that the memo cannot serve a cached diff

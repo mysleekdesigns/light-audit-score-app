@@ -64,3 +64,28 @@ describe("status helpers", () => {
     expect(body.error.code).toBe("report_generation_failed");
   });
 });
+
+describe("caching", () => {
+  it("marks every error response no-store", async () => {
+    // A bare 4xx is heuristically cacheable under RFC 9111, and a cached
+    // `404 report_not_found` for a run id that exists a moment later — a run
+    // still finishing, a report still being written — is a correctness bug, not
+    // just a security nicety. ROADMAP Phase E security review, S2.
+    for (const response of [
+      apiError(500, "boom", "Something failed."),
+      badRequest("invalid_request", "Bad."),
+      notFound("missing", "Gone."),
+      serverError("oops", "Broken."),
+    ]) {
+      expect(response.headers.get("Cache-Control")).toBe("no-store");
+    }
+  });
+
+  it("still returns the documented envelope alongside the header", async () => {
+    const response = notFound("missing", "Gone.");
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: { message: "Gone.", code: "missing" },
+    });
+  });
+});

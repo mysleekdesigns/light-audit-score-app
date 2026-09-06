@@ -21,6 +21,22 @@ import type { ApiErrorBody, ApiErrorIssue } from "@/lib/queue/types";
  * @param message Human-readable description (safe to surface to the user).
  * @param issues  Optional per-field validation issues (for 400 responses).
  */
+/**
+ * Headers every error response carries.
+ *
+ * `no-store` because a bare 4xx is heuristically cacheable under RFC 9111, and
+ * these are the wrong responses to cache: a `404 report_not_found` for a run id
+ * that exists a moment later (a run still finishing, a report being written) is
+ * a correctness bug, not merely a security nicety. Set here rather than per
+ * route so it holds for every handler at once — the success paths that need it
+ * (`/trace`, `/diff`) set their own, since they carry rather more than a code.
+ *
+ * Raised by ROADMAP Phase E's security review (S2), which observed that
+ * `nosniff` already applies globally via `next.config.ts` but `no-store` reached
+ * only the 200s.
+ */
+const ERROR_HEADERS = { "Cache-Control": "no-store" } as const;
+
 export function apiError(
   status: number,
   code: string,
@@ -35,7 +51,7 @@ export function apiError(
       ...(issues && issues.length > 0 ? { issues } : {}),
     },
   };
-  return Response.json(body, { status });
+  return Response.json(body, { status, headers: ERROR_HEADERS });
 }
 
 /** 400 Bad Request — malformed/invalid input. Pass `issues` for field errors. */

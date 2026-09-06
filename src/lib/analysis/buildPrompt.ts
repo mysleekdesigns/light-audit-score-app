@@ -327,6 +327,11 @@ function shownOf(shown: number, total: number, noun: string): string | null {
 function renderChangeSection(change: ChangeFinding, label: string): string[] {
   const lines: string[] = ["## What changed since the baseline run", ""];
 
+  // `fetchTime` and the Lighthouse versions below are deliberately NOT wrapped
+  // in the «…» untrusted guards: unlike the URLs and display values around
+  // them, they are Lighthouse's own fields in OUR own stored artefact, not
+  // strings the audited page chose. Guarding them would tell the model to
+  // distrust the one part of this section it can rely on.
   lines.push(`- Baseline run \`${change.baselineRunId}\`, audited ${change.baselineFetchTime || "at an unknown time"}`);
   lines.push(`- This run \`${change.comparisonRunId}\`, audited ${change.comparisonFetchTime || "at an unknown time"}`);
   if (change.scoreDelta === null) {
