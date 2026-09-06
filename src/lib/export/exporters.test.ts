@@ -178,3 +178,42 @@ describe("rowsToCsv", () => {
     expect(csv).toContain('"https://example.com/a,b"');
   });
 });
+
+describe("csvCell formula injection", () => {
+  // ROADMAP Phase A's review raised this and left it as pre-existing; Phase F
+  // makes it live, because `--reporter csv` writes a file CI archives and a
+  // human later opens in a spreadsheet.
+  it("neutralises every formula leader, including the control-character bypass", () => {
+    for (const payload of [
+      '=HYPERLINK("https://evil.test","click")',
+      "+1+1",
+      "-1+1",
+      "@SUM(A1:A9)",
+      "\tcmd",
+      "\r=1+1",
+    ]) {
+      const cell = csvCell(payload);
+      // Quoted, and the leading apostrophe makes the spreadsheet read it as text.
+      expect(cell.startsWith(`"'`)).toBe(true);
+      // Every original character survives — the prefix adds, it never substitutes.
+      expect(cell).toContain(payload.replace(/"/g, '""'));
+      // And the exact cell, so the cost is asserted rather than implied: a
+      // parser reads the apostrophe back as part of the value. This is NOT a
+      // lossless round-trip, and the docblock says so.
+      expect(cell).toBe(`"'${payload.replace(/"/g, '""')}"`);
+    }
+  });
+
+  it("leaves an ordinary value untouched", () => {
+    expect(csvCell("https://example.com/a")).toBe("https://example.com/a");
+    expect(csvCell(93)).toBe("93");
+    expect(csvCell(null)).toBe("");
+  });
+
+  it("still escapes RFC 4180 specials, and both rules at once", () => {
+    expect(csvCell('a,b')).toBe('"a,b"');
+    expect(csvCell('say "hi"')).toBe('"say ""hi"""');
+    // A formula leader AND an interior quote: quoted once, quotes doubled once.
+    expect(csvCell('=x"y')).toBe(`"'=x""y"`);
+  });
+});

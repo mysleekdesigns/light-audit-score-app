@@ -484,13 +484,26 @@ export class AuditQueue implements AuditQueueApi {
       // Stash the heavy, lhr-bearing result under the runId for the report
       // endpoint; surface only the lite view on the job.
       this.results.set(job.id, result);
+      // Persist the run (report files + indexed row) BEFORE marking the job
+      // done, so the report files and the row exist by the time anything reacts.
+      // `recordRun` never throws, so no extra try/catch is required.
+      //
+      // ORDER IS LOAD-BEARING, and it used to be wrong: `job.status = "done"`
+      // was set BEFORE this await, which defeated the very thing this comment
+      // claims. `maybeFinalizeBatch` decides the batch is finished by reading
+      // `job.status` across the batch, so with two jobs in flight, job B could
+      // set `done` and enter this await while job A's completion ran
+      // `maybeFinalizeBatch`, saw both jobs "done", and emitted
+      // `batch-completed` with B's row not yet written. A consumer that reads
+      // SQLite once on that event and stops — which is exactly what the Phase F
+      // CI runner does — then judged fewer pages than it audited. The web UI
+      // never noticed because it re-fetches. Assigning after the await makes
+      // "settled" mean "persisted", which is what every consumer already
+      // assumes it means.
+      await recordRun(batch, job, result);
       job.status = "done";
       job.finishedAt = now();
       job.result = toResultLite(result);
-      // Persist the run (report files + indexed row) BEFORE announcing the job
-      // as done, so the report files exist by the time the UI reacts. recordRun
-      // never throws, so no extra try/catch is required.
-      await recordRun(batch, job, result);
       this.emit(batchId, {
         type: "job-completed",
         batchId,

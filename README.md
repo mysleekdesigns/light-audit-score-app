@@ -193,7 +193,7 @@ npm run build    # rebuild once
 npm run dev      # hot-reloading dev server instead
 ```
 
-Standalone CLI (audit a single URL from the terminal, no UI):
+Standalone CLI (audit URLs from the terminal, no UI):
 
 ```bash
 npm run audit -- https://example.com
@@ -201,7 +201,9 @@ npm run audit -- https://example.com
 
 The `audit` script runs under `node --import ./scripts/alias-hooks.mjs scripts/audit-cli.ts`
 (native TS + a tiny resolver for the `@/*` path alias) — **not** `tsx`, for the reason described
-in Requirements above.
+in Requirements above. It takes several URLs, a URL file, or a crawl spec, and every run it does
+lands in History alongside the ones you ran in the app. Give it a budget and it becomes a build
+gate — see [CI: budgets with an exit code](#ci-budgets-with-an-exit-code).
 
 Quality gates:
 
@@ -210,6 +212,123 @@ npm test         # vitest (unit tests)
 npm run lint     # eslint
 npm run typecheck   # tsc --noEmit
 ```
+
+## CI: budgets with an exit code
+
+The same engine runs as a build gate: **no server, no session token, no browser window** (Chrome
+itself still launches — headless — because that is what an audit is). Give it some pages and a
+bar. It exits **0** when every page clears it and **1** when one doesn't, naming the page and the
+category so a red build is readable at a glance:
+
+```bash
+npm run ci -- https://example.com https://example.com/pricing --budget 90
+```
+
+```
+✗ 2 budget violation(s) across 1 of 2 page(s):
+  https://example.com/pricing [mobile]
+      performance 71 < 90
+      seo 88 < 90
+```
+
+Every CI run **persists to the same History as the app**, so a failed build opens next to the runs
+you did by hand and can be compared against them. That shared archive is the point of running the
+audit here rather than in a throwaway container.
+
+### Targets
+
+| | |
+|---|---|
+| `npm run ci -- <url> [<url> ...]` | one or more URLs (a bare host gets `https://`) |
+| `--urls-file <path>` | one URL per line; blank lines and `#` comment lines ignored |
+| `--crawl <seed>` | discover pages from a seed, bounded by `--max-pages`, `--max-depth`, `--no-sitemap`, `--no-follow-links`, `--exclude-paths=/admin,*.pdf` |
+
+The audit dials are the ones `npm run audit` already takes — `--runs`, `--device=mobile|desktop|both`,
+`--throttling`, `--cpu`, `--categories`, `--concurrency`, `--accuracy`. Run `npm run ci -- --help`
+for the full list.
+
+### Budgets
+
+`--budget <n>` sets one bar for every category. `--config <path>` sets them per category, and wins
+over the flag where both apply:
+
+```json
+{
+  "budgets": {
+    "performance": 90,
+    "accessibility": 100,
+    "seo": 90
+  }
+}
+```
+
+A category with no bar is reported and never fails the build, so adding a sixth Lighthouse
+category can't retroactively break your pipeline. A page that could **not** be measured fails —
+CI does not go green on the unknown. Budget only what you measure: a bar on a category
+`--categories` doesn't run has no score to clear, and the CLI says so before it spends a minute
+in Chrome.
+
+### Reporters and exit codes
+
+`--reporter json|jsonExpanded|csv|html` writes the report to stdout, or to `--output <path>`.
+`json` is the format of record; `csv` opens in a spreadsheet; `html` is a self-contained page for
+a build artifact. The verdict and the failing lines always go to **stderr**, so they survive
+whichever reporter you pick — and with no `--reporter` at all you get the developer summary from
+`npm run audit`.
+
+| Exit | Meaning |
+|---|---|
+| `0` | every budget met |
+| `1` | a budget violation, or an audit that failed to run |
+| `2` | a usage error — bad flags, an unreadable config, no targets |
+
+### GitHub Actions
+
+LightAudit Score is distributed as source, so the job checks it out and runs it against your URLs.
+`ubuntu-latest` already ships Google Chrome, which is all the engine needs.
+
+```yaml
+name: Lighthouse budgets
+
+on: [push]
+
+jobs:
+  lighthouse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: mysleekdesigns/light-audit-score-app
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: npm ci
+
+      - name: Audit against budgets
+        run: |
+          npm run ci -- \
+            https://example.com \
+            https://example.com/pricing \
+            --budget 90 \
+            --reporter html \
+            --output lighthouse-ci.html
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lighthouse-ci
+          path: lighthouse-ci.html
+```
+
+Two notes on that workflow:
+
+- `npm ci` (install dependencies) and `npm run ci` (audit) are different commands that happen to
+  share three letters. The step names above keep them apart.
+- History lives in `data/` under the checkout, which a runner throws away. Point `LH_DATA_DIR` at
+  a cached or mounted directory if you want the archive to build up across runs.
 
 ## How to use
 

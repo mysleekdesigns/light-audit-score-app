@@ -460,6 +460,63 @@ describe("AuditQueue", () => {
     expect(queue.getJobResult("nope")).toBeUndefined();
   });
 
+  it("does not finish a batch until every run is PERSISTED, not merely audited", async () => {
+    // Regression test for the race ROADMAP Phase F's CI runner exposed.
+    // `job.status = "done"` used to be set BEFORE `await recordRun(...)`, and
+    // `maybeFinalizeBatch` decides a batch is over by reading `job.status`
+    // across the batch. So with two jobs in flight, job B could mark itself done
+    // and enter its (async) persist while job A's completion finalised the
+    // batch — emitting `batch-completed` with B's row still unwritten. Anything
+    // that reads SQLite once on that event and stops then saw fewer runs than it
+    // audited; for the CI gate that meant judging one page of two and passing a
+    // build it should have failed. The web UI never noticed because it re-fetches.
+    mockRunAudit.mockImplementation((url) => Promise.resolve(makeResult(url, 90)));
+
+    // Hold the SECOND persist open so the two jobs are guaranteed to interleave
+    // in exactly the order that used to break.
+    let releaseSecond: () => void = () => {};
+    const secondPersisted = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    let calls = 0;
+    mockRecordRun.mockImplementation(() => {
+      calls += 1;
+      return calls === 2 ? secondPersisted : Promise.resolve();
+    });
+
+    const queue = new AuditQueue();
+    const initial = queue.createBatch({
+      urls: ["https://a.test/", "https://b.test/"],
+      device: "mobile",
+      options: OPTIONS,
+      concurrency: 2,
+    });
+
+    let completed = false;
+    queue.subscribe(initial.id, (event) => {
+      if (event.type === "batch-completed") completed = true;
+    });
+
+    // Let both workers resolve and the first persist settle. The batch must
+    // still be open, because one run is not on disk yet.
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(calls).toBe(2);
+    expect(completed).toBe(false);
+    expect(queue.getBatch(initial.id)?.status).not.toBe("completed");
+
+    // Once the row lands, the batch finishes.
+    releaseSecond();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(completed).toBe(true);
+    expect(queue.getBatch(initial.id)?.status).toBe("completed");
+
+    mockRecordRun.mockReset();
+    mockRecordRun.mockResolvedValue(undefined);
+  });
+
   it("forgetJobResults drops a retained result so a deleted run stops being readable", async () => {
     // ROADMAP Phase E security review, M1. The queue retains every finished
     // run's heavy, LHR-bearing result so the report routes can serve a run that

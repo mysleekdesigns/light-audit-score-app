@@ -1,17 +1,24 @@
 # ROADMAP — Competitive differentiation plan (Phases A–H)
 
-> **Status (updated 2026-09-06):** **Phases A, B, C, D and E complete** — the Agentic Browsing
-> category is live end-to-end (engine → SQLite → UI → PSI → AI analysis), audits can now
-> authenticate (basic auth, cookies, headers) for both auditing and crawl discovery with
-> credentials redacted at every persistence boundary, the daily scheduler finally notifies (an
-> armed schedule compares each fire with the one before it and reports what crossed, in-app and
-> to an optional webhook), every run opens a **Trace** tab (a request waterfall and a loading
-> filmstrip read lazily from the report already on disk), and Compare now answers *why* a score
-> moved: a **What Changed** card diffs two runs audit by audit, opportunity by opportunity and
-> request by request, and can hand that delta to the AI so it explains the regression instead of
-> re-diagnosing the page. **Phases F, G and H are unbuilt. F is next in dependency order** — it
-> is independent of everything built so far — and **H now has both of its prerequisites (D and
-> E)**; G still waits on F's headless seam.
+> **Status (updated 2026-09-06):** **Phases A–F complete.**
+>
+> - **A** — the Agentic Browsing category is live end-to-end (engine → SQLite → UI → PSI → AI).
+> - **B** — audits authenticate (basic auth, cookies, headers) for both auditing and crawl
+>   discovery, with credentials redacted at every persistence boundary.
+> - **C** — the daily scheduler finally notifies: an armed schedule compares each fire with the
+>   one before it and reports what crossed, in-app and to an optional webhook.
+> - **D** — every run opens a **Trace** tab: a request waterfall and a loading filmstrip, read
+>   lazily from the report already on disk.
+> - **E** — Compare answers *why* a score moved: a **What Changed** card diffs two runs audit by
+>   audit, opportunity by opportunity and request by request, and can hand that delta to the AI so
+>   it explains the regression rather than re-diagnosing the page.
+> - **F** — the same engine runs as a build gate: `npm run ci` audits a URL list, a URL file or a
+>   crawl, compares each page to a budget, exits 0/1/2, and archives every run to the same
+>   History the app reads.
+>
+> **Phases G and H are unbuilt. G is next in dependency order** — F's headless, server-free,
+> token-free seam is what it reuses — and **H has all three of its prerequisites (D, E and now the
+> reporters seam)**.
 > E's `security-reviewer` pass came back with no Critical and no High; its one Medium and all
 > five Lows were fixed before the phase closed, including a pre-existing one (a deleted run stayed
 > readable from the queue's in-memory results) that Phase E's centralised read path made the right
@@ -945,25 +952,198 @@ thresholds in the batch summary but **no non-zero exit anywhere**, and `npm run 
 URL with no assertions. This is cheap, and it is the difference between "a tool I open" and
 "a tool in my pipeline".
 
-- [ ] **Multi-URL CLI**: extend `scripts/audit-cli.ts` to accept a URL list, a file of URLs,
+- [x] **Multi-URL CLI**: extend `scripts/audit-cli.ts` to accept a URL list, a file of URLs,
       or a crawl spec, reusing the *existing* `AuditQueue.createBatch` path — a new caller,
       not a new queue (the Phase-14 precedent).
-- [ ] **Budgets**: `--budget <n>` (one threshold for every category) and per-category budgets
+      *Done: positional URLs, `--urls-file` (blank lines and `#` comments skipped, deduped) and
+      `--crawl <seed>` (bounded by `--max-pages`/`--max-depth`/`--no-sitemap`/`--exclude-paths`,
+      calling the existing `discover()` — no second crawler). All three compose into one
+      order-preserving list. The load-bearing change is that execution now goes through
+      `AuditQueue.createBatch` rather than calling `runAudit` per URL, which is what makes a CLI
+      run a first-class run: it forks the same worker, persists the same rows, and shows up in
+      the same archive. The existing developer output survives unchanged, because
+      `getJobResult` still returns the full `AuditResult` with per-run spread and Best
+      Practices.*
+- [x] **Budgets**: `--budget <n>` (one threshold for every category) and per-category budgets
       from a config file, reusing the threshold shape Settings already persists. Exit 1 if
       any page fails any budget, exit 0 otherwise — that is the entire contract.
-- [ ] **Reporters**: `--reporter json|jsonExpanded|csv` to stdout or a path, plus a static
+      *Done: `src/lib/ci/budgets.ts`, pure. `CiBudgets` is byte-identical to the shape the batch
+      summary and Phase C's schedule alerts already use, so a bar means the same thing in a
+      pipeline as on screen, and the boundary matches `rowClearsThresholds` (a score equal to
+      the bar passes).
+      **Precedence was the real decision, and it is inverted from the usual convention:** the
+      flag is the FLOOR and the config is the exception list, so `--budget 90` plus
+      `{"performance": 70}` reads as "90 everywhere, except performance only needs 70". The
+      conventional "CLI flag beats config file" would make the pair useless — the blanket flag
+      would flatten every per-category line the user wrote.
+      A typo'd category is a hard error naming the valid ones rather than a silent ignore: a
+      `"perfomance": 90` that quietly judged nothing would make a build pass for a reason nobody
+      could see. Every message is self-contained (it lands in a CI log) and echoed input is
+      truncated so a garbage flag cannot dump 500 characters into it.*
+- [x] **Reporters**: `--reporter json|jsonExpanded|csv` to stdout or a path, plus a static
       HTML summary, matching what CI users already expect from the incumbents.
-- [ ] **Headless-safe**: no session token, no browser open, no server required — the CLI
+      *Done: `src/lib/ci/reporters.ts`, pure — it returns a string and the CLI decides stdout vs
+      `--output`, which is what makes it testable. `json` and `jsonExpanded` differ only by the
+      per-page `metrics` key, which is OMITTED rather than nulled in the compact form, so a
+      consumer can tell "not in this format" from "this run had no metrics" (a failed run
+      legitimately has `null`) and one parser reads either. The HTML is a genuinely standalone
+      artifact: one inline `<style>`, no script/image/font/link, a `default-src 'none'` CSP meta,
+      and every interpolated value through strip → clamp → escape, since there is no React here
+      doing it. Verified in a real browser opening it from `file://`: zero resource entries.
+      No links on any page-authored URL — Phase C's L1 and Phase D's no-links decision.*
+- [x] **Headless-safe**: no session token, no browser open, no server required — the CLI
       talks to the engine and SQLite directly. Runs must still persist to History so CI runs
       and UI runs share one archive (that shared archive is the differentiator).
-- [ ] **Docs**: a README section with a GitHub Actions example, since that is how this feature
+      *Done, and the shared archive is verified rather than asserted — see the Gate note. The
+      CLI imports neither `src/proxy.ts` nor `src/lib/http/localGate.ts` and needs no
+      `LH_SESSION_TOKEN`; Chrome still launches headless, because that is what an audit is, and
+      the README says so rather than letting "no browser" read as "no Chrome". The process exits
+      on its own: nothing in the import graph starts a timer (the scheduler is started only by
+      Next's `instrumentation.ts`), and settlement resolves on `batch-completed` OR
+      `batch-cancelled`, with a terminal-snapshot re-check for a batch finalised inline. No
+      wall-clock timeout was added, deliberately: a legitimate `--runs=5` audit of many pages
+      runs for minutes, and a timer that killed it would turn a slow build into a false
+      regression — the exact confusion `EXIT_USAGE` exists to prevent.*
+- [x] **Docs**: a README section with a GitHub Actions example, since that is how this feature
       gets discovered.
-- [ ] **Verify**: a passing budget exits 0, a failing budget exits 1 and names the failing
+      *Done: `## CI: budgets with an exit code` — targets/budgets/reporters tables, the exit-code
+      table, a config example, and a copy-pasteable workflow that checks the repo out, runs the
+      gate and uploads the HTML report `if: always()`. It names the two traps a reader hits
+      first: `npm ci` and `npm run ci` are unrelated commands that share three letters, and
+      `data/` lives in the checkout a runner throws away, so `LH_DATA_DIR` is what makes the
+      archive accumulate across builds.*
+- [x] **Verify**: a passing budget exits 0, a failing budget exits 1 and names the failing
       page + category, and both runs appear in the app's History afterwards.
+      *Done — see the Gate note below, including the race it caught.*
 
 **Gate:** a real two-URL CI invocation with a deliberately unreachable budget exits 1 with a
 useful message; the same invocation with a reachable budget exits 0; both persist to History
 and open in the UI.
+
+*Gate green (2026-09-06).* Two URLs on a local fixture (`/` and `/other`), one run each,
+`--categories=performance,accessibility,seo`, through the real stack (CLI → `AuditQueue` →
+forked worker → Chrome → SQLite).
+
+- **Unreachable budget (100) → exit 1**, naming the page and the category:
+  `accessibility 85 < 100` for both pages; report `{"ok":false, passed:0, failed:2}`.
+- **Reachable budget (80) → exit 0**: `✓ 2 of 2 page(s) met every budget`, report
+  `{"ok":true, passed:2, failed:0}`.
+- **A usage error is distinguishable from a regression**: a missing config file exits **2**, not
+  1, so a typo in a pipeline does not read as a performance regression.
+- **Both runs persisted and open in the UI.** Two rows in the real `data/lighthouse.db` with
+  their report files, under a `completed` batch, rendering in `/history` under the fixture's
+  site section alongside runs done by hand and by PSI. They are fully first-class: their stored
+  reports serve over `GET /api/reports/:runId` (200), Phase D's `/trace` renders their waterfall
+  and filmstrip (200), and Phase E's `/diff` runs across the two of them — correctly reporting
+  `urlMismatch: true`, since `/` and `/other` are different pages. A CI run is not a second-class
+  artefact; it is a run.
+- **The forked worker was re-verified from the web UI** after the `alias-hooks.mjs` change, since
+  that file is `--import`ed by the worker as well as the CLI: an audit submitted through the
+  running app completed normally (`performance 100`).
+
+Suite: lint · typecheck · build · **1571 tests**, all green (1450 → 1571).
+
+**The Gate caught a real bug, and it was not in this phase's code.** The first passing run
+reported `pages: 1` for a two-URL invocation — a gate silently judging half of what it audited,
+which would pass a build nobody checked. Both runs *were* in SQLite, so the CLI was not at fault:
+
+- `AuditQueue.runJob` set `job.status = "done"` BEFORE `await recordRun(...)`, while
+  `maybeFinalizeBatch` decides a batch is over by reading `job.status` across the batch. With two
+  jobs in flight, job B could mark itself done and enter its persist while job A's completion
+  finalised the batch — emitting `batch-completed` with B's row unwritten. The code's own comment
+  said "Persist the run BEFORE announcing the job as done"; the ordering defeated it.
+- The web UI never noticed, because it re-fetches. **The CI runner is the first consumer that
+  reads once and exits** — which is precisely why the contract's decision to compute the verdict
+  from PERSISTED rows was worth making: it turned an invisible race into a visible wrong number.
+- Fixed at the source (the status assignment moved after the persist, so "settled" means
+  "persisted"), with a regression test **confirmed to fail against the old ordering** before it
+  was trusted. The CLI additionally refuses to judge a partial batch rather than scoring whatever
+  it finds, because that failure mode is silent and a loud one costs nothing.
+
+A second contradiction was found the same way: an errored run with no budgets exited 1 while the
+JSON reported `"ok": true, "passed": 1`. Anything reading the report saw green for a red build.
+`ok` is now computed once, in `evaluateBudgets`, and `exitCodeFor` is exactly `report.ok` — the
+CLI no longer carries a second rule that can disagree with the artefact it prints.
+
+*Also fixed here, though it predates the phase:* `csvCell` had no defence against spreadsheet
+FORMULA INJECTION. ROADMAP Phase A's review raised it and correctly left it as pre-existing; Phase
+F is what makes it live, because `--reporter csv` writes a file a pipeline archives and a human
+later opens in Excel, which is exactly the path the attack needs. A leading `=`, `+`, `-`, `@`,
+tab or CR is now neutralised with a leading apostrophe — losslessly, so the value still
+round-trips for a program parsing the CSV — including the tab/CR bypass that defeats a naive
+prefix check.
+
+*Security review (read-only `security-reviewer`, required by `.claude/rules/security.md` because
+the phase makes claims about the session-token boundary and adds a CLI that reads and writes
+files): **no Critical. Two High, two Medium and four Low — all eight fixed rather than deferred.***
+
+- **H1 — the alias-hook change could have broken every audit, in a package nobody edited.**
+  `module.registerHooks` intercepts CommonJS `require()` as well as ESM `import`, and
+  `parentURL` is a `file:` URL for everything on disk — `node_modules` included. So the new
+  relative branch also rewrote `require("./x")` inside dependencies, and a hit was not merely
+  wrong but FATAL: the rewritten value is a `file://` href, which `Module._resolveFilename`
+  cannot consume. Since this hook rides the forked worker's `execArgv`, that is every audit,
+  including from the web UI. The reviewer proved it rather than argued it, and also established
+  it was not live today: exactly one `.js`/`.ts` collision exists across 5,521 `node_modules`
+  directories (`image-ssim`), and its only consumer imports it by bare specifier. Fixed by
+  confining the branch to the project's own files (under the repo root, outside `node_modules`)
+  — the only set that has the problem. Verified both directions: a synthetic dependency doing
+  `require("./dep")` beside a `dep.ts` now resolves `dep.js` correctly, and the worker still
+  resolves its whole graph.
+- **H2 — the CLI accepted `https://user:pass@host` and would have published it.** `POST
+  /api/audits` refuses userinfo precisely because the URL is written verbatim into `runs.url`,
+  and Phase B's whole point is that a credential never reaches SQLite. The CLI was a second door
+  to the same archive with the check missing — and the worse door, because the README's own
+  Actions example uploads the report as a build artifact. Now refused as a usage error, before
+  Chrome starts, with a pointer to `LH_AUDIT_BASIC_AUTH`. Verified live: exit 2, and the secret
+  appears zero times in the output.
+  **The fix is deliberately validate-then-discard:** the parsed `URL` is used only to check the
+  scheme and userinfo, and the string as TYPED is what gets audited and stored. Returning
+  `url.toString()` would canonicalise `https://example.com` to `https://example.com/`, and since
+  `runs.url` is the key History groups by and Compare trends on, that would file a CLI run and a
+  UI run of the same page under two different URLs — quietly splitting the shared archive this
+  phase exists to build.
+- **M1 — a failed report write printed a stack trace and exited 1**, which a pipeline reads as
+  "the site regressed", after paying for the whole audit. Now a `EXIT_USAGE` with a one-line
+  message, the verdict still printed first, and a top-level `catch` so nothing escapes as an
+  unhandled rejection. Verified live: exit 2, zero stack-trace lines.
+- **M2 — target URLs were echoed to stderr raw** while every other untrusted string on that path
+  went through `sanitizeMessage`. A `--urls-file` line can carry a lone CR (the parser splits on
+  `\r?\n`), which lets input rewrite the log line around it — Phase C's L1 in a new place. Fixed
+  at the point of ECHO with a `displayUrl` helper, rather than by mangling the address that gets
+  stored.
+- **L1 was a claim I wrote and got wrong.** `csvCell`'s docblock said the formula-injection fix
+  was lossless; it is not. The apostrophe sits inside the quotes, so an RFC 4180 parser reads
+  `=SUM(A1)` back as `'=SUM(A1)`, and a future negative-numeric column would export as text. No
+  column today is affected. The docblock now states the cost, and the test asserts the exact cell
+  rather than implying the claim.
+- Also fixed: `--config` parse failures echoed ten bytes of the file (so `--config .env` leaked
+  into a CI log) — now a static message; `--output` wrote world-readable, now `0600`, since a
+  report embeds every audited URL and Phase B made those able to be staging pages; and the flag
+  map is null-prototype so a `--constructor` flag cannot read back an inherited member.
+
+The reviewer separately confirmed by walking the CLI's 32-module import graph that `src/proxy.ts`,
+`src/lib/http/localGate.ts` and all of `src/lib/http/` are unreachable and no `LH_SESSION_TOKEN`
+read appears anywhere in it — so "no session token, no server" is verified, not asserted — and
+that the HTML reporter survived every payload it was given (no `<script`, no `href=`, no attribute
+breakout; the only data-built attribute is a width percentage that cannot be anything but a
+number).
+
+*Three deviations from the plan, recorded.* **(1) A third exit code.** The plan says "exit 1 if any
+page fails any budget, exit 0 otherwise — that is the entire contract". `EXIT_USAGE = 2` was added
+for "the run could not be attempted at all" (bad flags, unreadable config, no targets). It
+preserves the contract — non-zero still fails a build — while stopping a config typo from reading
+as a site regression. **(2) `scripts/alias-hooks.mjs` was extended** to resolve extensionless
+RELATIVE specifiers, not just `@/` ones, because `src/lib/crawl/*` imports its siblings that way
+and `--crawl` cannot reach `discover()` otherwise. That file is also `--import`ed by the forked
+audit worker, so this changes module resolution for every Lighthouse run; the branch is guarded to
+extensionless relative specifiers from `file:` importers **inside the project's own tree** that
+resolve to a real `.ts` — that last clause is H1's fix, and without it the change would have been
+the phase's worst bug rather than an enabler. Phase G's `scripts/mcp-server.ts` will hit the same
+wall. **(3) `npm run audit` now persists.** Routing the CLI through `AuditQueue.createBatch` means
+the existing developer command archives its runs too, where before it printed and forgot. That is
+the shared archive the checklist asks for, and it is a behaviour change to a command that predates
+this phase.
 
 ---
 
