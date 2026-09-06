@@ -36,6 +36,7 @@
  */
 
 import { runBatchToCompletion } from "@/lib/ci/runBatch";
+import { trackBatch, untrackBatch } from "@/lib/mcp/activeBatches";
 import type { HistoryRow } from "@/lib/db/persistence";
 import { resolveAuditOptions } from "@/lib/lighthouse/options";
 import {
@@ -88,6 +89,12 @@ export const DEFAULT_AGENT_RUNS = 1;
 
 /** Longest URL echoed into a payload. Matches the CI reporters' own URL budget. */
 const MAX_URL_CHARS = 300;
+
+/**
+ * Longest timestamp echoed into a payload. An ISO-8601 instant is 24 characters;
+ * this is room for any legitimate variant and none for a story.
+ */
+const MAX_TIMESTAMP_CHARS = 64;
 
 /** Longest failure message echoed into a payload. @see MAX_URL_CHARS */
 const MAX_ERROR_CHARS = 400;
@@ -182,7 +189,13 @@ export function projectAuditRow(row: HistoryRow): AuditUrlPayload {
     scores: projectScores(row.scores),
     metrics: projectMetrics(row.metrics),
     batchId: row.batchId,
-    fetchTime: row.fetchTime,
+    // Clamped like every other stored string, and for the same reason as in
+    // `compare_runs`: it originates as `pickString(lhr, "fetchTime")` — a report
+    // field that is never parsed as a date, only carried. Lighthouse authors it
+    // today, so this is consistency rather than a live threat, and three tools
+    // reading one field three different ways was the actual defect (Phase G
+    // security re-review, L2).
+    fetchTime: row.fetchTime === null ? null : safeText(row.fetchTime, MAX_TIMESTAMP_CHARS),
   };
   // Only on failure, and only ever from the row: a `done` run has no failure to
   // describe, and an empty string there would read as an unexplained error.
@@ -303,12 +316,24 @@ export const auditUrlTool: McpTool = {
     // 1 because there is exactly one URL; anything else would only mislead a
     // reader of the batch row.
     const queue = getAuditQueue();
-    const outcome = await runBatchToCompletion(queue, {
-      urls: [url],
-      device,
-      options,
-      concurrency: 1,
-    });
+    // Registered for the duration so a client hangup can cancel it rather than
+    // orphaning the worker and its Chrome (Phase G security re-review, L4).
+    let batchId: string | null = null;
+    let outcome;
+    try {
+      outcome = await runBatchToCompletion(queue, {
+        urls: [url],
+        device,
+        options,
+        concurrency: 1,
+        onBatchCreated: (created) => {
+          batchId = created.id;
+          trackBatch(created.id);
+        },
+      });
+    } finally {
+      if (batchId !== null) untrackBatch(batchId);
+    }
 
     const row = outcome.rows[0];
     if (!row) {

@@ -15,10 +15,20 @@
  * **What this process is, and is not.** It is a local child process speaking
  * JSON-RPC over a pipe to whoever launched it. It opens no port, reads no
  * session token, and holds no third-party credential: the audit engine, SQLite
- * and the report files it reads are all on this machine, and the only outbound
- * request it can make is the audit itself, to a URL the caller named. The
- * transport is a pipe rather than a socket for exactly that reason — there is
- * nothing to bind, and therefore nothing to reach.
+ * and the report files it reads are all on this machine. The transport is a pipe
+ * rather than a socket for exactly that reason — there is nothing to bind, and
+ * therefore nothing to reach.
+ *
+ * The one thing it does reach out to is the audit itself — **to a URL the AGENT
+ * chose**, which is the honest phrasing and the difference from the CLI, where a
+ * person types it (Phase G security re-review, M1). There is no host policy, so
+ * loopback and private addresses are in range; what comes back is bounded to
+ * scores, a final URL and audit ids, never a response body, so the exposure is
+ * what an audit sends rather than what it returns. Two consequences are handled
+ * below: `.env` is read for three data-location keys and nothing else, so no
+ * ambient credential is available for a model to aim, and the forked worker gets
+ * a filtered environment (`src/lib/queue/workerEnv.ts`) so the launching agent's
+ * provider keys never reach the browser rendering the page.
  *
  * **Two invariants this file exists to hold.**
  *
@@ -42,6 +52,8 @@ import { createInterface } from "node:readline";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { readDotEnv } from "./dot-env.mjs";
+
 import { createTools } from "@/lib/mcp/tools";
 import {
   ERROR_CODES,
@@ -51,6 +63,7 @@ import {
   successResponse,
   type JsonRpcResponse,
 } from "@/lib/mcp/protocol";
+import { cancelActiveBatches } from "@/lib/mcp/activeBatches";
 import { createMcpServer } from "@/lib/mcp/server";
 import { errorResult } from "@/lib/mcp/types";
 
@@ -90,6 +103,41 @@ const projectRoot = path.resolve(fileURLToPath(import.meta.url), "../..");
  */
 process.chdir(projectRoot);
 
+/**
+ * The data-location variables from `.env`, and ONLY those.
+ *
+ * `chdir` alone was not enough, and the gap arrived by the documented route
+ * (Phase G security re-review, M4). `next start` loads `.env` — Next does it
+ * automatically — so a user who follows `.env.example` and sets `LH_DATA_DIR`
+ * has an app writing there and, without this, an agent writing to `./data`
+ * inside the checkout. Two archives, which is the one outcome this server is
+ * built to prevent, produced by doing exactly what the docs say.
+ *
+ * **Three keys, not the whole file.** This process forks a worker that launches
+ * Chrome against pages the model chose, and a fork inherits its parent's
+ * environment; loading a `.env` full of provider keys into it would push every
+ * one of them into the environment of the process rendering untrusted web
+ * content. So the audit credentials in `.env` stay unread, and an agent's audits
+ * are unauthenticated unless the variables are exported in the environment the
+ * agent itself was launched from. That is the safer default anyway: the model
+ * picks the URL, and an ambient credential it can aim is a credential it can
+ * aim at a staging host on its own initiative. The README says so.
+ *
+ * A real environment variable always wins — `??=` only fills what is absent —
+ * because an explicit export is a deliberate act and a file is a default.
+ */
+const DOT_ENV_KEYS = ["LH_DATA_DIR", "LH_DB_PATH", "LH_MIGRATIONS_DIR"] as const;
+// Cast because `dot-env.mjs` is plain JavaScript with no declaration file; the
+// shape is asserted here rather than inferred, and every read below is guarded.
+const dotEnv = readDotEnv(path.join(projectRoot, ".env")) as Record<
+  string,
+  string | undefined
+>;
+for (const key of DOT_ENV_KEYS) {
+  const value = dotEnv[key];
+  if (typeof value === "string" && value !== "") process.env[key] ??= value;
+}
+
 const server = createMcpServer({
   info: {
     name: "lightaudit",
@@ -101,11 +149,29 @@ const server = createMcpServer({
 });
 
 /**
+ * Swallow `EPIPE` on stdout.
+ *
+ * The `try/catch` in `send` cannot do this on macOS, which is where this repo is
+ * developed (Phase G security re-review, L3): Node's pipes are asynchronous on
+ * macOS and synchronous on Linux and Windows, so a client that hangs up mid-write
+ * delivers `EPIPE` as an `'error'` EVENT, long after `write()` returned. Unhandled,
+ * that is an uncaught exception with a stack — precisely the outcome the catch
+ * was written to prevent, on the one platform where the catch never fires.
+ *
+ * Both guards are kept: this one for the async platforms, the catch for the
+ * synchronous ones.
+ */
+process.stdout.on("error", (error: NodeJS.ErrnoException) => {
+  if (error.code === "EPIPE") return;
+  console.error("[mcp] stdout error:", error.message);
+});
+
+/**
  * Write one frame to stdout.
  *
  * `EPIPE` is swallowed: when the client goes away mid-write there is nobody left
- * to tell, and an unhandled error event there would print a stack over the very
- * stream we are protecting.
+ * to tell, and an unhandled error there would print a stack over the very stream
+ * we are protecting. See the `'error'` handler above for the other half of this.
  */
 function send(response: JsonRpcResponse): void {
   try {
@@ -141,6 +207,9 @@ const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
  * can wait for one to land.
  */
 const MAX_IN_FLIGHT_CALLS = 4;
+
+/** Longest single frame accepted from stdin. @see the ceiling check below. */
+const MAX_FRAME_CHARS = 1_000_000;
 let inFlightCalls = 0;
 
 /**
@@ -156,6 +225,16 @@ let inFlightCalls = 0;
 lines.on("line", (line) => {
   const trimmed = line.trim();
   if (trimmed === "") return;
+
+  // A frame ceiling, because `readline` has none (Phase G security re-review,
+  // L6): it buffers a line of any length in full before emitting it, and
+  // `JSON.parse` would then double it. Every legitimate frame here is a handful
+  // of small arguments — the payloads that are large travel the other way — so a
+  // megabyte is generous by three orders of magnitude and still bounds the read.
+  if (trimmed.length > MAX_FRAME_CHARS) {
+    console.error(`[mcp] dropped a frame of ${trimmed.length} characters`);
+    return;
+  }
 
   const parsed = parseMessage(trimmed);
   if (!parsed.ok) {
@@ -225,9 +304,26 @@ lines.on("line", (line) => {
  *
  * `process.exit` rather than a natural drain, because a Chrome child from an
  * in-flight audit can keep the loop alive long after the agent that asked for it
- * has gone.
+ * has gone. But exiting on its own would ORPHAN that child (Phase G security
+ * re-review, L4): the worker has no disconnect handler and its kill-on-timeout
+ * timer lives in this process, so a client restarting the server mid-audit —
+ * which MCP clients do routinely — would leave a headless Chrome running until
+ * its audit finished, with nothing left to read the result. Cancelling first
+ * goes through the queue, which kills the worker children and leaves the runs
+ * that DID finish in History; the same path Ctrl-C takes in the CLI.
  */
 lines.on("close", () => {
+  try {
+    const cancelled = cancelActiveBatches();
+    if (cancelled > 0) console.error(`[mcp] cancelled ${cancelled} in-flight audit(s)`);
+  } catch (error) {
+    // Never let cleanup keep the process alive: a failure here is a log line,
+    // not a reason to hang on a pipe that is already closed.
+    console.error(
+      "[mcp] cancel on shutdown failed:",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
   process.exit(0);
 });
 

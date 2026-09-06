@@ -62,6 +62,7 @@ import {
   type McpToolResult,
 } from "@/lib/mcp/types";
 import { safeText } from "@/lib/text/displaySafe";
+import { MAX_RUN_ID_LENGTH } from "@/lib/mcp/tools/compare-runs";
 import { auditUrlKey } from "@/lib/urls/normalizeAuditUrl";
 
 /** The arguments this tool accepts; `rejectUnknownArgs` enforces the list. */
@@ -71,8 +72,16 @@ const CHECK_BUDGET_ARGS = ["runId", "url", "budget", "budgets"] as const;
 const MIN_BUDGET = 0;
 const MAX_BUDGET = 100;
 
-/** Longest run id accepted. Ids are nanoids (21 chars); this is slack, not a shape check. */
-const MAX_RUN_ID_CHARS = 128;
+/**
+ * Longest run id this tool will look up.
+ *
+ * Imported rather than restated (Phase G security re-review, L5): `compare_runs`
+ * argues that two doors into one lookup must not disagree about what an id may
+ * be, and this is the third door. 64 is the diff route's own ceiling; ids here
+ * are 21-character nanoids, so the number bounds an unbounded string rather than
+ * describing anything real.
+ */
+const MAX_RUN_ID_CHARS = MAX_RUN_ID_LENGTH;
 
 /** Longest URL echoed into a payload. Matches the CI reporters' own URL budget. */
 const MAX_URL_CHARS = 300;

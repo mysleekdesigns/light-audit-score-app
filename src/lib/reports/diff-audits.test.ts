@@ -628,11 +628,42 @@ function readReport(name: string): LighthouseResult | null {
 
 const REPORT_FILES = reportFiles();
 
-/** The first report (by sorted filename) that carries both maps we need. */
+/**
+ * Minimum audits for a stored report to be a useful sample here.
+ *
+ * These tests assert against a REAL report from the developer's own `data/`,
+ * which means the sample is whatever that machine last audited. A run scoped to
+ * a couple of categories (`npm run ci --categories=performance,seo`, or an
+ * agent's `audit_url`) writes a perfectly valid report with ~60 audits and no
+ * audit belonging to two categories — and the assertions below need both. So the
+ * selector requires a full-category report rather than merely a parseable one;
+ * picking "the first by filename" made the suite's outcome depend on which
+ * random nanoid sorted first in a gitignored directory.
+ */
+const MIN_SAMPLE_AUDITS = 101;
+
+/** Whether a report has an audit that belongs to more than one category. */
+function hasMultiCategoryAudit(report: LighthouseResult): boolean {
+  const categories = report.categories as Record<string, { auditRefs?: unknown[] }>;
+  const seen = new Set<string>();
+  for (const category of Object.values(categories)) {
+    for (const ref of category.auditRefs ?? []) {
+      const { id } = ref as { id: string };
+      if (seen.has(id)) return true;
+      seen.add(id);
+    }
+  }
+  return false;
+}
+
+/** The first report (by sorted filename) rich enough to exercise the assertions. */
 function firstUsableReport(): { name: string; lhr: LighthouseResult } | null {
   for (const name of REPORT_FILES) {
     const report = readReport(name);
-    if (report && report.audits && report.categories) return { name, lhr: report };
+    if (!report?.audits || !report.categories) continue;
+    if (Object.keys(report.audits).length < MIN_SAMPLE_AUDITS) continue;
+    if (!hasMultiCategoryAudit(report)) continue;
+    return { name, lhr: report };
   }
   return null;
 }
@@ -664,7 +695,7 @@ describe.skipIf(SAMPLE === null)("against stored reports", () => {
     const deltas = diffAudits(sample.lhr, sample.lhr);
 
     expect(deltas.length).toBe(Object.keys(auditsOf(sample.lhr)).length);
-    expect(deltas.length).toBeGreaterThan(100);
+    expect(deltas.length).toBeGreaterThanOrEqual(MIN_SAMPLE_AUDITS);
     expect(deltas.every((entry) => entry.status === "unchanged")).toBe(true);
     expect(diffOpportunities(sample.lhr, sample.lhr).every((o) => o.status === "unchanged")).toBe(
       true,

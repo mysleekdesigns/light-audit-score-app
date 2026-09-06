@@ -435,12 +435,21 @@ agent does on Friday.
   port, so there is nothing to reach.
 - It requires **no session token**. The app's loopback gate protects an HTTP server; there is no
   HTTP here for it to protect.
-- It holds **no credential of its own** and forwards none. The only outbound request it makes is
-  the audit itself, to a URL you asked it to audit. One precision, since it is easy to assume
-  otherwise: if you have configured `.env` audit credentials (`LH_AUDIT_BASIC_AUTH` and friends —
-  see `.env.example`), an agent's audit of a host you allow-listed in `LH_AUDIT_CREDENTIAL_HOSTS`
-  uses them, exactly as the app's own audits do. The credential never reaches the agent; the
-  authenticated page does.
+- **The one outbound request it makes is the audit — to a URL the *agent* chose.** Worth stating
+  plainly, because it is the difference between this and the CLI: you type the URL there, and here
+  a model does, including a model that has been reading the web. There is no host allow-list, so
+  loopback and private-network addresses are in range. The read-back is narrow — payloads carry
+  scores, a final URL and audit ids, never a response body — so the exposure is what an audit
+  *sends*, not what it returns.
+- It holds **no credential of its own**, and it does not read `.env`. It takes only `LH_DATA_DIR`,
+  `LH_DB_PATH` and `LH_MIGRATIONS_DIR` from that file — enough to share your archive, and nothing
+  that authorises anything. So `.env` audit credentials (`LH_AUDIT_BASIC_AUTH` and friends) do
+  **not** apply to an agent's audits unless you export those variables in the environment the
+  agent itself was launched from. That is deliberate: the model picks the target, and an ambient
+  credential it can aim at your staging host is one it can aim there on its own initiative.
+- The audit runs in a forked worker that gets a **filtered environment** — the tool's own `LH_*`
+  variables plus the process, locale, Chrome and proxy settings it needs, and nothing else. Your
+  agent's provider API keys do not travel into the browser that renders the page being audited.
 - It is **not read-only**, and that is the point: its audits write to the same local SQLite
   database as the app, so an agent adds rows to your History, and its runs show up in the UI
   beside your own.
@@ -452,10 +461,13 @@ agent does on Friday.
 
 ### Traps
 
-- **Which directory it runs from decides which archive it writes to.** The server anchors itself
-  to the project root at startup, so this is handled. But `LH_DATA_DIR` still wins where you set
-  it, and it must be the *same* value the app uses — otherwise the agent and the app quietly keep
-  two separate histories.
+- **Which directory it runs from decides which archive it writes to.** Handled two ways, because
+  one was not enough: the server anchors itself to the project root at startup, *and* it reads
+  `LH_DATA_DIR` / `LH_DB_PATH` / `LH_MIGRATIONS_DIR` out of `.env` — which the app gets for free
+  from Next, and a plain `node` script does not. Without that second half, following
+  `.env.example` and setting `LH_DATA_DIR` would give you an app writing there and an agent
+  writing to `./data` in the checkout: two histories, from doing exactly what the docs say. A real
+  environment variable still beats the file.
 - **Chrome still launches.** "No server" does not mean "no browser": `audit_url` starts a headless
   Chrome exactly like every other audit path here, and takes just as long.
 - **`npm run mcp` is for launching it by hand**, to check that it starts and to read its stderr.

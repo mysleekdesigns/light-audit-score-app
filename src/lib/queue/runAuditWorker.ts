@@ -32,6 +32,7 @@ import {
   stripAuditCredentials,
 } from "@/lib/lighthouse/credentials";
 import type { AuditOptions, AuditResult } from "@/lib/lighthouse/types";
+import { filterWorkerEnv } from "@/lib/queue/workerEnv";
 
 /**
  * Per-job wall-clock ceiling. A job is up to {@link MAX_RUNS}=5 sequential
@@ -201,8 +202,14 @@ export async function runAuditInWorker(
   // handler that reads it. So the env carries credential-FREE options, and the
   // values are sent separately, immediately after fork.
   const credentials = extractAuditCredentials(options);
+  // The parent environment is FILTERED, not copied (`./workerEnv`). Same reason
+  // as the paragraph above, applied to everything else in the environment rather
+  // than only to our own credentials: whatever is here is inherited by Chrome,
+  // and since ROADMAP Phase G the parent can be a coding agent whose environment
+  // carries provider API keys nobody meant to hand to a browser rendering an
+  // attacker's page.
   const forkEnv: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...filterWorkerEnv(process.env),
     LH_AUDIT_INPUT: JSON.stringify({
       url,
       options: credentials ? stripAuditCredentials(options) : options,

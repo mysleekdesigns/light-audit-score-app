@@ -22,11 +22,13 @@
 >
 > **Phase H is the only one unbuilt, and it has all three of its prerequisites (D, E and the
 > reporters seam).**
-> G's `security-reviewer` pass came back with no Critical and no High; both Mediums and five of
-> six Lows were fixed before the phase closed — the notable one being that every ERROR path had
-> its own weaker sanitiser than the payloads did, which is now one shared pipeline
-> (`src/lib/text/displaySafe.ts`) used by the tools, the wire format, the URL normaliser and the
-> CLI alike. E's pass was likewise clean, with its one Medium and all five Lows fixed (including a
+> G was read by two independent `security-reviewer` passes; both came back with no Critical and
+> no High, and between them found five Mediums, every one now fixed. The two worth remembering:
+> every ERROR path had a weaker sanitiser than the payloads did (now one shared pipeline,
+> `src/lib/text/displaySafe.ts`), and the audit fork copied the parent's whole environment into
+> Chrome — harmless while the parent was ours, and not once the parent is a coding agent holding
+> provider keys (now an allow-list, `src/lib/queue/workerEnv.ts`). Two others were documentation
+> that claimed more than the code did, which is the failure mode a second reader catches best. E's pass was likewise clean, with its one Medium and all five Lows fixed (including a
 > pre-existing one: a deleted run stayed readable from the queue's in-memory results). D's was
 > clean across two independent reviewers.
 > This file is a **plan**, not a record — it was drafted from a competitor survey of the
@@ -1255,7 +1257,25 @@ AI-native, this is the most defensible item on the list.
       connect can read your entire audit history, and `.env` audit credentials still apply to an
       allow-listed host). The sixth is accepted and recorded rather than fixed: `finalUrl` gives
       an audited page ~300 characters in the model's context, which is the price of telling the
-      agent a redirect happened at all.*
+      agent a redirect happened at all.
+      **A SECOND reviewer then read the same diff independently and found three more Mediums**,
+      all now fixed. Two were claims that were simply false as written, which is the most useful
+      kind of finding: the README said the audit goes "to a URL you asked it to audit" when the
+      whole point is that a MODEL picks it (with no host policy, so loopback and RFC1918 are in
+      range); and the Traps section said the archive-splitting problem was "handled" when an
+      `LH_DATA_DIR` set in `.env` was invisible to this server — `next start` gets `.env` from
+      Next, a plain `node` script does not, so following `.env.example` produced exactly the two
+      histories the trap warned about. The third is the one worth keeping in mind: the fork
+      copied the whole parent environment into the worker, and `.claude/rules/engine-workers.md`
+      already reasons that this worker launches Chrome, so anything in that environment reaches
+      the process rendering untrusted content. The code had not changed — Phase G changed the
+      PARENT, which is now a coding agent carrying provider API keys. The worker gets an
+      allow-list now (`src/lib/queue/workerEnv.ts`), verified by real audits through both the CLI
+      and the MCP server with a canary key in the parent. Also fixed: the EPIPE guard could not
+      fire on macOS (pipes are async there, so a hangup mid-write arrived as an unhandled
+      `'error'` event — the exact crash the guard was written to prevent), a client restart
+      mid-audit orphaned a headless Chrome, `readline` had no frame ceiling, and two tools read a
+      run id with two different length limits.*
 - [x] **Docs**: a copy-pasteable `.mcp.json` / `claude mcp add` snippet, and a short
       "audit-driven development" walkthrough.
       *Done: README `## MCP: audits from your coding agent` — both setup forms (with the warning
@@ -1290,6 +1310,10 @@ Claude Code 2.1.x — the hand-written protocol talking to the real client, not 
 - **The shared archive is real, not asserted.** The agent's runs went into the app's own
   `data/lighthouse.db` — the same 274-run archive — and `get_history` found the app's earlier runs
   alongside the agent's own.
+- **Re-verified after the second review's fixes**, since those touched the entry point and the
+  engine's fork: all four tools again over a real stdio session (`audit_url` 11.9 s, then
+  `get_history` → `compare_runs` → `check_budget`), plus a real `npm run ci` audit, both with a
+  canary `ANTHROPIC_API_KEY` in the parent environment that no longer reaches the worker.
 
 ---
 

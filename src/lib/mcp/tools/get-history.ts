@@ -92,6 +92,12 @@ export const MAX_HISTORY_LIMIT = 25;
 const MAX_REQUESTED_URL = 2_048;
 
 /**
+ * Longest timestamp echoed into a payload. An ISO-8601 instant is 24 characters;
+ * this is room for any legitimate variant and none for a story.
+ */
+const MAX_TIMESTAMP_CHARS = 64;
+
+/**
  * Clamp on `finalUrl`, deliberately much tighter than {@link MAX_REQUESTED_URL}.
  *
  * The asymmetry is the point. `url` is what the caller asked for and may be sent
@@ -190,8 +196,14 @@ function projectRow(row: HistoryRow): HistoryEntry {
     status: row.status,
     source: row.source,
     scores: scoredOnly(row.scores),
-    fetchTime: row.fetchTime,
-    createdAt: row.createdAt,
+    // Clamped like every other stored string, and for the same reason as in
+    // `compare_runs`: it originates as `pickString(lhr, "fetchTime")` — a report
+    // field that is never parsed as a date, only carried. Lighthouse authors it
+    // today, so this is consistency rather than a live threat, and three tools
+    // reading one field three different ways was the actual defect (Phase G
+    // security re-review, L2).
+    fetchTime: row.fetchTime === null ? null : safeText(row.fetchTime, MAX_TIMESTAMP_CHARS),
+    createdAt: safeText(row.createdAt, MAX_TIMESTAMP_CHARS),
   };
 }
 

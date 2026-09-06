@@ -23,48 +23,18 @@ import path from "node:path";
 /** Filename under the data dir. */
 export const SESSION_TOKEN_FILE = "session-token";
 
+// `readDotEnv` moved to `./dot-env.mjs` (ROADMAP Phase G security re-review, M4)
+// so the MCP server can read the data-location variables from `.env` WITHOUT
+// importing this module. That server must not require or expose the session
+// token; the cleanest way to keep that true is for it to have no import path to
+// the code that resolves one. Re-exported here because `start.mjs` and this
+// module's tests have always read it from this file.
+export { readDotEnv } from "./dot-env.mjs";
+
 /** What a persisted token must look like to be trusted (base64url, ≥ 32 chars). */
 const TOKEN_SHAPE = /^[A-Za-z0-9_-]{32,}$/;
 /** The least a user-pinned token may be: 32+ characters, no whitespace. */
 const MIN_PINNED_LENGTH = 32;
-
-/**
- * A minimal `.env` reader — `KEY=value` lines, optional single/double quotes,
- * `#` comments — for the handful of keys the start script needs before Next
- * loads the file itself. No variable expansion, no `.env.local` layering.
- */
-export function readDotEnv(file) {
-  let text;
-  try {
-    text = readFileSync(file, "utf8");
-  } catch {
-    return {};
-  }
-
-  const values = {};
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
-    const eq = line.indexOf("=");
-    if (eq === -1) continue;
-    const key = line.slice(0, eq).trim();
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
-
-    let value = line.slice(eq + 1).trim();
-    const quoted =
-      value.length >= 2 &&
-      ((value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'")));
-    if (quoted) {
-      value = value.slice(1, -1);
-    } else {
-      const comment = value.indexOf(" #");
-      if (comment !== -1) value = value.slice(0, comment).trim();
-    }
-    values[key] = value;
-  }
-  return values;
-}
 
 /**
  * Resolve the session token. Returns `{ token, source }` where `source` is
