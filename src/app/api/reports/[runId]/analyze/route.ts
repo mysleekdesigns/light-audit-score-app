@@ -5,24 +5,38 @@
  *    spending no tokens — the client uses this to show a saved analysis instantly
  *    on reopen. A cache miss is `{ analysis: null }` with a `200` (not a `404`):
  *    "not analyzed yet" is a normal state, and a `200` keeps the dev console clean.
- *  - `POST { category, force?, provider?, model? }` runs `runAnalysis` on the
- *    configured AI provider and streams progress as SSE: `status` →
- *    `tool-use`/`tool-result` → `text-delta` → `fix` → `done` (or a terminal
- *    `error`). On a clean `done` the result is persisted. Without `force`, a POST
- *    replays a saved analysis as a single `done` frame (no model call).
- *    `provider`/`model` override the environment's selection for this one
- *    analysis; both are optional and validated before anything is spawned.
+ *  - `POST { category, force?, provider?, model?, baselineRunId? }` runs
+ *    `runAnalysis` on the configured AI provider and streams progress as SSE:
+ *    `status` → `tool-use`/`tool-result` → `text-delta` → `fix` → `done` (or a
+ *    terminal `error`). On a clean `done` the result is persisted. Without
+ *    `force`, a POST replays a saved analysis as a single `done` frame (no model
+ *    call). `provider`/`model` override the environment's selection for this one
+ *    analysis; all are optional and validated before anything is spawned.
+ *
+ * `baselineRunId` (ROADMAP Phase E) turns the analysis into a REGRESSION
+ * analysis: the audit-level diff of this run against that baseline is computed
+ * server-side and fed to the prompt, so the agent explains what changed rather
+ * than re-diagnosing the page from scratch.
+ *
+ * A baseline-grounded analysis is deliberately NEITHER replayed from cache NOR
+ * persisted. The saved-analysis key is `(runId, category)`, so storing
+ * regression-flavoured text under it would make a later plain "explain my SEO
+ * score" replay the wrong artefact — and widening that key to include a baseline
+ * means a unique index over a nullable column, where SQLite treats every NULL as
+ * distinct and the existing upsert would start writing duplicate rows. Running
+ * fresh costs one agent call and keeps the cache honest.
  *
  * SSE framing + teardown mirror `app/api/audits/[id]/stream/route.ts`. POST is
  * consumed by the browser via fetch + a ReadableStream reader (it carries a body,
  * so `EventSource` — GET-only — can't be used). Node runtime only.
  */
 
-import { promises as fs } from "node:fs";
-
-import { apiError, badRequest, notFound } from "@/lib/api/errors";
+import { apiError, badRequest, notFound, serverError } from "@/lib/api/errors";
 import { getAnalysis, saveAnalysis } from "@/lib/db/analyses";
-import { getRunInputs, getRunReport } from "@/lib/db/persistence";
+import { getRunInputs } from "@/lib/db/persistence";
+import { loadRunLhr, MAX_REPORT_BYTES } from "@/lib/reports/loadReport";
+import { extractRunDiff } from "@/lib/reports/report-diff";
+import type { RunDiff } from "@/lib/reports/diff-types";
 import { isRecord } from "@/lib/lighthouse/parseLhr";
 import {
   LIGHTHOUSE_CATEGORIES,
@@ -50,6 +64,13 @@ export const dynamic = "force-dynamic";
 const ANALYSIS_TIMEOUT_MS = Number(process.env.ANALYSIS_TIMEOUT_MS ?? 300_000);
 
 /**
+ * Upper bound on a run id accepted in the body. Ids here are nanoids (21
+ * chars); the ceiling exists so an unbounded string never reaches a lookup, not
+ * because any particular length is meaningful.
+ */
+const MAX_RUN_ID_LENGTH = 64;
+
+/**
  * In-flight analyses keyed by `runId:category`, pinned to `globalThis` so it
  * survives Next dev-mode HMR (like the DB/queue handles). Guards a single-user
  * tool against accidental double-submits of the same expensive agent run.
@@ -68,15 +89,6 @@ function asCategory(value: unknown): AnalysisCategory | null {
     (LIGHTHOUSE_CATEGORIES as readonly string[]).includes(value)
     ? (value as AnalysisCategory)
     : null;
-}
-
-/** Read a persisted report file, returning `null` (not throwing) when absent. */
-async function readPersistedFile(path: string): Promise<string | null> {
-  try {
-    return await fs.readFile(path, "utf8");
-  } catch {
-    return null;
-  }
 }
 
 /** Best-effort form factor from the LHR config when the run row is unavailable. */
@@ -122,6 +134,7 @@ export async function POST(
     force?: unknown;
     provider?: unknown;
     model?: unknown;
+    baselineRunId?: unknown;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -170,6 +183,46 @@ export async function POST(
     model = body.model.trim();
   }
 
+  // The baseline this run is explained AGAINST (ROADMAP Phase E). Bounded and
+  // shape-checked here, but never reflected: it reaches nothing but
+  // `getRunReport`, which is a parameterised lookup, so it can no more address a
+  // file than the route parameter can.
+  let baselineRunId: string | undefined;
+  if (body.baselineRunId !== undefined && body.baselineRunId !== null) {
+    if (
+      typeof body.baselineRunId !== "string" ||
+      body.baselineRunId.trim().length === 0 ||
+      body.baselineRunId.length > MAX_RUN_ID_LENGTH
+    ) {
+      return badRequest(
+        "invalid_baseline",
+        '"baselineRunId" must be a run id.',
+      );
+    }
+    if (body.baselineRunId.trim() === runId) {
+      return badRequest(
+        "same_run",
+        "The baseline and the analyzed run must be two different runs.",
+      );
+    }
+    baselineRunId = body.baselineRunId.trim();
+  }
+
+  // Keyed WITHOUT the baseline, deliberately.
+  //
+  // A regression analysis is a different artefact from a plain one, so it is
+  // tempting to give it its own slot — and this route did, until Phase E's
+  // security review pointed out what that costs (L5). This map is the only
+  // concurrency bound on an expensive provider process, and widening the key
+  // removes it: switching the baseline picker and re-clicking "Explain this
+  // change" would claim a fresh slot each time, so N baselines in history means
+  // N concurrent agents under the 5-minute timeout. Accidental misuse, not an
+  // attacker path (the request gate refuses a cross-origin POST), but the whole
+  // point of the guard is to survive accidents.
+  //
+  // So one analysis per (run, category) at a time, whatever it is grounded in.
+  // The cost is that a plain and a baseline-grounded analysis of the same
+  // category cannot run at once; the 409's wording is true of both.
   const key = `${runId}:${category}`;
   if (inFlight.has(key)) {
     return apiError(
@@ -179,37 +232,70 @@ export async function POST(
     );
   }
 
-  // Replay a saved analysis without spawning the agent (unless forced).
-  const saved = force ? null : getAnalysis(runId, category);
+  // Replay a saved analysis without spawning the agent (unless forced). A
+  // baseline-grounded analysis never replays — see the module docblock.
+  const saved = force || baselineRunId ? null : getAnalysis(runId, category);
 
-  // Load the LHR (disk first, then in-memory queue) only when we'll actually run.
+  // Load the LHR only when we'll actually run. The read itself — disk first,
+  // then the in-memory queue, with the DB-resolved path and the peak-memory
+  // ceiling — lives in `@/lib/reports/loadReport`, shared with the trace and
+  // diff routes so all three keep one posture.
   let lhr: LighthouseResult | null = null;
+  let diff: RunDiff | null = null;
   if (!saved) {
-    const persisted = getRunReport(runId);
-    if (persisted?.jsonPath) {
-      const json = await readPersistedFile(persisted.jsonPath);
-      if (json !== null) {
-        try {
-          lhr = JSON.parse(json) as LighthouseResult;
-        } catch {
-          lhr = null;
-        }
+    // Halved when a baseline is in play, because both reports are then held —
+    // and parsed — at the same moment.
+    const maxBytes = baselineRunId ? MAX_REPORT_BYTES / 2 : MAX_REPORT_BYTES;
+    const loaded = await loadRunLhr(runId, { maxBytes });
+    if (loaded.status === "error") {
+      if (loaded.reason === "not_found") {
+        return notFound(
+          "report_not_found",
+          "No completed report found for that run.",
+        );
       }
-    }
-    if (!lhr) {
-      lhr = getAuditQueue().getJobResult(runId)?.median.lhr ?? null;
-    }
-    if (!lhr) {
-      return notFound(
-        "report_not_found",
-        `No completed report found for run "${runId}".`,
+      return serverError(
+        "report_unreadable",
+        "The stored report for that run could not be read.",
       );
     }
+    lhr = loaded.lhr;
     if (!lhrHasCategory(lhr, category)) {
       return badRequest(
         "category_not_run",
         `This run didn't audit the ${category} category, so there's nothing to analyze.`,
       );
+    }
+
+    if (baselineRunId) {
+      const baseline = await loadRunLhr(baselineRunId, { maxBytes });
+      if (baseline.status === "error") {
+        if (baseline.reason === "not_found") {
+          return notFound(
+            "baseline_not_found",
+            "No completed report found for the baseline run.",
+          );
+        }
+        return serverError(
+          "report_unreadable",
+          "The stored report for the baseline run could not be read.",
+        );
+      }
+      // A diff that cannot be computed must not silently degrade into a plain
+      // analysis: the user asked "what changed", and answering a different
+      // question without saying so is the dishonest degradation this project
+      // refuses. Both ids are the DB-round-tripped ones.
+      try {
+        diff = extractRunDiff({
+          baseline: { lhr: baseline.lhr, runId: baseline.runId },
+          comparison: { lhr: loaded.lhr, runId: loaded.runId },
+        });
+      } catch {
+        return serverError(
+          "diff_failed",
+          "The stored reports for that pair could not be diffed.",
+        );
+      }
     }
   }
 
@@ -293,13 +379,16 @@ export async function POST(
         lhr: lhrToAnalyze as LighthouseResult,
         formFactor,
         field,
+        diff,
         provider,
         model,
         signal: analysisAbort.signal,
         onEvent: send,
       })
         .then((result) => {
-          saveAnalysis(result);
+          // Never cache a regression analysis under the plain `(runId,
+          // category)` key — see the module docblock.
+          if (!baselineRunId) saveAnalysis(result);
           send({ type: "done", analysis: result });
           teardown();
         })

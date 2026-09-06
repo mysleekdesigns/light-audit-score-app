@@ -87,6 +87,14 @@ export interface AnalysisStartOptions {
   provider?: AnalysisProviderId;
   /** Override the configured model for this analysis only. */
   model?: string;
+  /**
+   * Run id to compare this run against. With a baseline the server feeds the
+   * audit-level diff into the prompt and the analysis explains what CHANGED
+   * rather than diagnosing the page from scratch — so the route neither replays
+   * a cached analysis nor persists the result (the saved-analysis key is
+   * `(runId, category)`, which a regression answer would poison).
+   */
+  baselineRunId?: string;
 }
 
 const STREAMING_STATUSES: ReadonlySet<AnalysisStatus> = new Set([
@@ -222,6 +230,7 @@ export function useAnalysisStream(
               force: opts?.force === true,
               ...(opts?.provider ? { provider: opts.provider } : {}),
               ...(opts?.model ? { model: opts.model } : {}),
+              ...(opts?.baselineRunId ? { baselineRunId: opts.baselineRunId } : {}),
             }),
             signal: ac.signal,
           });

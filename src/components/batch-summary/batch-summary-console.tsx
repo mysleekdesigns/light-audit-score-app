@@ -20,6 +20,7 @@
  */
 
 import { useCallback, useId, useMemo } from "react";
+import Link from "next/link";
 import {
   Ban,
   CheckCircle2,
@@ -29,6 +30,7 @@ import {
   Gauge,
   Layers,
   Loader2,
+  FileDiff,
   RotateCcw,
   RotateCw,
   Sheet,
@@ -75,6 +77,7 @@ import {
   LIGHTHOUSE_CATEGORIES,
   type DeviceSelection,
 } from "@/lib/lighthouse/types";
+import { compareHref, pickRerunComparison } from "@/lib/compare/lineage";
 import { hasBothDevices } from "@/lib/pairing/devicePairs";
 import {
   DEFAULT_THRESHOLDS,
@@ -232,6 +235,15 @@ export function BatchSummaryConsole({ batches, runs }: BatchSummaryConsoleProps)
               <BatchCard
                 batch={batch}
                 rows={runsByBatch.get(batch.id) ?? []}
+                // The batch this one re-ran, so its card can offer a diff. Read
+                // from the whole archive rather than `batches`, which drops
+                // cancelled batches — the pages a cancelled batch DID finish are
+                // still persisted and still comparable.
+                priorRows={
+                  batch.priorBatchId
+                    ? (runsByBatch.get(batch.priorBatchId) ?? [])
+                    : []
+                }
                 thresholds={thresholds}
               />
             </li>
@@ -383,13 +395,102 @@ function ThresholdControls({
   );
 }
 
+/**
+ * The `↻ re-run of <prior>` lineage chip — and, when the two batches share a
+ * comparable page, the "what changed" entry point beside it (ROADMAP Phase E).
+ *
+ * The chip is where a user actually asks the question, so the link lands them on
+ * `/compare` already pointing at the right pair: the prior batch's run as the
+ * baseline, this batch's as the comparison, with the What Changed card open.
+ * Resolving a prior BATCH id to a prior RUN is done by `pickRerunComparison`,
+ * a pure, unit-tested helper — it matches on `(url, formFactor)` so a `"both"`
+ * batch never diffs a mobile run against a desktop one, and ranks by score
+ * points lost so a multi-page batch lands on the page that regressed hardest.
+ *
+ * **It degrades by disappearing.** No shared page, a failed prior run, or a
+ * prior run stored without a JSON report all mean there is nothing to diff, and
+ * the link is simply not rendered — the tooltip says why rather than offering a
+ * link that would land on a broken selection.
+ */
+function LineageChip({
+  priorBatchId,
+  rows,
+  priorRows,
+}: {
+  priorBatchId: string;
+  rows: HistoryRow[];
+  priorRows: HistoryRow[];
+}) {
+  const target = useMemo(
+    () => pickRerunComparison(rows, priorRows),
+    [rows, priorRows],
+  );
+
+  return (
+    <span className="flex flex-wrap items-center gap-1.5">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Badge
+            variant="outline"
+            className="gap-1 border-border/60 font-mono text-[0.625rem] uppercase tracking-[0.14em] text-muted-foreground tabular-nums"
+          >
+            <RotateCw aria-hidden className="size-2.5" />
+            re-run of{" "}
+            <span translate="no">{priorBatchId.slice(0, 8)}</span>
+          </Badge>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-xs">
+          <p className="font-mono">Re-run of batch {priorBatchId}</p>
+          {target ? null : (
+            <p className="text-pretty">
+              No page here has a completed prior run with a stored report, so there is nothing
+              to diff.
+            </p>
+          )}
+        </TooltipContent>
+      </Tooltip>
+
+      {target ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              asChild
+              variant="ghost"
+              size="sm"
+              className="h-6 gap-1 px-1.5 font-mono text-[0.625rem] uppercase tracking-[0.14em] text-muted-foreground hover:text-foreground"
+            >
+              <Link
+                href={compareHref(target)}
+                aria-label={`What changed — diff ${shortUrl(target.url)} on ${target.formFactor} against the prior run`}
+              >
+                <FileDiff aria-hidden className="size-2.5" />
+                what changed
+              </Link>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent className="max-w-xs">
+            <p className="text-pretty">
+              Diff this re-run against the prior one, audit by audit.
+            </p>
+            <p className="font-mono break-all text-muted-foreground" translate="no">
+              {shortUrl(target.url)} · {target.formFactor}
+            </p>
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
+    </span>
+  );
+}
+
 interface BatchCardProps {
   batch: BatchInfo;
   rows: HistoryRow[];
+  /** Runs of the batch this one re-ran; empty for a fresh batch (PRD §6 Phase 13). */
+  priorRows: HistoryRow[];
   thresholds: CategoryThresholds;
 }
 
-function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
+function BatchCard({ batch, rows, priorRows, thresholds }: BatchCardProps) {
   const summary = useMemo(
     () => ({
       averages: averageScores(rows),
@@ -493,21 +594,11 @@ function BatchCard({ batch, rows, thresholds }: BatchCardProps) {
             {status.label}
           </Badge>
           {batch.priorBatchId ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Badge
-                  variant="outline"
-                  className="gap-1 border-border/60 font-mono text-[0.625rem] uppercase tracking-[0.14em] text-muted-foreground tabular-nums"
-                >
-                  <RotateCw aria-hidden className="size-2.5" />
-                  re-run of{" "}
-                  <span translate="no">{batch.priorBatchId.slice(0, 8)}</span>
-                </Badge>
-              </TooltipTrigger>
-              <TooltipContent className="font-mono">
-                Re-run of batch {batch.priorBatchId}
-              </TooltipContent>
-            </Tooltip>
+            <LineageChip
+              priorBatchId={batch.priorBatchId}
+              rows={rows}
+              priorRows={priorRows}
+            />
           ) : null}
           <span className="font-mono text-xs text-muted-foreground tabular-nums @sm:ml-auto">
             {formatBatchAt(batch.createdAt)}

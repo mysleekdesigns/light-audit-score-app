@@ -264,6 +264,21 @@ export interface AuditQueueApi {
   getJobResult(runId: string): AuditResult | undefined;
 
   /**
+   * Drop the retained {@link AuditResult} for one run (all of them when `runId`
+   * is omitted), so a deleted run stops being readable from memory.
+   *
+   * The queue keeps every finished run's heavy, LHR-bearing result so the report
+   * routes can serve a run that has not been persisted yet. That retention is
+   * what makes deletion incomplete unless it is explicitly undone: the DB row
+   * and the report file can both be gone while the LHR — the audited URLs, its
+   * subresource URLs, its screenshots — is still served from this map. Callers
+   * that delete history MUST call this; `deleteRun` / `clearHistory` do.
+   *
+   * Idempotent, and safe for an unknown id.
+   */
+  forgetJobResults(runId?: string): void;
+
+  /**
    * Subscribe to a batch's progress. The returned function unsubscribes.
    * Implementations should not assume the batch exists yet at call time.
    */

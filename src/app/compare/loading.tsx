@@ -2,8 +2,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 // Skeleton mirroring the Compare page: PageHeader, then the same grid the real
 // console uses — one column to `xl`, and from there Target URL over Score Trend
-// on the left with Run Diff beside both. A stand-in on the wrong breakpoint
-// would reflow the whole page the moment data landed.
+// on the left with Run Diff beside both, and What Changed spanning both columns
+// beneath them. A stand-in on the wrong breakpoint would reflow the whole page
+// the moment data landed.
 export default function CompareLoading() {
   return (
     <div
@@ -66,6 +67,15 @@ export default function CompareLoading() {
           <Skeleton className="h-40 w-full bg-muted/40" />
           <Skeleton className="h-56 w-full bg-muted/40" />
           <Skeleton className="h-28 w-full bg-muted/40" />
+        </div>
+
+        {/* What Changed card stand-in. It renders closed by default — an
+            explanation plus one button — so the stand-in is short rather than
+            reserving room for tables nobody has asked for yet. */}
+        <div className="flex flex-col gap-4 rounded-xl bg-card/40 px-4 py-4 xl:col-span-2">
+          <Skeleton className="h-4 w-36 bg-muted/60" />
+          <Skeleton className="h-3 w-full max-w-xl bg-muted/40" />
+          <Skeleton className="h-32 w-full bg-muted/40" />
         </div>
       </div>
     </div>

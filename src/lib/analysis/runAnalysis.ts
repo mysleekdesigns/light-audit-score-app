@@ -20,6 +20,7 @@
  */
 
 import type { FieldData, FormFactor, LighthouseResult } from "@/lib/lighthouse/types";
+import type { RunDiff } from "@/lib/reports/diff-types";
 import { AnalysisError } from "@/lib/analysis/AnalysisError";
 import { buildAnalysisInput } from "@/lib/analysis/extract";
 import { analysisSystemPrompt, buildUserPrompt } from "@/lib/analysis/buildPrompt";
@@ -58,6 +59,16 @@ export interface RunAnalysisArgs {
   formFactor: FormFactor;
   /** CrUX field data for PSI runs (grounds the diagnosis in real-world data). */
   field?: FieldData | null;
+  /**
+   * Audit-level diff against a baseline run. When present the analysis explains
+   * what CHANGED rather than diagnosing the page from scratch — and the route
+   * neither replays it from cache nor persists it, because the saved-analysis
+   * key is `(runId, category)` and a regression-flavoured answer stored under it
+   * would be replayed for a later plain "explain my score".
+   *
+   * Absent or null, every byte of the prompt is what it was before diffs existed.
+   */
+  diff?: RunDiff | null;
   /** Optional model override; defaults to the provider's configured model. */
   model?: string;
   /** Optional provider override for this analysis; defaults to the Settings choice, then the env selection. */
@@ -90,13 +101,27 @@ function selectProvider(override: ProviderOverride): ResolvedProvider {
  * {@link AnalysisError} on failure.
  */
 export async function runAnalysis(args: RunAnalysisArgs): Promise<AnalysisResult> {
-  const { runId, category, lhr, formFactor, field, model, provider, signal, onEvent } =
-    args;
+  const {
+    runId,
+    category,
+    lhr,
+    formFactor,
+    field,
+    diff,
+    model,
+    provider,
+    signal,
+    onEvent,
+  } = args;
 
   const resolved = selectProvider({ provider, model });
   const driver = DRIVERS[resolved.driver];
 
-  const input = buildAnalysisInput({ lhr, category, formFactor, field });
+  const input = buildAnalysisInput({ lhr, category, formFactor, field, diff });
+  // One flag, derived from the projection rather than from `diff`: a diff the
+  // projection dropped entirely still produces a `change` (saying so), and a
+  // caller passing `undefined` must land on exactly the pre-diff prompts.
+  const changeAnalysis = input.change !== undefined;
   // The capability tier picks the prompt pair: the researching agent when the
   // provider can cite what it fetched, the honest data-only analyst when it can't.
   //
@@ -116,6 +141,7 @@ export async function runAnalysis(args: RunAnalysisArgs): Promise<AnalysisResult
     provider: resolved,
     systemPrompt: analysisSystemPrompt(webResearch, {
       researchGuidance: research?.promptGuidance,
+      changeAnalysis,
     }),
     userPrompt: buildUserPrompt(input, { webResearch }),
     webResearch,

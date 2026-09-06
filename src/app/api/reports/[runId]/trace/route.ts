@@ -14,71 +14,25 @@
  * never touches a report file, and the tab pays for exactly one fetch when the
  * user opens it (the client caches the immutable result for the run).
  *
- * Degradation ladder, mirroring `GET /api/reports/:runId`:
- *  1. the persisted LHR on disk (`getRunReport(runId).jsonPath`), read through a
- *     never-throwing helper so an absent file falls through rather than 500ing;
- *  2. the in-memory queue result (`result.median.lhr`) — this is what makes the
- *     tab work for a run that just finished, or one that predates persistence;
- *  3. `404 report_not_found` when neither has an LHR.
- *
- * A report file that is PRESENT but unparseable is the one case that does not
- * fall through: an absent report is ordinary (a legacy or pruned run), a corrupt
- * one is a real fault worth surfacing, so it returns a structured
- * `500 report_unreadable` rather than being masked by an in-memory result that
- * only exists for the few minutes after a run.
+ * The read itself — the degradation ladder (disk → in-memory queue → 404), the
+ * DB-resolved path so caller input never reaches `path.join`, the peak-memory
+ * ceiling, and the rule that a PRESENT but corrupt report is a 500 rather than a
+ * fall-through — lives in `@/lib/reports/loadReport`. It was extracted there when
+ * ROADMAP Phase E's diff route needed the same posture for two runs at once;
+ * this route's behaviour is unchanged.
  *
  * No request data is reflected into any error body (`.claude/rules/security.md`)
  * — including the run id, which is caller-supplied. The route needs no auth of
  * its own: `src/proxy.ts` gates every non-`_next` route.
  */
 
-import { promises as fs } from "node:fs";
-
 import { notFound, serverError } from "@/lib/api/errors";
-import { getRunReport } from "@/lib/db/persistence";
-import type { LighthouseResult } from "@/lib/lighthouse/types";
-import { getAuditQueue } from "@/lib/queue/AuditQueue";
 import { extractRunTrace } from "@/lib/reports/extract";
+import { loadRunLhr, runReportResolves } from "@/lib/reports/loadReport";
 import type { RunTrace } from "@/lib/reports/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-/**
- * Read a persisted report file, returning `null` (rather than throwing) when the
- * file is absent or unreadable — so the caller falls through to the in-memory
- * fallback instead of surfacing a 500 for a run that simply isn't on disk.
- */
-async function readPersistedFile(path: string): Promise<string | null> {
-  try {
-    return await fs.readFile(path, "utf8");
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Refuse to read a report far larger than one can legitimately be.
- *
- * The ceiling is set against PEAK MEMORY, not file size, because this route
- * holds far more than the file: the UTF-8 string, the parsed object graph (an
- * LHR is a great many small objects and strings, so several times the text),
- * the projected arrays, and the serialized response — all live at once. The
- * sibling `GET /api/reports/:runId` holds one copy and hands the string
- * straight back, so this is a genuinely new exposure rather than an inherited
- * one. 8 MB is over 5× the largest report observed here (1.5 MB) and still
- * bounds the whole chain to something a local server can absorb.
- */
-const MAX_REPORT_BYTES = 8 * 1024 * 1024;
-
-/** Whether the file at `path` is small enough to read. Missing file → let the read fall through. */
-async function withinSizeLimit(path: string): Promise<boolean> {
-  try {
-    return (await fs.stat(path)).size <= MAX_REPORT_BYTES;
-  } catch {
-    return true;
-  }
-}
 
 /**
  * A trace embeds the filmstrip — actual screenshots of the audited page, which
@@ -143,19 +97,14 @@ export async function GET(
 ): Promise<Response> {
   const { runId } = await params;
 
-  const persisted = getRunReport(runId);
-
   // A memo hit is honoured only while the run STILL RESOLVES. Deleting a run —
   // or "Clear history" — must actually remove it, and an in-process cache is
   // exactly how a deleted run's URLs keep being served for the life of the
   // process; ROADMAP Phase C's M2 (clearing history left audited URLs behind in
-  // `schedule_alerts`) is the standing precedent. The cheap DB lookup above
-  // stays authoritative for EXISTENCE; the memo only saves the expensive part,
-  // which is the ~690 KB read and parse.
-  const resolves =
-    persisted?.jsonPath != null ||
-    getAuditQueue().getJobResult(runId) !== undefined;
-  if (!resolves) {
+  // `schedule_alerts`) is the standing precedent. The cheap DB lookup stays
+  // authoritative for EXISTENCE; the memo only saves the expensive part, which
+  // is the ~690 KB read and parse.
+  if (!runReportResolves(runId)) {
     traceCache.delete(runId);
     return notFound(
       "report_not_found",
@@ -166,38 +115,19 @@ export async function GET(
   const cached = cacheGet(runId);
   if (cached !== undefined) return traceResponse(cached);
 
-  let lhr: LighthouseResult | null = null;
-
-  // 1. The persisted LHR on disk.
-  if (persisted?.jsonPath) {
-    if (!(await withinSizeLimit(persisted.jsonPath))) {
-      return serverError(
-        "report_unreadable",
-        "The stored report for that run is too large to read.",
+  const loaded = await loadRunLhr(runId);
+  if (loaded.status === "error") {
+    if (loaded.reason === "not_found") {
+      return notFound(
+        "report_not_found",
+        "No completed report found for that run.",
       );
     }
-    const json = await readPersistedFile(persisted.jsonPath);
-    if (json !== null) {
-      try {
-        lhr = JSON.parse(json) as LighthouseResult;
-      } catch {
-        return serverError(
-          "report_unreadable",
-          "The stored report for that run could not be parsed.",
-        );
-      }
-    }
-  }
-
-  // 2. The in-memory queue result, for an in-flight or never-persisted run.
-  if (!lhr) {
-    lhr = getAuditQueue().getJobResult(runId)?.median.lhr ?? null;
-  }
-
-  if (!lhr) {
-    return notFound(
-      "report_not_found",
-      "No completed report found for that run.",
+    return serverError(
+      "report_unreadable",
+      loaded.reason === "too_large"
+        ? "The stored report for that run is too large to read."
+        : "The stored report for that run could not be parsed.",
     );
   }
 
@@ -207,11 +137,13 @@ export async function GET(
   // (a hand-edited file, a truncated write), which must still be a structured
   // 500 and never an unhandled rejection.
   try {
-    // Echo the DB-round-tripped id, never the caller's string. A 200 is only
-    // reachable for an id that already matched a row or a queue key, so the two
-    // are equal in practice — but "no request data is reflected" should be true
-    // of the success body as well, not just the error bodies.
-    const trace = extractRunTrace(lhr, persisted?.id ?? runId);
+    // Echo the id `loadRunLhr` resolved, not the raw parameter: the DB
+    // round-trip when the report came from disk, and — for the queue fallback,
+    // where there is no row to round-trip through — a string that reached us
+    // only by matching an existing nanoid job key exactly. A 200 is unreachable
+    // otherwise, so the two are equal in practice, but "no request data is
+    // reflected" should hold on the success body too, not just the errors.
+    const trace = extractRunTrace(loaded.lhr, loaded.runId);
     cacheSet(runId, trace);
     return traceResponse(trace);
   } catch {

@@ -367,6 +367,34 @@ async function removeReportFiles(runId: string): Promise<void> {
 }
 
 /**
+ * Drop any in-memory {@link AuditResult} the queue is still holding for deleted
+ * runs, so the DB really is authoritative for whether a run exists.
+ *
+ * Deleting a run removes its row and its report files, but the queue retains the
+ * heavy LHR of every run it has finished — that retention is what lets the report
+ * routes serve a run that has not been persisted yet. Without this, a deleted (or
+ * "Clear history"-ed) run keeps answering `GET /api/reports/:runId/trace` and
+ * `…/diff` for the life of the process, with its audited URL, every subresource
+ * URL it fetched and its filmstrip screenshots. Someone clearing history to
+ * remove the record of what they audited did not get that — the same shape as
+ * ROADMAP Phase C's M2, found again by Phase E's security review.
+ *
+ * Imported LAZILY because `AuditQueue` imports this module: a static import would
+ * be a genuine cycle. `forgetQueuedResults` never constructs a queue, so a
+ * process that has not run an audit pays nothing here.
+ */
+async function forgetInMemoryResults(runId?: string): Promise<void> {
+  try {
+    const { forgetQueuedResults } = await import("@/lib/queue/AuditQueue");
+    forgetQueuedResults(runId);
+  } catch (err) {
+    // Log-and-swallow like the rest of this module: failing to prune a cache
+    // must never turn a successful deletion into a thrown error.
+    warn("forgetInMemoryResults", err);
+  }
+}
+
+/**
  * Delete a single persisted run: its row, its stored report files, and — if it
  * was the batch's last remaining run — the now-orphaned `batches` row too (child
  * runs are deleted first to respect the FK). Returns whether a row was removed.
@@ -382,6 +410,7 @@ export async function deleteRun(runId: string): Promise<boolean> {
     deleteAnalysesForRun(runId);
     db.delete(runs).where(eq(runs.id, runId)).run();
     await removeReportFiles(runId);
+    await forgetInMemoryResults(runId);
 
     // Orphan cleanup: drop the parent batch once it has no runs left.
     const remaining = db
@@ -474,6 +503,7 @@ export async function clearHistory(): Promise<{ runs: number; batches: number }>
     } catch (err) {
       warn("clearHistory:reports", err);
     }
+    await forgetInMemoryResults();
 
     return { runs: runCount, batches: batchCount };
   } catch (err) {

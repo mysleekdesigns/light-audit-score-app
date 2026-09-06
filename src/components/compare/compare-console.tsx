@@ -48,10 +48,16 @@ import {
   runTime,
   type UrlGroup,
 } from "@/lib/compare/diff";
+import {
+  resolveCompareSelection,
+  type CompareSelection,
+  type CompareSelectionParams,
+} from "@/lib/compare/lineage";
 
 import { RunDiff } from "./run-diff";
 import { ScoreSparklines } from "./score-sparklines";
 import { ScoreTrendChart } from "./score-trend-chart";
+import { WhatChangedCard } from "./what-changed-card";
 
 const SECTION_LABEL =
   "font-mono text-[0.625rem] uppercase tracking-[0.18em] text-muted-foreground";
@@ -125,6 +131,13 @@ function describeEngines(runs: HistoryRow[]): {
 
 interface CompareConsoleProps {
   runs: HistoryRow[];
+  /**
+   * The page's query string, so a deep link can preselect a URL and a pair of
+   * runs — and, with `changed=1`, open the What Changed card on arrival. Read
+   * once to seed this console's state; changing a picker afterwards is not
+   * written back to the URL.
+   */
+  initial?: CompareSelectionParams;
 }
 
 /**
@@ -133,10 +146,16 @@ interface CompareConsoleProps {
  * score/metric diff. All derivation happens in-browser over the server-provided
  * rows (no fetching). Recharts is client-only, so this is a client component.
  */
-export function CompareConsole({ runs }: CompareConsoleProps) {
+export function CompareConsole({ runs, initial }: CompareConsoleProps) {
   const groups = useMemo(() => groupRunsByUrl(runs), [runs]);
+  // Resolved against the groups the archive actually has, so a stale link
+  // degrades to this page's own defaults instead of a dangling selection.
+  const selection = useMemo(
+    () => resolveCompareSelection(groups, initial),
+    [groups, initial],
+  );
 
-  if (groups.length === 0) {
+  if (groups.length === 0 || !selection) {
     return (
       <Empty className="border border-dashed border-border/60">
         <EmptyHeader>
@@ -154,17 +173,24 @@ export function CompareConsole({ runs }: CompareConsoleProps) {
     );
   }
 
-  return <CompareConsoleInner groups={groups} />;
+  return <CompareConsoleInner groups={groups} selection={selection} />;
 }
 
 /** Inner console rendered once we know there is ≥1 comparable URL. */
-function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
+function CompareConsoleInner({
+  groups,
+  selection,
+}: {
+  groups: UrlGroup[];
+  selection: CompareSelection;
+}) {
   const urlSelectId = useId();
   const baselineId = useId();
   const comparisonId = useId();
 
-  // Default to the most-audited URL (groups are ordered by run count desc).
-  const [selectedUrl, setSelectedUrl] = useState(groups[0].url);
+  // Defaults to the most-audited URL (groups are ordered by run count desc),
+  // unless a deep link named another one.
+  const [selectedUrl, setSelectedUrl] = useState(selection.url);
 
   const group = useMemo(
     () => groups.find((g) => g.url === selectedUrl) ?? groups[0],
@@ -190,11 +216,10 @@ function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
   const devices = useMemo(() => describeDevices(groupRuns), [groupRuns]);
   const engines = useMemo(() => describeEngines(groupRuns), [groupRuns]);
 
-  // Diff run selection — defaults: baseline = oldest, comparison = newest.
-  const [baselineId$, setBaselineId] = useState(() => groupRuns[0].id);
-  const [comparisonId$, setComparisonId] = useState(
-    () => groupRuns[groupRuns.length - 1].id,
-  );
+  // Diff run selection — defaults: baseline = oldest, comparison = newest,
+  // again unless a deep link named a pair that still exists.
+  const [baselineId$, setBaselineId] = useState(selection.baselineRunId);
+  const [comparisonId$, setComparisonId] = useState(selection.comparisonRunId);
 
   // Resolve selected ids against the current group, falling back to the
   // oldest/newest run so a URL switch never leaves a dangling selection.
@@ -225,8 +250,10 @@ function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
        Score Trend on the left, Run Diff filling the right beside both. The
        diff is the tallest section by far (two tables plus a footer), so
        pairing it with the two short ones balances the fold instead of leaving
-       a half-empty row. DOM order is Target → Trend → Diff at every width, so
-       the stacked reading never changes.
+       a half-empty row. What Changed then spans both columns on its own row
+       beneath them — it is the one section built from full-width tables. DOM
+       order is Target → Trend → Diff → What Changed at every width, so the
+       stacked reading never changes.
 
        The row is left to stretch and the diff pinned with `self-start`, so the
        left column — not the diff — absorbs the row height and the two columns
@@ -439,6 +466,22 @@ function CompareConsoleInner({ groups }: { groups: UrlGroup[] }) {
           )}
         </CardContent>
       </Card>
+
+      {/* What Changed ------------------------------------------------------
+          A full-width row under both columns at every width. It is the only
+          section built from tables of arbitrary width — up to 80 audits and 120
+          requests — so pairing it with a short card would starve it, and it is
+          the last question a reader asks, after "did it move?" and "by how
+          much?".
+
+          It reuses the two pickers above rather than adding its own, and it
+          reads the two stored reports only once opened. */}
+      <WhatChangedCard
+        className="xl:col-span-2"
+        baseline={baseline}
+        comparison={comparison}
+        defaultOpen={selection.showChanged}
+      />
     </div>
   );
 }

@@ -1,16 +1,21 @@
 # ROADMAP — Competitive differentiation plan (Phases A–H)
 
-> **Status (updated 2026-09-06):** **Phases A, B, C and D complete** — the Agentic Browsing category is
-> live end-to-end (engine → SQLite → UI → PSI → AI analysis), audits can now authenticate
-> (basic auth, cookies, headers) for both auditing and crawl discovery with credentials redacted
-> at every persistence boundary, the daily scheduler finally notifies (an armed schedule
-> compares each fire with the one before it and reports what crossed, in-app and to an optional
-> webhook), and every run now opens a **Trace** tab: a request waterfall and a loading filmstrip
-> read lazily from the report already on disk — data every audit has always captured and
-> Lighthouse's own report never shows. Phases E–H are unbuilt. **E is next in dependency order**
-> and is now unblocked, since it reuses D's stored-report readers; **F is independent of it.**
-> D's `security-reviewer` pass came back clean (no Critical, no High) across two independent
-> reviewers; every finding either raised was fixed before the phase closed.
+> **Status (updated 2026-09-06):** **Phases A, B, C, D and E complete** — the Agentic Browsing
+> category is live end-to-end (engine → SQLite → UI → PSI → AI analysis), audits can now
+> authenticate (basic auth, cookies, headers) for both auditing and crawl discovery with
+> credentials redacted at every persistence boundary, the daily scheduler finally notifies (an
+> armed schedule compares each fire with the one before it and reports what crossed, in-app and
+> to an optional webhook), every run opens a **Trace** tab (a request waterfall and a loading
+> filmstrip read lazily from the report already on disk), and Compare now answers *why* a score
+> moved: a **What Changed** card diffs two runs audit by audit, opportunity by opportunity and
+> request by request, and can hand that delta to the AI so it explains the regression instead of
+> re-diagnosing the page. **Phases F, G and H are unbuilt. F is next in dependency order** — it
+> is independent of everything built so far — and **H now has both of its prerequisites (D and
+> E)**; G still waits on F's headless seam.
+> E's `security-reviewer` pass came back with no Critical and no High; its one Medium and all
+> five Lows were fixed before the phase closed, including a pre-existing one (a deleted run stayed
+> readable from the queue's in-memory results) that Phase E's centralised read path made the right
+> moment to fix. D's pass was likewise clean across two independent reviewers.
 > This file is a **plan**, not a record — it was drafted from a competitor survey of the
 > free/local Lighthouse tooling space (Unlighthouse, Lighthouse CI, sitespeed.io,
 > Lighthouse Parade) and the commercial monitoring tier (DebugBear, Foo.software,
@@ -725,25 +730,191 @@ most-loved capability is showing *which individual audits and resources* changed
 builds. You already store both full reports, so this is UI over data you own — and it is the
 feature that makes a score regression actionable in one click instead of a manual report diff.
 
-- [ ] **Diff core**: a pure, unit-tested differ over two stored reports producing per-audit
+- [x] **Diff core**: a pure, unit-tested differ over two stored reports producing per-audit
       deltas (score, numeric value, wasted bytes/ms), classified as regressed / improved /
       unchanged / newly-present / disappeared.
-- [ ] **Opportunity deltas**: rank by estimated savings change so the biggest regressions
+      *Done: `src/lib/reports/diff-audits.ts`, pure in the `parseLhr` sense. It is TOTAL over
+      the union of audit ids — it classifies the ~170 per run that did nothing as well — and
+      the composer filters, because a differ that pre-filtered could not be unit-tested for
+      "correctly reports unchanged", which is the property that makes the moved ones
+      believable. Classification order is the contract: presence, then SCORE (which is what
+      actually moved the category number), then a numeric fallback only when NEITHER side is
+      scored. A scored-vs-unscored pair is `unchanged`/`basis: "none"`, never a direction —
+      an audit that went from unscored to 0.5 has not improved by 0.5, which is Phase C's
+      "a missing value is silence, not zero" applied here. The lower-is-better assumption
+      behind the numeric fallback was VERIFIED rather than asserted: Lighthouse 13.4.1 pins
+      `numericUnit` to `byte | millisecond | element | unitless` (`types/audit.d.ts:117`) and
+      every emitter is a cost; a test scans all 225 stored reports and fails if a fifth unit
+      ever appears, rather than letting the fallback silently invert. Two things the real
+      reports taught us: the category join must union BOTH sides (the real pair the test picks
+      differs by the entire `agentic-browsing` category, so a one-sided join would leave five
+      real audits with no category), and `weight` must be the MAX across categories
+      (`image-alt` is accessibility 10 / seo 1) or first-seen-wins mis-tiers the ranking.*
+- [x] **Opportunity deltas**: rank by estimated savings change so the biggest regressions
       surface first; reuse the existing `Opportunity` shape.
-- [ ] **Resource deltas**: added / removed / grown requests, built on the Phase-D
+      *Done: `OpportunityDelta` mirrors `Opportunity`'s field names side-for-side, and
+      `savingsDeltaMs` is positive when the comparison run wastes MORE, so the default order
+      is biggest-regression-first. Classified on SAVINGS rather than score, because an
+      opportunity's whole point is the milliseconds it costs and many are scored `null` in a
+      passing run. The load-bearing detail is that both sides are read UNCAPPED before the
+      join: `parseOpportunities` caps at 15 per side, and a cap applied before the join
+      silently drops an opportunity that exists on only one side — precisely the thing this
+      feature is for. The corpus could not demonstrate that (real reports carry exactly 6),
+      so the test for it is deliberately synthetic.*
+- [x] **Resource deltas**: added / removed / grown requests, built on the Phase-D
       `network-requests` reader.
-- [ ] **UI**: a third card on `/compare` beside Trend and Diff, and a "what changed" entry
+      *Done: `src/lib/reports/diff-requests.ts` over `extractWaterfall`, not beside it — that
+      reader already knows the `-1` unknown sentinel, the `lhr.entities` third-party join and
+      the v13 render-blocking rename, and re-deriving any of it would drift. Keyed by full URL
+      and COUNTED, since 20 of this repo's 224 reports fetch some URL more than once (one
+      fetches a font three times), so "the page now fetches this twice" stays visible.
+      `unavailable` propagates: a diff where one side predates the audit is not a diff in
+      which every request vanished. Reconciled against two real reports of the same page —
+      23 → 22 requests, 11,800 → 11,296 bytes, each equal to that side's own Trace-tab total.
+      **The finding worth recording:** diffing two runs of the same page is dominated by
+      BEACON CHURN — 19 of 32 URL keys came out added/removed, nearly all analytics beacons
+      whose query strings carry per-run session ids. That is correct under the contract but
+      would read as "nine new resources", so both the UI and the AI prompt were built to say
+      so rather than the keying being changed.*
+- [x] **UI**: a third card on `/compare` beside Trend and Diff, and a "what changed" entry
       point from a Re-run's lineage chip (`↻ re-run of <prior>`), which is the natural place
       a user asks the question.
-- [ ] **Feed the AI**: pass the audit-level delta into the analysis prompt so the AI explains
+      *Done: a full-width "What Changed" card reusing the console's EXISTING run pickers (no
+      second pair), with Audits / Opportunities / Requests / Explain tabs over a pure,
+      unit-tested `what-changed-view.ts` — the same component/pure-module split Phase D used,
+      because Vitest runs `environment: "node"` here with no jsdom. Both churn findings are
+      designed for: the Requests tab leads with the churn-immune totals before any row and
+      sorts size-CHANGED rows first (the only third of the table churn cannot manufacture),
+      and the Audits tab leads with a `regressed · improved · presence only` tally with
+      appeared/disappeared worded as presence, not verdict. Five distinguished empty states,
+      `urlMismatch` surfaced as its own notice rather than as a regression, and no links on
+      any page-authored URL — Phase D's standing decision. No new colour, font or token.
+      The lineage chip resolves a prior BATCH to the matching prior RUN by `(url, formFactor)`
+      through the house `pairByDevice` helper, ranked by points lost so a multi-page batch
+      lands on the page that regressed hardest; devices are never crossed, and when no
+      comparable pair exists the link is not rendered and the tooltip says why.*
+- [x] **Feed the AI**: pass the audit-level delta into the analysis prompt so the AI explains
       *the regression* rather than re-diagnosing the page from scratch — the single highest-
       value use of the existing analysis layer.
-- [ ] **Verify**: two runs of a deliberately-changed local page produce a diff that names the
+      *Done as an additive seam: `runAnalysis({ diff })` → `buildAnalysisInput({ diff })` →
+      a "What changed since the baseline run" section, with the closing instruction REPLACED
+      by one of five branches (score down / up / flat-but-moved / not comparable / nothing
+      moved in this category) so the model never invents a regression that did not happen.
+      Both prompt tiers are covered. The no-diff prompt is pinned VERBATIM in the tests,
+      because feeding a diff is additive and a byte of drift there is a regression in every
+      existing analysis. Bounded hard (10 audits / 5 opportunities / 5 requests per bucket)
+      and filtered to the analysed category, so an SEO analysis is not handed performance
+      deltas. Page-authored strings go through `sanitizeUntrusted` and the `«…»` guards like
+      every other untrusted value in that prompt. **Deviation, recorded:** a baseline-grounded
+      analysis is neither replayed from the analysis cache nor persisted. The saved key is
+      `(runId, category)`, so regression-flavoured text stored there would later replay as the
+      plain "explain my SEO score" answer; widening the key would mean a unique index over a
+      nullable column, where SQLite treats every NULL as distinct and the existing upsert would
+      start writing duplicate rows.*
+- [x] **Verify**: two runs of a deliberately-changed local page produce a diff that names the
       exact audit that moved, and an AI analysis of that diff cites the change.
+      *Done against a purpose-built local fixture whose score moves deterministically — see
+      the Gate note below.*
 
 **Gate:** a real before/after pair on a locally-modified page yields a correct audit-level
 diff (verified by hand against both stored HTML reports), and the AI analysis of the diff
 identifies the introduced regression.
+
+*Gate green (2026-09-06).* Verified against a purpose-built local fixture whose score moves
+deterministically — the lever is SEO (`<title>` + meta description present or absent), because
+Performance varies run to run and a Gate must not depend on noise, the same choice Phase C's
+gate made. A second lever adds a real 42 KB subresource so the RESOURCE half has something true
+to report.
+
+- **Two runs through the real stack** (HTTP API → queue → forked worker → Chrome → SQLite),
+  either side of the change: `seo 100 → 91`, with `performance 100 → 100` throughout, so every
+  signal below is the change and not variance.
+- **The diff matches an INDEPENDENT recomputation exactly, item for item.** The plan says to
+  verify "against both stored HTML reports"; as Phase D found, Lighthouse's own report never
+  renders `network-requests`, so the comparison is against the LHR that Lighthouse itself
+  embedded in each stored HTML file, read by a script sharing no code with `src/lib/reports/`.
+  Audits that moved: `meta-description` (1 → 0), `first-contentful-paint`, `unminified-javascript`
+  — the same three, same directions, in both. Opportunity `unminified-javascript` +450 ms in both.
+  Requests 4 → 5 and 6,345 → 48,427 bytes in both; `tracker.js` added at 42,246 bytes in both;
+  two rows changed by −82 bytes in both. **That −82 is the removed `<meta name="description">`
+  making the HTML smaller** — the diff is measuring the real thing, not a label.
+- **157 unchanged audits were counted, never listed**, which is the differ/composer split working.
+- **The AI analysis identified the introduced regression**, grounded in the diff rather than
+  re-diagnosing the page: *"One audit accounts for the entire −9. `meta-description` went from
+  100 → 0. Nothing else in the SEO category moved."* It cited sources it actually fetched.
+- **The projection is 121× smaller than its inputs** — 4,151 bytes on the wire against 500,459
+  bytes of stored reports — with `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`
+  on every path, and repeat reads served from the memo in ~2.4 ms.
+- **No reflection, no traversal:** every error body is static, and `../../../../etc/passwd` as
+  the route parameter returns a clean 404 (the id resolves through SQLite, so caller input never
+  reaches `path.join`).
+- **UI driven in real Chrome**: the lazy read is proven rather than asserted — **0** requests to
+  `/diff` before the card is opened and **exactly 1** after; all four tabs render the right
+  content (`meta-description` and `unminified-javascript` under Audits, `tracker.js` under
+  Requests); the lineage chip on `/batches` produced a `/compare?…&changed=1` link that resolved
+  a prior BATCH to the matching prior RUN and landed with the card open. **Zero console errors,
+  zero page errors, zero failed requests** — the `?_rsc=` prefetch aborts are pre-existing Next.js
+  router behaviour, confirmed by a control load of the untouched `/history` page producing 11 of
+  its own. No horizontal overflow at any tab.
+
+Suite: lint · typecheck · build · **1450 tests**, all green (1199 → 1450).
+
+*Security review (read-only `security-reviewer`, required by `.claude/rules/security.md` because
+the phase adds a route to the local HTTP server): **pass — no Critical, no High.** The one Medium
+and all five Lows were fixed rather than deferred.*
+
+- **M1 — a deleted run stayed readable from memory, and it was not this phase's bug but this
+  phase's job to fix.** The queue retains every finished run's LHR so the report routes can serve
+  a run that is not persisted yet, and NOTHING ever pruned that map: `deleteRun` and `clearHistory`
+  removed the rows, the analyses, the alerts and the report files, but a deleted run kept answering
+  `/trace` and `/diff` for the life of the process — its audited URL, every subresource URL, its
+  filmstrip screenshots. Someone clearing history to remove the record of what they audited did not
+  get that. Identical in shape to Phase C's M2. It predates Phase E (the committed trace route has
+  the same check), but Phase E centralised that check into `loadReport.ts` and added a second, wider
+  consumer, which is what made this the moment to fix it in one place. `forgetJobResults` on the
+  queue is now called from both delete paths — via a LAZY import, since `AuditQueue` imports
+  persistence and a static one would be a cycle. **Verified live, not just unit-tested**: with the
+  report file deleted from disk, `/trace` still answered 200 (proving the queue genuinely is the
+  answering path), and after deleting the run it returned 404.
+- **L5 — the one finding that was mine, introduced during this phase.** I had widened the
+  analyze route's in-flight key to `runId:category:baselineRunId` so a regression analysis could be
+  its own artefact. It is one — but that map is the ONLY concurrency bound on an expensive provider
+  process, and widening it removed the bound: switching the baseline picker and re-clicking would
+  claim a fresh slot each time, so N baselines in history meant N concurrent agents under the
+  5-minute timeout. Reverted to `runId:category`; a test now parks one analysis in flight and proves
+  the second is refused while a different run still proceeds.
+- **L4 — row COUNT was bounded, the strings inside a row were not.** An audited page can issue forty
+  requests to a 400 KB URL; those survive the per-report ceiling and would make one response bounded
+  only by the reports themselves, with the route's 16-entry memo retaining several. `url`/`path`/
+  `host` are now clamped to `MAX_DIFF_URL` (2048), with a test proving the clamp cannot unmatch the
+  aggregation key — the maps are built from the raw rows before it runs.
+- **L3 — two doors into one lookup disagreed:** the analyze route bounded a run id at 64 characters
+  and this route did not. Same bound now, applied before the DB probe and before either id can reach
+  a cache key.
+- **L1 and L2 were both docblocks that OVERCLAIMED**, and both were fixed in the prose rather than
+  the code, because "fixing" either would have broken something real. `diff-requests.ts` said every
+  `url`/`path`/`host` arrives `displaySafe`-d; `path` and `host` do, but `url` is deliberately raw
+  because it is the join key for the entity table and the render-blocking match, and normalising one
+  side of a join silently unmatches entries. `LoadReportResult.runId` promised "never the caller's
+  string", which is true of the disk branch but not the queue fallback, where there is no row to
+  round-trip through — that branch is safe because the value reached it by matching an existing
+  nanoid job key exactly, which is a different reason and now says so. An overclaimed guarantee is
+  worse than none: it is the note a later author cites to skip a check.
+
+The reviewer confirmed the diff leaves untouched `src/proxy.ts`, `src/lib/http/localGate.ts`,
+`reportCsp.ts`, `scripts/start.mjs`, `scripts/session-token.mjs` and the Phase B credential paths
+(`persistence.ts` was modified deliberately, for M1), and that the memo cannot serve a cached diff
+for a deleted run — existence is re-checked on both ids before any hit is honoured.
+
+*Three deviations from the plan, recorded rather than silent.* **(1) A baseline-grounded analysis is
+neither cached nor persisted** — see the "Feed the AI" note above. **(2) The read path was extracted
+rather than duplicated:** `src/lib/reports/loadReport.ts` now owns the degradation ladder, the
+DB-resolved path and the peak-memory ceiling for BOTH report routes, and Phase D's `/trace` was
+refactored onto it. Two routes re-deriving a reviewed security posture from memory is how two routes
+end up with two postures — and M1 is the evidence, since it was exactly such a duplicated check.
+**(3) The diff is one route, `GET /api/reports/:runId/diff?baseline=<id>`**, where the path segment
+names the COMPARISON — the run the answer is about — matching its siblings and making "what changed
+in this run?" a single URL.
 
 ---
 

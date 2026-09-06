@@ -368,6 +368,15 @@ export class AuditQueue implements AuditQueueApi {
   }
 
   /**
+   * Forget one retained result, or all of them. See {@link AuditQueueApi} for
+   * why deletion depends on this.
+   */
+  forgetJobResults(runId?: string): void {
+    if (runId === undefined) this.results.clear();
+    else this.results.delete(runId);
+  }
+
+  /**
    * Subscribe to a batch's progress. Returns an unsubscribe function. Safe to
    * call before the batch exists; the listener simply receives events once the
    * batch starts emitting.
@@ -582,4 +591,19 @@ const globalForQueue = globalThis as typeof globalThis & {
  */
 export function getAuditQueue(): AuditQueueApi {
   return (globalForQueue.__auditQueue ??= new AuditQueue());
+}
+
+/**
+ * Forget the retained result for one run — or every run — on the shared queue,
+ * WITHOUT creating one if none exists.
+ *
+ * That last part is the whole reason this is not just `getAuditQueue()
+ * .forgetJobResults(...)`. It is called from the persistence layer's delete
+ * paths, which run in contexts that may never have started a queue (a CLI, a
+ * test, a cold server whose only job is to clear history); constructing one
+ * there just to empty it would spin up the audit machinery as a side effect of
+ * a deletion. No queue means no retained results, so there is nothing to do.
+ */
+export function forgetQueuedResults(runId?: string): void {
+  globalForQueue.__auditQueue?.forgetJobResults(runId);
 }

@@ -460,6 +460,55 @@ describe("AuditQueue", () => {
     expect(queue.getJobResult("nope")).toBeUndefined();
   });
 
+  it("forgetJobResults drops a retained result so a deleted run stops being readable", async () => {
+    // ROADMAP Phase E security review, M1. The queue retains every finished
+    // run's heavy, LHR-bearing result so the report routes can serve a run that
+    // is not persisted yet — which also means a run deleted from the DB kept
+    // answering `/trace` and `/diff` from memory for the life of the process,
+    // with its audited URL, its subresource URLs and its screenshots. Deletion
+    // now prunes this map (`deleteRun` / `clearHistory`), and this is the
+    // property that makes that possible.
+    mockRunAudit.mockImplementation((url) => Promise.resolve(makeResult(url, 42)));
+    const queue = new AuditQueue();
+
+    const first = queue.createBatch({
+      urls: ["https://a.test/"],
+      device: "mobile",
+      options: OPTIONS,
+      concurrency: 1,
+    });
+    await awaitBatch(queue, first.id).done;
+    const second = queue.createBatch({
+      urls: ["https://b.test/"],
+      device: "mobile",
+      options: OPTIONS,
+      concurrency: 1,
+    });
+    await awaitBatch(queue, second.id).done;
+
+    const firstId = queue.getBatch(first.id)!.jobs[0].id;
+    const secondId = queue.getBatch(second.id)!.jobs[0].id;
+    expect(queue.getJobResult(firstId)).toBeDefined();
+    expect(queue.getJobResult(secondId)).toBeDefined();
+
+    // Targeted: only the named run is forgotten.
+    queue.forgetJobResults(firstId);
+    expect(queue.getJobResult(firstId)).toBeUndefined();
+    expect(queue.getJobResult(secondId)).toBeDefined();
+
+    // Idempotent, and an unknown id is not an error — deletion must never throw.
+    expect(() => queue.forgetJobResults(firstId)).not.toThrow();
+    expect(() => queue.forgetJobResults("never-existed")).not.toThrow();
+
+    // Wholesale, for "Clear history".
+    queue.forgetJobResults();
+    expect(queue.getJobResult(secondId)).toBeUndefined();
+
+    // The batch snapshots themselves are untouched: this prunes the heavy
+    // retained results, not the queue's record of what it ran.
+    expect(queue.getBatch(first.id)).toBeDefined();
+  });
+
   it("subscribe delivers events and the returned unsubscribe stops them", async () => {
     mockRunAudit.mockImplementation((url) =>
       Promise.resolve(makeResult(url, 60)),

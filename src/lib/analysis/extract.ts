@@ -1,6 +1,7 @@
 /**
- * Turn a raw Lighthouse Result (LHR) into a compact, bounded, LLM-friendly
- * summary of *why* one category scored low — the input to the analysis prompt.
+ * Turn a raw Lighthouse Result (LHR) — and, optionally, an audit-level
+ * {@link RunDiff} against an earlier run — into a compact, bounded, LLM-friendly
+ * summary of *why* one category scored low, and *what moved* to get it there.
  *
  * Pure (no I/O, no SDK): it reuses the project's existing LHR parsers
  * (`parseLhr` / `parseCategoryAudits` in `@/lib/lighthouse/parseLhr`) so it can
@@ -8,6 +9,11 @@
  * the rest of the app reads an LHR. The output is deliberately small (caps audits
  * / opportunities, truncates prose, keeps only a few concrete targets per audit)
  * to stay well within a few thousand input tokens.
+ *
+ * The diff is an ADDITIVE seam: with no `diff` argument every byte of the output
+ * — and so every byte of the prompt built from it — is what it was before diffs
+ * existed. See {@link projectRunDiff} for how a `RunDiff` is bounded and filtered
+ * down to the one category being analysed.
  */
 
 import {
@@ -23,6 +29,14 @@ import type {
   FormFactor,
   LighthouseResult,
 } from "@/lib/lighthouse/types";
+import type {
+  AuditDelta,
+  DeltaBasis,
+  DeltaStatus,
+  OpportunityDelta,
+  ResourceDelta,
+  RunDiff,
+} from "@/lib/reports/diff-types";
 import { METRIC_DISPLAY_ORDER, METRIC_META } from "@/lib/scores";
 import type { AnalysisCategory } from "@/lib/analysis/types";
 
@@ -40,6 +54,35 @@ const MAX_OPPORTUNITIES = 8;
 const MAX_EXAMPLES = 5;
 /** Truncation ceiling for any single description string. */
 const MAX_DESC = 280;
+
+// --- Diff caps --------------------------------------------------------------
+//
+// A `RunDiff` is bounded for the WIRE (80 audits, 20 opportunities, 40 requests
+// in each of three buckets — `MAX_*_DELTAS` in `@/lib/reports/diff-types`), which
+// is still an order of magnitude more than belongs in a prompt. These are the
+// PROMPT caps, and they are deliberately much tighter: the change section is the
+// frame for the analysis, not a second data dump, and it has to fit alongside
+// the current-run findings that are still the evidence.
+//
+// The pre-cap counts survive into `ChangeFinding.totals`, so the prompt says
+// "showing 10 of 23" rather than quietly implying it listed everything.
+
+/** Max moved audits (already filtered to this category) surfaced in the prompt. */
+const MAX_CHANGE_AUDITS = 10;
+/** Max moved opportunities surfaced (performance only). */
+const MAX_CHANGE_OPPORTUNITIES = 5;
+/** Max requests surfaced in EACH of added / removed / changed (performance only). */
+const MAX_CHANGE_RESOURCES = 5;
+/** Truncation ceiling for one page-authored request label (`host` + `path`). */
+const MAX_RESOURCE_LABEL = 100;
+/** How much of a request's query string is kept in that label — see {@link resourceLabel}. */
+const MAX_RESOURCE_QUERY = 40;
+/**
+ * Truncation ceiling for a description in the change section — tighter than
+ * {@link MAX_DESC}, because the current-run sections below already carry the
+ * full text for any audit that matters, and this one only has to say what moved.
+ */
+const MAX_CHANGE_DESC = 200;
 
 /** One Core Web Vital / key timing, projected for the prompt. */
 export interface MetricFinding {
@@ -85,6 +128,120 @@ export interface FieldFinding {
   metrics: { id: FieldMetricId; p75: number; category: string }[];
 }
 
+/** One audit that MOVED between the baseline and this run, projected for the prompt. */
+export interface ChangeAuditFinding {
+  id: string;
+  /** Lighthouse's own title — not page-authored. */
+  title: string;
+  /** Lighthouse's own description, truncated — not page-authored. */
+  description: string;
+  /** Largest scoring weight in any category naming it (0 = informative). */
+  weight: number;
+  status: DeltaStatus;
+  basis: DeltaBasis;
+  /** 0–1 scores on each side; `null` when unscored or absent from that run. */
+  baselineScore: number | null;
+  comparisonScore: number | null;
+  /** Lighthouse's rendered values. UNTRUSTED — render inside «…». */
+  baselineDisplayValue: string;
+  comparisonDisplayValue: string;
+}
+
+/** One performance opportunity whose estimated savings moved. */
+export interface ChangeOpportunityFinding {
+  id: string;
+  title: string;
+  description: string;
+  status: DeltaStatus;
+  /** `comparison − baseline` estimated savings, ms. POSITIVE = more waste now. */
+  savingsDeltaMs: number | null;
+  baselineSavingsMs: number | null;
+  comparisonSavingsMs: number | null;
+}
+
+/** One request that appeared, disappeared, or changed size between the runs. */
+export interface ChangeResourceFinding {
+  /**
+   * `host` + path, query string collapsed to `?…` (or the raw URL when the host
+   * is unknown), sanitized. PAGE-AUTHORED and UNTRUSTED — render inside «…».
+   */
+  label: string;
+  /** Lighthouse's resource kind (`Script`, `Image`, …); `""` when absent. */
+  resourceType: string;
+  thirdParty: boolean;
+  status: DeltaStatus;
+  /** `comparison − baseline` transfer bytes; `null` when one side is missing. */
+  transferDelta: number | null;
+  /** Bytes on whichever side carries this request now (or carried it before). */
+  transferSize: number | null;
+  /** `comparisonCount − baselineCount`. */
+  countDelta: number;
+}
+
+/** The request-level half of the change section (performance only). */
+export interface ChangeResourceSummary {
+  /** True when either report predates the waterfall reader — say so, don't guess. */
+  unavailable: boolean;
+  baselineRequestCount: number;
+  comparisonRequestCount: number;
+  requestCountDelta: number;
+  baselineTransferSize: number;
+  comparisonTransferSize: number;
+  transferSizeDelta: number;
+  thirdPartyDelta: number;
+  added: ChangeResourceFinding[];
+  removed: ChangeResourceFinding[];
+  changed: ChangeResourceFinding[];
+  /** Pre-cap counts from the diff, so the prompt can say "showing 5 of 31". */
+  totals: { added: number; removed: number; changed: number };
+}
+
+/**
+ * What moved between a baseline run and this one, filtered to the category being
+ * analysed and capped for the prompt. Built by {@link projectRunDiff}.
+ */
+export interface ChangeFinding {
+  baselineRunId: string;
+  comparisonRunId: string;
+  /** The baseline run's final URL. PAGE-AUTHORED and UNTRUSTED — guard it. */
+  baselineUrl: string;
+  /** ISO fetch times, so the model can say how far apart the runs are. */
+  baselineFetchTime: string;
+  comparisonFetchTime: string;
+  /** 0–100 category scores on each side, and `comparison − baseline`. */
+  baselineScore: number | null;
+  comparisonScore: number | null;
+  scoreDelta: number | null;
+  /** The two runs finished on different URLs — possibly not the same page. */
+  urlMismatch: boolean;
+  /** Set only when the two runs used different Lighthouse versions. */
+  versionMismatch: { baseline: string; comparison: string } | null;
+  /** Moved audits in THIS category, worst-first (the differ's own ranking). */
+  audits: ChangeAuditFinding[];
+  /** Performance only: opportunities whose savings moved, biggest regression first. */
+  opportunities?: ChangeOpportunityFinding[];
+  /** Performance only: what the page fetched differently. */
+  resources?: ChangeResourceSummary;
+  totals: {
+    /** Category-matching moved audits before {@link MAX_CHANGE_AUDITS}. */
+    audits: number;
+    /** Moved opportunities before {@link MAX_CHANGE_OPPORTUNITIES}. */
+    opportunities: number;
+    /**
+     * True when the DIFFER already capped its own audit list upstream, so even
+     * the pre-cap count above is a floor. The prompt says so rather than letting
+     * the model read a truncated list as exhaustive.
+     */
+    truncatedUpstream: boolean;
+  };
+  /**
+   * True when nothing this category can attribute a change to moved — no audit,
+   * no opportunity, no request. The prompt must then say "nothing changed"
+   * instead of manufacturing a regression to explain.
+   */
+  empty: boolean;
+}
+
 /** Compact, bounded summary handed to the prompt builder. */
 export interface AnalysisInput {
   url: string;
@@ -101,6 +258,12 @@ export interface AnalysisInput {
   audits?: AuditFinding[];
   /** PSI only: real-world CrUX field data, when present. */
   field?: FieldFinding[];
+  /**
+   * Set only when the caller supplied a baseline to compare against. Its
+   * presence flips the whole prompt from "diagnose this page" to "explain this
+   * change" — see `buildUserPrompt`.
+   */
+  change?: ChangeFinding;
 }
 
 /** Truncate a string to {@link MAX_DESC} chars on a word-ish boundary. */
@@ -248,19 +411,241 @@ function projectField(field: FieldData): FieldFinding[] {
 }
 
 /**
+ * Condense one of Lighthouse's own audit descriptions for the change section.
+ *
+ * Nearly every Lighthouse description ends in a `[Learn more …](https://…)`
+ * markdown link, which on a real report is 100–130 characters of the ~300 — a
+ * third of the section's budget spent on doc URLs the change list has no use
+ * for. The current-run sections below still carry the full description, links
+ * and all, for any audit worth acting on; the researching tier fetches its own
+ * sources; and the data-only tier is forbidden from citing anything.
+ *
+ * Strips the links, THEN truncates, so a cut never lands inside a URL.
+ */
+function condenseDescription(value: string): string {
+  return truncate(
+    value.replace(/\s*\[[^\]]*\]\(\s*https?:\/\/[^)]*\)\s*\.?/g, ""),
+    MAX_CHANGE_DESC,
+  );
+}
+
+/**
+ * Compose the page-authored label for a request: `host` + path, keeping only the
+ * head of a long query string.
+ *
+ * A real regression is full of analytics beacons whose query strings run to 300
+ * characters of opaque ids, and fifteen of those would crowd out every request
+ * worth naming. Dropping the query outright is too blunt in the other direction:
+ * two `gtag/js?id=…` requests differ ONLY in their query, and collapsing them to
+ * one label would tell the model the page fetched the same thing twice. So the
+ * first {@link MAX_RESOURCE_QUERY} characters stay — enough to tell two requests
+ * apart — and the ellipsis says the rest was dropped.
+ */
+function resourceLabel(delta: ResourceDelta): string {
+  if (!delta.host) return delta.url;
+  const mark = delta.path.indexOf("?");
+  if (mark === -1) return `${delta.host}${delta.path}`;
+  const query = delta.path.slice(mark + 1);
+  if (query.length <= MAX_RESOURCE_QUERY) return `${delta.host}${delta.path}`;
+  return `${delta.host}${delta.path.slice(0, mark + 1)}${query.slice(
+    0,
+    MAX_RESOURCE_QUERY,
+  )}…`;
+}
+
+/** Project one moved audit, keeping only what the prompt actually renders. */
+function projectAuditDelta(delta: AuditDelta): ChangeAuditFinding {
+  return {
+    id: delta.id,
+    // Lighthouse's own strings, like every other audit title/description here.
+    title: delta.title,
+    description: condenseDescription(delta.description),
+    weight: delta.weight,
+    status: delta.status,
+    basis: delta.basis,
+    baselineScore: delta.baselineScore,
+    comparisonScore: delta.comparisonScore,
+    // Rendered values can carry page text (a URL, an element count copied out of
+    // the page's own markup), so they get the same treatment as `AuditFinding`.
+    baselineDisplayValue: sanitizeUntrusted(delta.baselineDisplayValue, 160),
+    comparisonDisplayValue: sanitizeUntrusted(delta.comparisonDisplayValue, 160),
+  };
+}
+
+/** Project one moved opportunity. Savings, not score, is what it is about. */
+function projectOpportunityDelta(delta: OpportunityDelta): ChangeOpportunityFinding {
+  return {
+    id: delta.id,
+    title: delta.title,
+    description: condenseDescription(delta.description),
+    status: delta.status,
+    savingsDeltaMs: delta.savingsDeltaMs,
+    baselineSavingsMs: delta.baselineSavingsMs,
+    comparisonSavingsMs: delta.comparisonSavingsMs,
+  };
+}
+
+/**
+ * Project one request delta.
+ *
+ * `url`, `path` and `host` are all chosen by the audited page — the most
+ * attacker-controlled fields in a `RunDiff` — so the label {@link resourceLabel}
+ * composes is flattened by {@link sanitizeUntrusted} before it can reach the
+ * prompt, exactly like an audit `example`.
+ */
+function projectResourceDelta(delta: ResourceDelta): ChangeResourceFinding {
+  return {
+    label: sanitizeUntrusted(resourceLabel(delta), MAX_RESOURCE_LABEL),
+    resourceType: sanitizeUntrusted(delta.resourceType, 40),
+    thirdParty: delta.thirdParty,
+    status: delta.status,
+    transferDelta: delta.transferDelta,
+    transferSize: delta.comparisonTransferSize ?? delta.baselineTransferSize,
+    countDelta: delta.comparisonCount - delta.baselineCount,
+  };
+}
+
+/** True when any request-level movement at all was recorded. */
+function resourcesMoved(resources: ChangeResourceSummary): boolean {
+  return (
+    resources.totals.added > 0 ||
+    resources.totals.removed > 0 ||
+    resources.totals.changed > 0 ||
+    resources.requestCountDelta !== 0 ||
+    resources.transferSizeDelta !== 0
+  );
+}
+
+/**
+ * Project a {@link RunDiff} down to what one category's prompt can use.
+ *
+ * Two jobs, both non-negotiable:
+ *
+ *  1. **Filter to the category.** A `RunDiff` classifies every audit in the
+ *     report, so an SEO analysis handed the raw list would be reading the
+ *     performance regression instead of its own. `AuditDelta.categories` names
+ *     the categories whose `auditRefs` include the audit, on either side, so
+ *     that is the filter. Opportunities and requests are performance concepts —
+ *     Lighthouse only scores opportunities in that category, and a request-level
+ *     waterfall says nothing about a missing meta description — so they are
+ *     carried for performance only.
+ *  2. **Cap hard.** The wire caps are three to eight times these, and the change
+ *     section shares a prompt with the current-run findings. Pre-cap counts go
+ *     into `totals` so the prompt stays honest about what it left out.
+ *
+ * Ordering is the differ's: `audits` arrive worst-first, `opportunities` by
+ * savings change, and each request bucket largest-first — filtering preserves it,
+ * so the cap keeps the worst offenders rather than an arbitrary slice.
+ */
+export function projectRunDiff(
+  diff: RunDiff,
+  category: AnalysisCategory,
+): ChangeFinding {
+  // `RunDiff.audits` is documented as "audits that MOVED", but an `unchanged`
+  // entry costs nothing to drop and would otherwise burn one of ten slots.
+  const matching = diff.audits.filter(
+    (a) => a.status !== "unchanged" && a.categories.includes(category),
+  );
+
+  const isPerformance = category === "performance";
+  const movedOpportunities = isPerformance
+    ? diff.opportunities.filter((o) => o.status !== "unchanged")
+    : [];
+
+  const baselineScore = diff.baseline.scores[category] ?? null;
+  const comparisonScore = diff.comparison.scores[category] ?? null;
+
+  const change: ChangeFinding = {
+    baselineRunId: diff.baseline.runId,
+    comparisonRunId: diff.comparison.runId,
+    baselineUrl: sanitizeUntrusted(diff.baseline.finalUrl, 500),
+    baselineFetchTime: diff.baseline.fetchTime,
+    comparisonFetchTime: diff.comparison.fetchTime,
+    baselineScore,
+    comparisonScore,
+    scoreDelta:
+      baselineScore === null || comparisonScore === null
+        ? null
+        : comparisonScore - baselineScore,
+    urlMismatch: diff.urlMismatch,
+    versionMismatch:
+      diff.baseline.lighthouseVersion !== diff.comparison.lighthouseVersion
+        ? {
+            baseline: diff.baseline.lighthouseVersion,
+            comparison: diff.comparison.lighthouseVersion,
+          }
+        : null,
+    audits: matching.slice(0, MAX_CHANGE_AUDITS).map(projectAuditDelta),
+    totals: {
+      audits: matching.length,
+      opportunities: movedOpportunities.length,
+      // The differ hit its own 80-audit ceiling, so `totals.audits` above is a
+      // floor even before this projection capped it again.
+      truncatedUpstream: diff.totals.audits > diff.audits.length,
+    },
+    empty: false,
+  };
+
+  if (isPerformance) {
+    change.opportunities = movedOpportunities
+      .slice(0, MAX_CHANGE_OPPORTUNITIES)
+      .map(projectOpportunityDelta);
+    change.resources = {
+      unavailable: diff.resources.unavailable,
+      baselineRequestCount: diff.resources.baselineRequestCount,
+      comparisonRequestCount: diff.resources.comparisonRequestCount,
+      requestCountDelta: diff.resources.requestCountDelta,
+      baselineTransferSize: diff.resources.baselineTransferSize,
+      comparisonTransferSize: diff.resources.comparisonTransferSize,
+      transferSizeDelta: diff.resources.transferSizeDelta,
+      thirdPartyDelta:
+        diff.resources.comparisonThirdPartyCount -
+        diff.resources.baselineThirdPartyCount,
+      added: diff.resources.added
+        .slice(0, MAX_CHANGE_RESOURCES)
+        .map(projectResourceDelta),
+      removed: diff.resources.removed
+        .slice(0, MAX_CHANGE_RESOURCES)
+        .map(projectResourceDelta),
+      changed: diff.resources.changed
+        .slice(0, MAX_CHANGE_RESOURCES)
+        .map(projectResourceDelta),
+      totals: {
+        added: diff.totals.resourcesAdded,
+        removed: diff.totals.resourcesRemoved,
+        changed: diff.totals.resourcesChanged,
+      },
+    };
+  }
+
+  change.empty =
+    change.audits.length === 0 &&
+    (change.opportunities?.length ?? 0) === 0 &&
+    !(change.resources && !change.resources.unavailable && resourcesMoved(change.resources));
+
+  return change;
+}
+
+/**
  * Build the bounded {@link AnalysisInput} for one category of one run.
  *
  * Performance is summarized via metrics + top opportunities (with CrUX field
  * data when present); the other categories via their failing/low-score audits,
  * each enriched with a few concrete targets pulled from the raw audit details.
+ *
+ * Pass `diff` to compare this run against an earlier one: the extra
+ * {@link ChangeFinding} turns the prompt from a diagnosis of the page into an
+ * explanation of what moved. Omit it and the output is unchanged in every byte.
  */
 export function buildAnalysisInput(args: {
   lhr: LighthouseResult;
   category: AnalysisCategory;
   formFactor: FormFactor;
   field?: FieldData | null;
+  /** Audit-level diff against a baseline run, when the caller has one. */
+  diff?: RunDiff | null;
 }): AnalysisInput {
-  const { lhr, category, formFactor, field } = args;
+  const { lhr, category, formFactor, field, diff } = args;
   const parsed = parseLhr(lhr, formFactor);
   const categoryScore = parsed.scores[category] ?? null;
 
@@ -272,6 +657,9 @@ export function buildAnalysisInput(args: {
     category,
     categoryScore,
   };
+
+  // Before the per-category branches below, both of which return.
+  if (diff) base.change = projectRunDiff(diff, category);
 
   if (category === "performance") {
     base.metrics = METRIC_DISPLAY_ORDER.map((id) => {
@@ -312,4 +700,10 @@ export function buildAnalysisInput(args: {
 }
 
 // Re-exported so the prompt builder can read the same numeric guardrails.
-export { MAX_AUDITS, MAX_OPPORTUNITIES };
+export {
+  MAX_AUDITS,
+  MAX_CHANGE_AUDITS,
+  MAX_CHANGE_OPPORTUNITIES,
+  MAX_CHANGE_RESOURCES,
+  MAX_OPPORTUNITIES,
+};

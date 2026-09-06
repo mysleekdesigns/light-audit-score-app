@@ -11,8 +11,14 @@
  */
 
 import { CATEGORY_LABELS } from "@/lib/scores";
+import { formatBytes } from "@/lib/reports/waterfall-view";
 import { FIXES_CLOSE, FIXES_OPEN } from "@/lib/analysis/types";
-import type { AnalysisInput } from "@/lib/analysis/extract";
+import type {
+  AnalysisInput,
+  ChangeAuditFinding,
+  ChangeFinding,
+  ChangeResourceFinding,
+} from "@/lib/analysis/extract";
 
 /**
  * The agent's role + process + output contract. Sent as a custom `systemPrompt`
@@ -105,7 +111,32 @@ export interface SystemPromptOptions {
    * data-only tier, where there are no tools to guide.
    */
   researchGuidance?: string | null;
+  /**
+   * The user prompt carries a "what changed since the baseline run" section, so
+   * the job is explaining a CHANGE rather than diagnosing a page. Applies at
+   * both capability tiers — the diff is data, not a tool. Default `false`, and
+   * a `false` value leaves the prompt byte-identical to the pre-diff one.
+   */
+  changeAnalysis?: boolean;
 }
+
+/**
+ * The extra brief for a diff-grounded analysis, added to whichever tier's
+ * persona is in play.
+ *
+ * Without it the model reads the change section as one more table of numbers and
+ * writes the same page diagnosis it always would, which wastes the single most
+ * useful thing a diff gives it: a shortlist of what is actually new. The last
+ * two rules are the honesty half — a diff shows correlation, and a run pair with
+ * nothing between them must produce "nothing changed", not a manufactured
+ * regression.
+ */
+const CHANGE_ANALYSIS_RULE = [
+  "- The audit data below is accompanied by a \"What changed since the baseline run\" section: the audits, opportunities and requests that measurably moved between an earlier run of this page and this one. Explaining THAT change is the job — do not re-diagnose the page from scratch.",
+  "- Anchor the diagnosis in what moved, and prioritize fixes that reverse or account for a listed change. Raise a standing problem that did NOT move only when nothing that moved can explain the result, and say plainly that it is pre-existing.",
+  "- A diff shows correlation, not cause. Name the likely cause when the listed changes support it; when they do not, say what you would need to confirm it rather than guessing.",
+  "- Never invent a change that is not listed, and never describe a score as having dropped when the data says it rose or held. If nothing relevant moved, say exactly that.",
+].join("\n");
 
 /**
  * Pick the system prompt matching a provider's capability tier: the researching
@@ -117,9 +148,13 @@ export function analysisSystemPrompt(
 ): string {
   // The untrusted-data rule applies at both tiers: the audit report carries
   // page-authored text whether or not there are tools to misuse it with.
-  const base = `${
+  const persona = `${
     webResearch ? ANALYSIS_SYSTEM_PROMPT : ANALYSIS_DATA_ONLY_SYSTEM_PROMPT
   }\n\nHandling the supplied data:\n${UNTRUSTED_DATA_RULE}`;
+  // Appended, never substituted, so the no-diff prompt is unchanged.
+  const base = options.changeAnalysis
+    ? `${persona}\n\nComparing two runs:\n${CHANGE_ANALYSIS_RULE}`
+    : persona;
   if (!webResearch) return base;
   const guidance = options.researchGuidance?.trim();
   return guidance ? `${base}\n\nResearch tools note: ${guidance}` : base;
@@ -147,6 +182,337 @@ function untrusted(value: string): string {
 /** Render a 0–1 audit/metric score as a 0–100 integer or "—". */
 function pct(score: number | null): string {
   return score === null ? "—" : String(Math.round(score * 100));
+}
+
+/** Render a signed integer with an explicit `+`, so direction is never ambiguous. */
+function signed(value: number): string {
+  return value > 0 ? `+${value}` : String(value);
+}
+
+/**
+ * Render a signed byte delta (`+340.0 KB`). `formatBytes` returns "—" for a
+ * negative, by design for its own dense-column caller, so the sign is carried
+ * separately here.
+ */
+function signedBytes(value: number | null): string {
+  if (value === null) return "—";
+  if (value === 0) return "0 B";
+  return `${value > 0 ? "+" : "−"}${formatBytes(Math.abs(value))}`;
+}
+
+/** Prose for how one delta moved, used as the lead of every change bullet. */
+const DELTA_VERB: Record<string, string> = {
+  regressed: "regressed",
+  improved: "improved",
+  unchanged: "unchanged",
+  // Self-labelling, because a presence difference is the one status here that is
+  // usually NOT a page change. See {@link PRESENCE_NOTE}.
+  added: "present only in THIS run (presence difference)",
+  removed: "present only in the BASELINE run (presence difference)",
+};
+
+/**
+ * What an audit on only one side actually means.
+ *
+ * Two runs of the same page on the same Lighthouse version do not always carry
+ * the same audits — `bf-cache` and `modern-http-insight` come and go, and 155 vs
+ * 153 audits was observed between two real stored reports. Unqualified, "these
+ * two audits disappeared" is the most confident-sounding line in the section and
+ * the model will reach for it as the root cause. It is noise.
+ */
+const PRESENCE_NOTE =
+  "- A PRESENCE difference (an audit carried by only one of the two runs) is usually run-to-run noise rather than a page change: Lighthouse does not run every audit on every run. Never cite one as a cause unless a score actually moved — the score changes are the real evidence.";
+
+/**
+ * What the weight figure is, and is not.
+ *
+ * `AuditDelta.weight` is the largest weight across EVERY category naming the
+ * audit, not this category's — `image-alt` is 10 in Accessibility and 1 in SEO,
+ * and reports 10 either way. After filtering to one category that figure can
+ * overstate what the audit is worth here, so it is labelled rather than
+ * presented as the category's own weight.
+ */
+const WEIGHT_NOTE =
+  "- \"largest scoring weight\" is the audit's biggest weight across ANY category that scores it, so it may overstate what the audit is worth in this one. Use it to rank, not to promise a point total.";
+
+/** One moved audit, as one or two prompt lines. */
+function renderChangeAudit(a: ChangeAuditFinding): string[] {
+  const lines: string[] = [];
+  const verb = DELTA_VERB[a.status] ?? a.status;
+  const weight =
+    a.weight > 0
+      ? `, largest scoring weight ${a.weight}`
+      : ", informative (weight 0)";
+  lines.push(
+    `- ${a.title} (\`${a.id}\`) — ${verb}: score ${pct(a.baselineScore)} → ${pct(
+      a.comparisonScore,
+    )}${weight}`,
+  );
+  // Only worth a line when the rendered value actually says something: a binary
+  // audit leaves both sides empty, and repeating "—  → —" is pure noise.
+  if (a.baselineDisplayValue || a.comparisonDisplayValue) {
+    lines.push(
+      `  value: ${untrusted(a.baselineDisplayValue || "—")} → ${untrusted(
+        a.comparisonDisplayValue || "—",
+      )}`,
+    );
+  }
+  // A scoreless audit whose measurement moved is diagnostic colour, not a
+  // scoring event — the model has to be able to tell the two apart.
+  if (a.basis === "numeric") {
+    lines.push("  (unscored diagnostic — its measurement moved, not the score)");
+  }
+  if (a.description) lines.push(`  ${a.description}`);
+  return lines;
+}
+
+/** One added/removed/changed request, as a single guarded prompt line. */
+function renderChangeResource(r: ChangeResourceFinding): string {
+  const parts: string[] = [];
+  if (r.resourceType) parts.push(r.resourceType);
+  if (r.thirdParty) parts.push("third-party");
+  if (r.status === "added" || r.status === "removed") {
+    parts.push(formatBytes(r.transferSize));
+  } else {
+    parts.push(`${signedBytes(r.transferDelta)} (now ${formatBytes(r.transferSize)})`);
+  }
+  if (r.countDelta !== 0) parts.push(`requested ${signed(r.countDelta)}×`);
+  // The label is the one page-authored value on this line, so it is the one
+  // thing inside the guards.
+  return `  - ${untrusted(r.label)} — ${parts.join(", ")}`;
+}
+
+/**
+ * Honest degradation for a report that predates Phase D's waterfall reader: the
+ * request diff is missing, which is NOT the same as a page that fetched the same
+ * things twice. Said out loud in both the populated and the "nothing moved"
+ * branches of the change section.
+ */
+const UNAVAILABLE_REQUESTS =
+  "- Request-level data is unavailable for at least one of these runs, so nothing can be said about what the page fetched. Do not infer that requests were unchanged.";
+
+/** Points the model at the churn-immune numbers before it reads the URL lists. */
+const TOTALS_ARE_THE_SIGNAL =
+  "- Those totals are the reliable request-level signal. The per-URL lists below are a sample, ranked by transfer size.";
+
+/**
+ * The single most likely wrong answer this whole section can produce.
+ *
+ * The request diff is keyed by FULL URL, which is correct — but two runs of the
+ * same page churn their analytics beacons, whose query strings carry per-run
+ * session ids, timestamps and cache-busters. Measured on two real stored reports
+ * of one URL: 19 of 32 keys came out added or removed, nearly all beacons. A
+ * model handed that list unqualified writes "nine new third-party requests
+ * appeared" as the root cause, confidently and falsely — exactly the invented
+ * diagnosis this feature exists to prevent.
+ */
+const BEACON_CHURN_NOTE =
+  "- These lists are keyed by FULL URL INCLUDING QUERY STRING, so an analytics or tracking beacon re-requested with a fresh session id, timestamp or cache-buster appears as one removed AND one added. That is the same request, not a new resource, and it dominates the added/removed lists on most real pages. Match entries by host and path before drawing any conclusion, and never present beacon churn as the cause of a regression — a genuinely new resource is one whose host and path are new, or one that shows up under \"changed size\".";
+
+/** "showing 5 of 31" — or nothing at all when the list is complete. */
+function shownOf(shown: number, total: number, noun: string): string | null {
+  return total > shown ? `- (showing the top ${shown} of ${total} ${noun})` : null;
+}
+
+/**
+ * Render the "what changed" section: the substance of a diff-grounded analysis.
+ *
+ * It leads with the score movement because that is the question the user asked,
+ * then the confounders (a redirect to a different URL, a Lighthouse version
+ * bump) BEFORE the deltas — a model that reads "84 audits moved" first and
+ * "these are two different pages" second has already written the wrong
+ * diagnosis. Then the category's own moved audits, and for performance the
+ * opportunities and the request-level movement.
+ */
+function renderChangeSection(change: ChangeFinding, label: string): string[] {
+  const lines: string[] = ["## What changed since the baseline run", ""];
+
+  lines.push(`- Baseline run \`${change.baselineRunId}\`, audited ${change.baselineFetchTime || "at an unknown time"}`);
+  lines.push(`- This run \`${change.comparisonRunId}\`, audited ${change.comparisonFetchTime || "at an unknown time"}`);
+  if (change.scoreDelta === null) {
+    lines.push(
+      `- ${label} score: ${change.baselineScore ?? "—"} → ${
+        change.comparisonScore ?? "—"
+      } / 100 — NOT COMPARABLE, the category was not scored in one of the two runs.`,
+    );
+  } else {
+    lines.push(
+      `- ${label} score: ${change.baselineScore} → ${change.comparisonScore} / 100 (${signed(
+        change.scoreDelta,
+      )} points)`,
+    );
+  }
+  if (change.urlMismatch) {
+    lines.push(
+      `- WARNING: the two runs finished on different URLs (the baseline ended at ${untrusted(
+        change.baselineUrl,
+      )}). This may not be the same page, so treat every difference below as suspect until you have said so.`,
+    );
+  }
+  if (change.versionMismatch) {
+    lines.push(
+      `- WARNING: different Lighthouse versions (${change.versionMismatch.baseline} → ${change.versionMismatch.comparison}). Some movement may be a scoring-model change rather than a page change.`,
+    );
+  }
+  lines.push("");
+
+  // Request data can be missing while everything else genuinely did not move —
+  // one of the two reports predating Phase D's waterfall reader. Saying "nothing
+  // changed" without this caveat would be a claim the data does not support, so
+  // it is rendered in BOTH branches.
+  const requestsUnknown = change.resources?.unavailable === true;
+
+  if (change.empty) {
+    lines.push(
+      requestsUnknown
+        ? `- Nothing that affects ${label} measurably moved between these two runs: no audit or opportunity changed.`
+        : `- Nothing that affects ${label} measurably moved between these two runs: no audit, opportunity or request changed.`,
+    );
+    if (requestsUnknown) lines.push(UNAVAILABLE_REQUESTS);
+    lines.push("");
+    return lines;
+  }
+
+  if (change.audits.length > 0) {
+    lines.push(`### ${label} audits that moved (biggest regression first)`);
+    // Both caveats are conditional: they only earn their tokens when the list
+    // actually contains the thing they warn about.
+    const caveats: string[] = [];
+    if (change.audits.some((a) => a.basis === "presence")) caveats.push(PRESENCE_NOTE);
+    if (change.audits.some((a) => a.weight > 0)) caveats.push(WEIGHT_NOTE);
+    if (caveats.length > 0) {
+      lines.push("Before you read the list:", ...caveats, "");
+    }
+    for (const a of change.audits) lines.push(...renderChangeAudit(a));
+    const note = shownOf(change.audits.length, change.totals.audits, "moved audits");
+    if (note) lines.push(note);
+    if (change.totals.truncatedUpstream) {
+      lines.push(
+        "- (the diff itself was capped upstream, so more audits may have moved than are counted here)",
+      );
+    }
+    lines.push("");
+  }
+
+  if (change.opportunities && change.opportunities.length > 0) {
+    lines.push("### Performance opportunities that moved (biggest regression first)");
+    for (const o of change.opportunities) {
+      const verb = DELTA_VERB[o.status] ?? o.status;
+      const delta =
+        o.savingsDeltaMs === null
+          ? ""
+          : ` (${signed(Math.round(o.savingsDeltaMs))} ms of estimated savings)`;
+      lines.push(
+        `- ${o.title} (\`${o.id}\`) — ${verb}: est. savings ${
+          o.baselineSavingsMs === null ? "—" : `${Math.round(o.baselineSavingsMs)} ms`
+        } → ${
+          o.comparisonSavingsMs === null ? "—" : `${Math.round(o.comparisonSavingsMs)} ms`
+        }${delta}`,
+      );
+      if (o.description) lines.push(`  ${o.description}`);
+    }
+    const note = shownOf(
+      change.opportunities.length,
+      change.totals.opportunities,
+      "moved opportunities",
+    );
+    if (note) lines.push(note);
+    lines.push("");
+  }
+
+  const res = change.resources;
+  if (res) {
+    lines.push("### What the page fetched differently");
+    if (res.unavailable) {
+      lines.push(UNAVAILABLE_REQUESTS);
+    } else {
+      lines.push(
+        `- Requests: ${res.baselineRequestCount} → ${res.comparisonRequestCount} (${signed(
+          res.requestCountDelta,
+        )}); transfer ${formatBytes(res.baselineTransferSize)} → ${formatBytes(
+          res.comparisonTransferSize,
+        )} (${signedBytes(res.transferSizeDelta)}); third-party requests ${signed(
+          res.thirdPartyDelta,
+        )}`,
+      );
+      lines.push(TOTALS_ARE_THE_SIGNAL);
+      // Only when there is an added/removed list to misread. `changed` is keyed
+      // on a URL both runs fetched, so churn cannot reach it.
+      if (res.added.length > 0 || res.removed.length > 0) lines.push(BEACON_CHURN_NOTE);
+      const buckets: [string, ChangeResourceFinding[], number][] = [
+        ["New requests this run", res.added, res.totals.added],
+        ["Requests no longer made", res.removed, res.totals.removed],
+        ["Requests that changed size", res.changed, res.totals.changed],
+      ];
+      for (const [heading, items, total] of buckets) {
+        if (items.length === 0) continue;
+        lines.push(
+          `- ${heading}, largest first${
+            total > items.length ? ` (top ${items.length} of ${total})` : ""
+          }:`,
+        );
+        for (const r of items) lines.push(renderChangeResource(r));
+      }
+    }
+    lines.push("");
+  }
+
+  return lines;
+}
+
+/**
+ * The closing instruction for a diff-grounded analysis — the line that actually
+ * redefines the task.
+ *
+ * Four outcomes, because a diff is not always a regression and pretending
+ * otherwise is how a model invents one: the score fell, it rose, it held while
+ * things moved underneath, or nothing moved at all. Each branch says what the
+ * fixes should be about, and the improved/empty branches say explicitly what NOT
+ * to claim.
+ */
+function changeInstruction(
+  change: ChangeFinding,
+  label: string,
+  currentScore: string,
+  webResearch: boolean,
+): string[] {
+  const from = `${change.baselineScore ?? "—"}`;
+  const to = `${change.comparisonScore ?? "—"}`;
+  const delta = change.scoreDelta;
+  const lines: string[] = [];
+
+  if (change.empty) {
+    const caveat = change.resources?.unavailable
+      ? " Note that the request-level data was missing for one of the runs, so say that what the page fetched could not be compared rather than that it was unchanged."
+      : "";
+    lines.push(
+      `Nothing that affects ${label} measurably changed between these two runs. Say that plainly and do NOT invent a regression — then fall back to diagnosing the current ${label} score (${currentScore}) from the audit data above, and be explicit that those are standing problems rather than new ones.${caveat}`,
+    );
+  } else if (delta !== null && delta < 0) {
+    lines.push(
+      `The ${label} score DROPPED from ${from} to ${to} between these two runs. Explain THIS REGRESSION: identify which of the changes listed above account for the drop, in order of how much of it they explain, and how they connect to the score. Do not re-diagnose the page from scratch. Every fix you propose must address something that actually changed; if a change cannot be reversed, say what to do about it instead.`,
+    );
+  } else if (delta !== null && delta > 0) {
+    lines.push(
+      `The ${label} score IMPROVED from ${from} to ${to} between these two runs. Do NOT invent a regression. Explain what changed to produce the gain, then call out anything in the change list that got worse anyway — those are what your fixes should address, alongside the biggest problems still standing in the data above.`,
+    );
+  } else if (delta === null) {
+    lines.push(
+      `The ${label} score cannot be compared across these two runs — the category was not scored in one of them. Say so plainly, then explain what the changes listed above mean for ${label} without claiming the score moved.`,
+    );
+  } else {
+    lines.push(
+      `The ${label} score did not move (${to}/100 in both runs), but the items listed above did. Explain what moved underneath the flat score, whether it is heading somewhere bad, and do NOT claim a score change that did not happen. Base your fixes on what moved.`,
+    );
+  }
+
+  lines.push(
+    webResearch
+      ? `Research the fixes with the available research tools, and respond in the required format (markdown diagnosis, then the ${FIXES_OPEN} … ${FIXES_CLOSE} JSON block).`
+      : `Work only from the data above, and respond in the required format (markdown diagnosis, then the ${FIXES_OPEN} … ${FIXES_CLOSE} JSON block with empty "citations" arrays).`,
+  );
+
+  return lines;
 }
 
 /**
@@ -215,6 +581,13 @@ export function buildUserPrompt(
   );
   lines.push("");
 
+  // First of the body sections when a baseline was supplied: it re-frames the
+  // whole task, and the current-run findings that follow are the evidence for
+  // it rather than the subject.
+  if (input.change) {
+    lines.push(...renderChangeSection(input.change, label));
+  }
+
   // Ahead of the audit list, so the model knows how this category converts an
   // audit into score before it reads which audits are failing.
   if (input.category === "agentic-browsing") {
@@ -279,11 +652,19 @@ export function buildUserPrompt(
   }
 
   const score = input.categoryScore === null ? "low" : `${input.categoryScore}/100`;
-  lines.push(
-    webResearch
-      ? `Diagnose why the ${label} score is ${score}, research fixes with the available research tools, and respond in the required format (markdown diagnosis, then the ${FIXES_OPEN} … ${FIXES_CLOSE} JSON block).`
-      : `Diagnose why the ${label} score is ${score} using only the data above, and respond in the required format (markdown diagnosis, then the ${FIXES_OPEN} … ${FIXES_CLOSE} JSON block with empty "citations" arrays).`,
-  );
+  if (input.change) {
+    // A diff replaces the closing instruction rather than adding to it: the task
+    // is now "explain this change", and leaving "diagnose why the score is low"
+    // standing alongside it would put the model back on the page it was not asked
+    // about.
+    lines.push(...changeInstruction(input.change, label, score, webResearch));
+  } else {
+    lines.push(
+      webResearch
+        ? `Diagnose why the ${label} score is ${score}, research fixes with the available research tools, and respond in the required format (markdown diagnosis, then the ${FIXES_OPEN} … ${FIXES_CLOSE} JSON block).`
+        : `Diagnose why the ${label} score is ${score} using only the data above, and respond in the required format (markdown diagnosis, then the ${FIXES_OPEN} … ${FIXES_CLOSE} JSON block with empty "citations" arrays).`,
+    );
+  }
 
   return lines.join("\n");
 }
