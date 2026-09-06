@@ -10,7 +10,13 @@
 
 import { describe, expect, it } from "vitest";
 
-import { redactUrl, redactUrlsInText, safeHttpHref } from "@/lib/redactUrl";
+import {
+  redactCredentialParams,
+  redactForExport,
+  redactUrl,
+  redactUrlsInText,
+  safeHttpHref,
+} from "@/lib/redactUrl";
 
 describe("redactUrl", () => {
   it("strips userinfo", () => {
@@ -146,5 +152,102 @@ describe("safeHttpHref", () => {
 
   it("refuses a non-web scheme that would still parse", () => {
     expect(safeHttpHref("file:///Users/someone/.env")).toBeNull();
+  });
+});
+
+/**
+ * ROADMAP Phase H: these two exist for the client-report export, where the query
+ * string is DATA the waterfall must keep — so the rule is "redact the value of a
+ * credential-shaped parameter", not "drop the query" as `redactUrl` does.
+ */
+describe("redactCredentialParams", () => {
+  it("redacts the value but KEEPS the parameter name visible", () => {
+    expect(redactCredentialParams("https://x.test/a?token=abc123")).toBe(
+      "https://x.test/a?token=[redacted]",
+    );
+  });
+
+  it("leaves ordinary parameters completely alone", () => {
+    const url = "https://cdn.test/app.js?v=4&build=91ab&lang=en-GB";
+    expect(redactCredentialParams(url)).toBe(url);
+  });
+
+  it("keeps two cache-busted rows distinguishable", () => {
+    expect(redactCredentialParams("/app.js?v=3")).not.toBe(
+      redactCredentialParams("/app.js?v=4"),
+    );
+  });
+
+  it("redacts only the credential parameter in a mixed query", () => {
+    expect(
+      redactCredentialParams("/api/data?page=2&access_token=zzz&sort=asc"),
+    ).toBe("/api/data?page=2&access_token=[redacted]&sort=asc");
+  });
+
+  it("covers presigned-asset signatures, which is how a sensitive URL usually arrives", () => {
+    const signed =
+      "https://b.s3.amazonaws.com/k.png?X-Amz-Signature=deadbeef&X-Amz-Expires=900";
+    expect(redactCredentialParams(signed)).toContain("X-Amz-Signature=[redacted]");
+    // Not a credential — it is metadata, and blanking it would say less truthfully.
+    expect(redactCredentialParams(signed)).toContain("X-Amz-Expires=900");
+  });
+
+  it("matches case-insensitively and through percent-encoding", () => {
+    expect(redactCredentialParams("/a?ToKeN=x")).toBe("/a?ToKeN=[redacted]");
+    expect(redactCredentialParams("/a?access%5Ftoken=x")).toBe(
+      "/a?access%5Ftoken=[redacted]",
+    );
+  });
+
+  it("does not fire on a name that merely CONTAINS a credential word", () => {
+    const url = "/search?considerations=3&monkey=1&keyboard=x";
+    expect(redactCredentialParams(url)).toBe(url);
+  });
+
+  it("works on a bare path fragment, which is what a waterfall row carries", () => {
+    expect(redactCredentialParams("/p/1?sid=9f3a")).toBe("/p/1?sid=[redacted]");
+  });
+
+  it("preserves a fragment and leaves a query-less value untouched", () => {
+    expect(redactCredentialParams("/a?token=x#section-2")).toBe(
+      "/a?token=[redacted]#section-2",
+    );
+    expect(redactCredentialParams("/plain/path")).toBe("/plain/path");
+    expect(redactCredentialParams("")).toBe("");
+  });
+
+  it("does not throw on a malformed percent-escape in a parameter name", () => {
+    expect(() => redactCredentialParams("/a?%E0%A4%A=1&token=x")).not.toThrow();
+    expect(redactCredentialParams("/a?%E0%A4%A=1&token=x")).toContain(
+      "token=[redacted]",
+    );
+  });
+});
+
+describe("redactForExport", () => {
+  it("strips user:pass@, which Phase B made a realistic thing to find in an audited URL", () => {
+    expect(redactForExport("https://admin:hunter2@staging.test/dashboard")).toBe(
+      "https://staging.test/dashboard",
+    );
+  });
+
+  it("strips userinfo AND credential parameters together", () => {
+    const out = redactForExport("https://u:p@x.test/a?token=abc&page=2");
+    expect(out).not.toContain("u:p@");
+    expect(out).not.toContain("abc");
+    expect(out).toContain("token=[redacted]");
+    expect(out).toContain("page=2");
+  });
+
+  it("passes an unparseable path fragment through the parameter pass rather than dropping it", () => {
+    // `redactUrl` returns null here; blanking a legitimate waterfall row would
+    // be the wrong trade, so this keeps the row and cleans what it can.
+    expect(redactUrl("/p?token=x")).toBeNull();
+    expect(redactForExport("/p?token=x")).toBe("/p?token=[redacted]");
+  });
+
+  it("leaves an ordinary audited URL byte-for-byte unchanged", () => {
+    const url = "https://example.com/products/shoes?colour=red&size=9";
+    expect(redactForExport(url)).toBe(url);
   });
 });

@@ -104,3 +104,114 @@ export function redactUrlsInText(text: string): string {
     // part of a parseable URL to begin with.
     .replace(CREDENTIAL_PARAM, "$1[redacted]");
 }
+
+/**
+ * What replaces a credential's VALUE. The parameter's name is deliberately kept.
+ *
+ * Deleting the whole parameter would be the safer-looking choice and the worse
+ * one: the auditor exporting a client report needs to SEE that a token was in
+ * that URL, because the right response is usually to re-audit without it, not to
+ * ship a file that silently looks clean.
+ */
+const REDACTED_VALUE = "[redacted]";
+
+/**
+ * Query parameters whose value is a credential, a signature, or a session
+ * identifier — the things that must not travel in a document the user forwards.
+ *
+ * Matched on the WHOLE parameter name, not as a substring: a substring rule
+ * turns `considerations=` into a redaction because it contains `sid`, and a
+ * waterfall full of `[redacted]` where the data was ordinary is its own kind of
+ * dishonesty. The AWS/GCS prefixes are spelled out because presigned asset URLs
+ * are the most common way a genuinely sensitive URL reaches a Lighthouse
+ * waterfall (`X-Amz-Signature`, `X-Goog-Signature`).
+ *
+ * **`code` and `state` are deliberately NOT here.** They are the OAuth pair, so
+ * excluding them leaves a real gap — a magic-link audit can put a single-use
+ * token in `?code=`. They are also, on ordinary sites, a discount code and a US
+ * state, and redacting those would fire on a large share of e-commerce and form
+ * URLs where nothing is at stake. This function is a safety net over an
+ * unbounded space of parameter names; it cannot be the guarantee. The guarantee
+ * is that the export TELLS the user the file contains the audited pages' request
+ * URLs and screenshots, so a run against an authenticated or internal target
+ * gets looked at before it is sent. See ROADMAP Phase H's security review.
+ */
+const CREDENTIAL_PARAM_NAME =
+  /^(?:x-)?(?:(?:amz|goog)-)?(?:api[-_]?key|key|access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|token|password|passwd|pwd|secret|client[-_]?secret|signature|sig|auth|authorization|session[-_]?id|session|sid|jwt|bearer|credential|credentials|security[-_]?token)$/i;
+
+/**
+ * Redact credential-carrying query parameters, keeping the URL otherwise intact.
+ *
+ * Unlike {@link redactUrl}, which drops the query wholesale, this preserves every
+ * ordinary parameter. That matters where the query is the DATA: a request
+ * waterfall exists partly to show that a page fetched `app.js?v=3` and
+ * `app.js?v=4`, or two `gtag/js?id=…` beacons that differ only in their query.
+ * Stripping those would flatten distinct rows into identical-looking ones.
+ *
+ * Accepts a full URL or a bare `path?query` fragment (Lighthouse's waterfall
+ * rows carry the latter), and leaves a value with no `?` untouched. Any fragment
+ * is preserved after the query.
+ */
+export function redactCredentialParams(value: string): string {
+  const queryStart = value.indexOf("?");
+  if (queryStart === -1) return value;
+
+  const head = value.slice(0, queryStart);
+  const tail = value.slice(queryStart + 1);
+  const hashAt = tail.indexOf("#");
+  const query = hashAt === -1 ? tail : tail.slice(0, hashAt);
+  const fragment = hashAt === -1 ? "" : tail.slice(hashAt);
+  if (!query) return value;
+
+  const cleaned = query
+    .split("&")
+    .map((pair) => {
+      const eq = pair.indexOf("=");
+      if (eq === -1) return pair;
+      const name = pair.slice(0, eq);
+      // `+` is a space in a query string, and a percent-encoded name is still
+      // the same name — decode before matching so `access%5Ftoken` cannot slip
+      // past a rule written for `access_token`. A malformed escape is not a
+      // reason to throw: fall back to the raw name, which simply matches less.
+      let decoded = name;
+      try {
+        decoded = decodeURIComponent(name.replace(/\+/g, " "));
+      } catch {
+        /* keep the raw name */
+      }
+      return CREDENTIAL_PARAM_NAME.test(decoded.trim())
+        ? `${name}=${REDACTED_VALUE}`
+        : pair;
+    })
+    .join("&");
+
+  return `${head}?${cleaned}${fragment}`;
+}
+
+/**
+ * The display form of a URL that is going into a document the user will send on:
+ * no `user:pass@`, and no credential-carrying query values.
+ *
+ * The userinfo half is not hypothetical here. ROADMAP Phase B made authenticated
+ * audits first-class, and `https://user:pass@staging.example.com` is a legal
+ * thing for someone to type into the audit form — which would otherwise print
+ * the password at the top of a client-facing report.
+ *
+ * Unparseable input is not discarded (a waterfall row's `path` is a fragment, not
+ * a URL, and `redactUrl` returning `null` for it would blank a legitimate row);
+ * it still gets the parameter pass.
+ */
+export function redactForExport(value: string): string {
+  if (!value) return value;
+  try {
+    const url = new URL(value);
+    if (url.username || url.password) {
+      url.username = "";
+      url.password = "";
+      return redactCredentialParams(url.toString());
+    }
+  } catch {
+    /* a path fragment, or not a URL at all — parameter pass only */
+  }
+  return redactCredentialParams(value);
+}

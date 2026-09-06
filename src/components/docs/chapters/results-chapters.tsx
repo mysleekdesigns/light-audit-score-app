@@ -230,6 +230,56 @@ export function ResultsChapters() {
           <UiLabel>JSON</UiLabel> and <UiLabel>CSV</UiLabel> download the batch’s data, failures
           included.
         </P>
+
+        <H3>The client report</H3>
+        <P>
+          <UiLabel>Report</UiLabel> builds something different from the other two: a single{" "}
+          <Code>.html</Code> file you can hand to somebody who will never open this app. It carries
+          the batch summary, every page’s scores and Core Web Vitals, the top opportunities, and
+          each page’s request waterfall and loading filmstrip.
+        </P>
+        <P>
+          The file is <strong className="font-medium text-foreground">self-contained</strong>. Every
+          image is embedded in it and it loads no stylesheet, font, or script from anywhere, so it
+          renders the same on a machine with no internet connection as it does on yours — and it
+          cannot report back to anyone that it was opened. Because it reads each page’s stored
+          report to draw the waterfalls, it takes a moment longer to build than the JSON or CSV.
+        </P>
+        <P>
+          Print it from the browser (<Code>⌘P</Code>) and it switches to a light, ink-sane layout
+          made for paper rather than the dark console you see on screen. Choose{" "}
+          <UiLabel>Save as PDF</UiLabel> and you have a client-ready document with no extra tool
+          involved. To put your own name on it, fill in{" "}
+          <UiLabel>Report branding</UiLabel> on the Settings page.
+        </P>
+
+        <H3>Check it before you send it</H3>
+        <P>
+          The report is a faithful record of what the audit saw, which is exactly why it is worth
+          a glance before it leaves your machine. It contains{" "}
+          <strong className="font-medium text-foreground">
+            the full request URLs each page loaded
+          </strong>{" "}
+          &mdash; query strings included &mdash; and{" "}
+          <strong className="font-medium text-foreground">real screenshots of the pages</strong>{" "}
+          as they loaded, large enough to read a heading or a signed-in user&rsquo;s name.
+        </P>
+        <P>
+          Values that look like a credential, a signature or a session &mdash; <Code>token</Code>,{" "}
+          <Code>sig</Code>, <Code>X-Amz-Signature</Code>, <Code>sid</Code> and their relatives
+          &mdash; are replaced with <Code>[redacted]</Code>, and a{" "}
+          <Code>user:password@</Code> prefix is removed. The parameter name is left in place on
+          purpose, so you can see that something was there rather than being told a URL was clean.
+          That is a safety net, not a promise: parameter names vary endlessly and no list catches
+          them all.
+        </P>
+        <P>
+          So if you audited a staging site, anything behind a login, or a page you reached through
+          a one-time link, read the waterfall and the filmstrip before forwarding the file. Nothing
+          from the <UiLabel>Authentication</UiLabel> panel is ever written into it &mdash; your
+          passwords, cookies and headers stay out of every export &mdash; but the session those
+          credentials opened is what the audit photographed.
+        </P>
       </DocsSection>
 
       <DocsSection

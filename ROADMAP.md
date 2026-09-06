@@ -1,6 +1,6 @@
 # ROADMAP — Competitive differentiation plan (Phases A–H)
 
-> **Status (updated 2026-09-06):** **Phases A–G complete. H is the only one left.**
+> **Status (updated 2026-09-06):** **Phases A–H complete. The roadmap is done.**
 >
 > - **A** — the Agentic Browsing category is live end-to-end (engine → SQLite → UI → PSI → AI).
 > - **B** — audits authenticate (basic auth, cookies, headers) for both auditing and crawl
@@ -19,9 +19,28 @@
 >   `check_budget`) over a stdio pipe, so a coding agent audits the page it just changed and
 >   compares it against the same local history the app shows. No port, no session token, no SDK —
 >   the JSON-RPC layer is hand-written so nothing in the import graph can bind a socket.
+> - **H** — a batch exports as **one self-contained HTML file** an auditor hands to a client:
+>   summary, per-URL scores, Core Web Vitals, top opportunities, and D's waterfall + filmstrip.
+>   It renders with the network disabled, prints to a clean multi-page PDF from the browser
+>   (no PDF library, no headless render), and carries the auditor's own title/logo/date block.
 >
-> **Phase H is the only one unbuilt, and it has all three of its prerequisites (D, E and the
-> reporters seam).**
+> **The roadmap is complete.** H was read by two independent `security-reviewer` passes. Neither
+> found anything Critical, and neither could construct an escape from the document's markup. One
+> High: the exported document published every page's full request query strings and legible
+> screenshots with nothing telling the user so — which matters because the file's whole purpose
+> is to be forwarded. Credential-, signature- and
+> session-shaped query VALUES are now redacted (the parameter NAME is kept, so an auditor sees
+> that a token was there rather than being handed a file that merely looks clean), `user:pass@`
+> is stripped, and the disclosure is in the docs, the export toast and the tooltip rather than
+> only in a docblock. Three more findings were worth the phase: a cancelled or still-running
+> batch exported as though it were the whole audit (now the lifecycle prints in the masthead and
+> a note leads the list), one logo validator replaced three hand-rolled copies across the store,
+> assembly and the panel, and `REPORT_CAPS`' claimed size budget was off by 4–10× at the page cap
+> (measured: ~209 KB of filmstrip per page, so ~12 MB at 60 pages — corrected, not hidden).
+> Two defects were caught by looking at the rendered document rather than by a green test: every
+> waterfall bar collapsed to a 2×2px dot against a zero-width containing block while the geometry
+> maths stayed correct, and raw Lighthouse `[Learn more](…)` markdown printed verbatim in a
+> client-facing file.
 > G was read by two independent `security-reviewer` passes; both came back with no Critical and
 > no High, and between them found five Mediums, every one now fixed. The two worth remembering:
 > every ERROR path had a weaker sanitiser than the payloads did (now one shared pipeline,
@@ -1323,18 +1342,40 @@ are a large, under-served audience that will never buy a DebugBear seat, and "ru
 hand the client a report" has **no free competitor** — Unlighthouse's static build is a
 developer dashboard, not something you send to a client.
 
-- [ ] **Static HTML export**: a self-contained single-file report for a batch — summary,
+- [x] **Static HTML export**: a self-contained single-file report for a batch — summary,
       per-URL scores, Core Web Vitals, top opportunities, and (from Phase D) the waterfall
       and filmstrip — with no external asset requests.
-- [ ] **Print/PDF**: a print stylesheet that renders the same page cleanly to PDF from the
+      *Done: `POST /api/export/batch/:batchId` behind a **Report** button on every batch card.
+      Three modules over one frozen contract — `report-model.ts` (types + caps),
+      `report-data.ts` (SQLite + stored LHRs, Node-only), `report-html.ts`/`report-css.ts`
+      (pure renderer). A POST, not a GET, because the pass thresholds live in `localStorage`
+      and only the browser knows them; exporting against the factory 90s would print
+      pass/fail tallies that disagreed with the card the user was looking at.*
+- [x] **Print/PDF**: a print stylesheet that renders the same page cleanly to PDF from the
       browser, so no PDF library or headless-render step is added.
-- [ ] **Light theme for print**: the dark "precision-instrument" identity stays the product's
+      *Done: `@page` margins, `break-inside: avoid` on cards/tiles/rows, repeated `thead`,
+      and three generations of `<details>` forced open. A real 18-page batch prints to a
+      98-page A4 PDF straight from the browser. No library, no headless render.*
+- [x] **Light theme for print**: the dark "precision-instrument" identity stays the product's
       identity; the print sheet is a separate, ink-sane rendering of the same tokens.
-- [ ] **Optional header**: a title/logo/date block filled from non-secret local settings, so
+      *Done: `@media print` re-declares every token — white ground, `#12161a` text, score
+      colours darkened to 9.95:1 / 5.09:1 / 6.99:1 on white and ~9–18 L\* apart so a
+      greyscale printer still separates them. Colour is never the only carrier: every band
+      also prints its word.*
+- [x] **Optional header**: a title/logo/date block filled from non-secret local settings, so
       the report can carry the auditor's own name. No third-party product names, no bundled
       assets.
-- [ ] **Verify**: a real batch exports to a single HTML file that opens correctly with the
+      *Done: a **Report branding** panel writes title/subtitle/logo/date to `app_settings`
+      (non-secret preferences only). The logo is stored as a `data:` URI so the file still
+      renders offline; SVG is refused by decision, as are `https:`, `javascript:` and
+      scheme-relative values — and a rejected logo never costs the user their other fields.*
+- [x] **Verify**: a real batch exports to a single HTML file that opens correctly with the
       network disabled, and prints to a legible multi-page PDF.
+      *Done, against batch `a-lbb1G0` (18 pages, 5.29 MB) through the real HTTP route: zero
+      external requests, zero `<script>`, zero `<link>`, 144 inline `data:` images all
+      loading, and a 98-page PDF. Inertness was proven rather than asserted — an injected
+      inline script, remote script and remote image were all blocked by the document's own
+      `<meta>` CSP on `file://`, where no response header applies.*
 
 **Gate:** a real multi-URL batch produces a self-contained HTML file that renders fully
 offline and prints to a clean PDF, with every score matching the in-app values.

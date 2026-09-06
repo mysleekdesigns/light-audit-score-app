@@ -19,7 +19,7 @@
  * the wrong number at two of those three.
  */
 
-import { useCallback, useId, useMemo } from "react";
+import { useCallback, useId, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   Ban,
@@ -27,6 +27,7 @@ import {
   Clock,
   ExternalLink,
   FileJson,
+  FileText,
   Gauge,
   Layers,
   Loader2,
@@ -63,6 +64,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useAuditDefaults } from "@/hooks/useAuditDefaults";
 import { reportHtmlUrl } from "@/lib/client/auditClient";
+import { downloadBatchReport } from "@/lib/client/reportExport";
 import type { BatchInfo, HistoryRow } from "@/lib/db/persistence";
 import {
   downloadCsv,
@@ -712,6 +714,8 @@ function BatchCard({ batch, rows, priorRows, thresholds }: BatchCardProps) {
         <BatchFooter
           rows={rows}
           shortId={shortId}
+          batchId={batch.id}
+          thresholds={thresholds}
           rerunUrls={rerunUrls}
           device={deviceLabel}
           options={batch.options}
@@ -730,6 +734,15 @@ function BatchCard({ batch, rows, priorRows, thresholds }: BatchCardProps) {
 interface BatchFooterProps {
   rows: HistoryRow[];
   shortId: string;
+  /** Full batch id — what the HTML-report export is addressed to. */
+  batchId: string;
+  /**
+   * The bars the exported report's pass/fail tallies must be judged against.
+   * They live in `localStorage`, so the SERVER cannot look them up — the export
+   * request carries them, which is why this is a POST. Without it the file would
+   * disagree with the card the user was reading when they clicked Export.
+   */
+  thresholds: CategoryThresholds;
   /** Unique URLs across the batch's runs (order-preserving), for the re-run. */
   rerunUrls: string[];
   /** Derived device selection for the batch (`"both"` re-fans mobile + desktop). */
@@ -766,6 +779,8 @@ interface BatchFooterProps {
 function BatchFooter({
   rows,
   shortId,
+  batchId,
+  thresholds,
   rerunUrls,
   device,
   options,
@@ -802,6 +817,43 @@ function BatchFooter({
       rowsToCsv(rows),
     );
   }, [rows, shortId]);
+
+  /**
+   * The HTML report is the one export that is a server round-trip: it reads
+   * every stored LHR in the batch to draw the waterfalls and filmstrips, which
+   * takes long enough to need a pending state and can fail in ways JSON/CSV
+   * cannot. Held as plain state and flipped in the handler — never in an effect
+   * (eslint and the repo's `lint-fix` hook both refuse `setState` there).
+   */
+  const [buildingReport, setBuildingReport] = useState(false);
+
+  const exportReport = useCallback(async () => {
+    setBuildingReport(true);
+    try {
+      const filename = await downloadBatchReport({
+        batchId,
+        thresholds,
+        fallbackFilename: `lighthouse-report-${shortId}-${timestampSlug()}.html`,
+      });
+      toast.success("Report exported", {
+        // The second sentence is a disclosure, not a flourish. The file carries
+        // the audited pages' full request URLs and real screenshots of them, and
+        // its whole purpose is to be forwarded — so the one moment the user is
+        // certain to be looking is the moment it lands. Credential-shaped query
+        // values are redacted during assembly, but that is a net over an
+        // unbounded space of parameter names, so the honest line is "check it",
+        // not "it's clean". (ROADMAP Phase H security review, finding 1.)
+        description: `${filename} — self-contained; opens offline and prints to PDF. It includes each page's request URLs and screenshots, so give it a look before sending on a staging or logged-in audit.`,
+        duration: 10000,
+      });
+    } catch (err) {
+      toast.error("Report export failed", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setBuildingReport(false);
+    }
+  }, [batchId, shortId, thresholds]);
 
   const openAll = useCallback(() => {
     const opened = openUrlsInNewTabs(openableHrefs);
@@ -853,9 +905,13 @@ function BatchFooter({
         </ReadoutNote>
       </div>
 
-      {/* Four actions: 2×2 on a phone so each is a full-width tap target, one
-          row from `@sm`, trailing right once the bezel itself is a row. Both
-          steps divide evenly — no orphan stranded on a line of its own. */}
+      {/* Five actions: the four data actions stay a 2×2 block on a phone so each
+          is a full-width tap target, and the client report spans the full width
+          beneath them. That is hierarchy rather than a workaround for the odd
+          count — the report is the thing you hand to someone else, the other
+          four are things you do with the run — and it also keeps the phone
+          layout dividing evenly, with no orphan stranded on a line of its own.
+          From `@sm` all five sit on one row and trail right. */}
       <div
         className="grid shrink-0 grid-cols-2 gap-2 @sm:flex @sm:flex-wrap @sm:items-center @sm:gap-1.5 @3xl:justify-end"
         role="group"
@@ -924,6 +980,35 @@ function BatchFooter({
             </Button>
           </TooltipTrigger>
           <TooltipContent className="font-mono">{baseName}.csv</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="default"
+              size="sm"
+              onClick={exportReport}
+              disabled={!hasRows || buildingReport}
+              aria-label={`Export batch ${shortId} as a client-ready HTML report`}
+              // `aria-busy` rather than only a spinner: the label changes too, so
+              // a screen reader is told the button is working without having to
+              // infer it from an icon swap.
+              aria-busy={buildingReport}
+              className="col-span-2 w-full @sm:w-auto"
+            >
+              {buildingReport ? (
+                <Loader2 data-icon="inline-start" className="animate-spin" />
+              ) : (
+                <FileText data-icon="inline-start" />
+              )}
+              {buildingReport ? "Building…" : "Report"}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {buildingReport
+              ? "Reading this batch's stored reports…"
+              : "One self-contained HTML file — opens offline, prints to PDF. Includes request URLs and screenshots."}
+          </TooltipContent>
         </Tooltip>
       </div>
     </Readout>

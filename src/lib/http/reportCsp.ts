@@ -35,3 +35,55 @@ export const HTML_REPORT_CSP = [
   "base-uri 'none'",
   "frame-ancestors 'none'",
 ].join("; ");
+
+/**
+ * The Content-Security-Policy for the CLIENT-READY report export (ROADMAP Phase H).
+ *
+ * `POST /api/export/batch/:batchId` also answers with a whole HTML document built
+ * from an audited page's data, so it needs the same treatment as the Lighthouse
+ * report above — but not the same policy, and the difference is the point.
+ *
+ * {@link HTML_REPORT_CSP} grants `script-src 'unsafe-inline'` because the
+ * standalone Lighthouse report is INTERACTIVE: its inline script is what makes
+ * the audit sections expand. The client report is not. It ships no `<script>` at
+ * all, by design — every state it has is expressed in CSS, and `<details>`
+ * elements do the one thing a reader can toggle — so granting inline script on
+ * that path would advertise a capability the document neither uses nor wants.
+ *
+ * Nothing can execute there today either way: the document carries its own
+ * `<meta>` policy (`REPORT_META_CSP` in `@/lib/export/report-html`) whose
+ * `default-src 'none'` covers scripts, and where two policies apply a resource
+ * must satisfy BOTH, so the stricter one decides. This constant exists so the
+ * response header and the document agree rather than the header being quietly
+ * the laxer of the two — a reader comparing them should not have to work out
+ * which one is load-bearing, and a future change to the document should not be
+ * able to start executing script merely because the transport allowed it.
+ *
+ * It is the meta policy plus `frame-ancestors 'none'`, which a `<meta>` policy
+ * cannot express and only a header can. (A `<meta>` CSP silently ignores
+ * `frame-ancestors`, `report-uri` and `sandbox`, so the two are not duplicates —
+ * copying the document's policy verbatim would have dropped the one protection
+ * only a header can carry.)
+ *
+ * **Be honest about this header's reach: it covers the SERVED response and
+ * nothing after it.** The document is sent `Content-Disposition: attachment`, so
+ * its actual life is spent on `file://` on someone else's machine, where there
+ * is no response header at all and the `<meta>` policy is the only one in play.
+ * That makes the meta the load-bearing half and this header the narrow case —
+ * the opposite of the usual arrangement, and worth knowing before anyone decides
+ * this constant is what keeps the exported file inert. It is not. Escaping is
+ * primary (a sanitising viewer, a webmail preview pane, may strip `<meta>` and
+ * everything else outside `<body>`, leaving neither policy); the meta is the
+ * defence in depth that travels with the file; this is defence in depth for the
+ * seconds the document exists on the app's own origin.
+ */
+export const CLIENT_REPORT_CSP = [
+  "default-src 'none'",
+  "style-src 'unsafe-inline'",
+  "img-src data:",
+  "font-src data:",
+  "connect-src 'none'",
+  "form-action 'none'",
+  "base-uri 'none'",
+  "frame-ancestors 'none'",
+].join("; ");

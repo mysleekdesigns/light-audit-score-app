@@ -1,6 +1,6 @@
 import type { NextConfig } from "next";
 
-import { HTML_REPORT_CSP } from "./src/lib/http/reportCsp";
+import { CLIENT_REPORT_CSP, HTML_REPORT_CSP } from "./src/lib/http/reportCsp";
 
 const nextConfig: NextConfig = {
   // Lighthouse, chrome-launcher and better-sqlite3 are native / ESM-heavy packages
@@ -73,8 +73,31 @@ const nextConfig: NextConfig = {
         // report. It lives here rather than only on the route because a config
         // header overrides the one a route sets on its own response. Verified
         // against a running server, not assumed.
+        //
         source: "/api/reports/:path*",
         headers: [{ key: "Content-Security-Policy", value: HTML_REPORT_CSP }],
+      },
+      {
+        // The client-ready report export (ROADMAP Phase H) needs the same
+        // treatment for the same reason: it too answers with a whole HTML
+        // document built from an audited page's data. Kept as its own rule
+        // rather than folded into the pattern above — a combined matcher would
+        // be a regex alternation whose zero-segment behaviour has to be
+        // re-verified, and there is nothing to gain from being clever about two
+        // literal prefixes.
+        //
+        // This is the third layer rather than the first: the response is served
+        // `Content-Disposition: attachment`, and the document carries its own
+        // `<meta>` CSP granting no `script-src` at all. But the baseline policy
+        // above says nothing about scripts, and this is one of only two paths on
+        // the origin where that silence could matter.
+        //
+        // A DIFFERENT constant from the rule above, deliberately: the Lighthouse
+        // report is interactive and needs `script-src 'unsafe-inline'`, while the
+        // client report ships no script whatsoever. Reusing the looser policy
+        // here would grant a capability this document never uses.
+        source: "/api/export/:path*",
+        headers: [{ key: "Content-Security-Policy", value: CLIENT_REPORT_CSP }],
       },
     ];
   },
