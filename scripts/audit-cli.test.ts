@@ -363,3 +363,37 @@ describe("displayUrl", () => {
     expect(displayUrl(`https://x.test/${"a".repeat(5000)}`).length).toBeLessThanOrEqual(200);
   });
 });
+
+describe("control characters in a target (Phase F security re-review, L-d)", () => {
+  const ESC = String.fromCharCode(27);
+  const CR = String.fromCharCode(13);
+
+  it("refuses a target containing control characters", () => {
+    // WHATWG `URL` STRIPS tab/CR/LF while parsing, so such a target validates
+    // cleanly — and since `normalizeUrl` returns the string as typed, the raw
+    // CR would travel into `runs.url`. Refusing keeps the stored value matching
+    // the web path (canonicalising would split the archive) and loses nothing:
+    // no real target contains a control character.
+    expect(() => normalizeUrl(`https://x.test/${CR}y`)).toThrow(CliUsageError);
+    expect(() => normalizeUrl(`https://x.test/${CR}y`)).toThrow(/control characters/i);
+    expect(() => normalizeUrl(`https://x.test/${ESC}[2Ky`)).toThrow(CliUsageError);
+  });
+
+  it("does not let a refused target forge the log line", () => {
+    // Refusing is still echoing. `displayUrl` closed this on the success path;
+    // the rejection path was raw until this fix.
+    let message = "";
+    try {
+      normalizeUrl(`https://x.test/${ESC}[2K${CR}y`);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).not.toBe("");
+    expect(message).not.toContain(ESC);
+    expect(message).not.toContain(CR);
+  });
+
+  it("leaves an ordinary target alone", () => {
+    expect(normalizeUrl("https://x.test/a?b=1#c")).toBe("https://x.test/a?b=1#c");
+  });
+});

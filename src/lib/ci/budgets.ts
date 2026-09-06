@@ -19,7 +19,8 @@
  * would make the pair useless — the blanket flag would flatten every
  * per-category line the user bothered to write — so it is deliberately inverted
  * here: the general bar first, the specific exceptions second. Neither is
- * required; with neither, budgets are `{}` and nothing can fail.
+ * required; with neither, budgets are `{}` and no SCORE can fail — a page that
+ * errored still does, because it measured nothing (see `evaluateBudgets`).
  *
  * ## A page that could not be measured FAILS
  *

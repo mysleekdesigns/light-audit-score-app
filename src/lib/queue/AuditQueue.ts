@@ -136,6 +136,21 @@ function cloneBatch(batch: BatchRecord): Batch {
  * for an isolated instance (tests); use {@link getAuditQueue} for the shared,
  * HMR-safe singleton in app code.
  */
+/**
+ * Read a job's status as the FULL union rather than whatever the compiler last
+ * narrowed it to.
+ *
+ * `cancelBatch` mutates `job.status` from outside this call stack, so a status
+ * read after an `await` genuinely can be something control-flow analysis has
+ * ruled out — TypeScript sees `job.status = "running"` earlier in `runJob` and
+ * narrows to that literal for the rest of the function. Reading through a
+ * function is what tells it the value is volatile; a cast would silence the
+ * error without saying why.
+ */
+function readStatus(job: AuditJob): AuditJob["status"] {
+  return job.status;
+}
+
 export class AuditQueue implements AuditQueueApi {
   /** The single work queue governing audit concurrency. */
   private readonly queue: PQueue;
@@ -486,7 +501,10 @@ export class AuditQueue implements AuditQueueApi {
       this.results.set(job.id, result);
       // Persist the run (report files + indexed row) BEFORE marking the job
       // done, so the report files and the row exist by the time anything reacts.
-      // `recordRun` never throws, so no extra try/catch is required.
+      // `recordRun` never throws (it is log-and-swallow throughout) — KEEP THAT
+      // TRUE: if it ever threw, the catch below would treat a SUCCESSFUL audit
+      // as an engine failure and call `recordFailedRun` for a job that may
+      // already have a row.
       //
       // ORDER IS LOAD-BEARING, and it used to be wrong: `job.status = "done"`
       // was set BEFORE this await, which defeated the very thing this comment
@@ -501,6 +519,28 @@ export class AuditQueue implements AuditQueueApi {
       // "settled" mean "persisted", which is what every consumer already
       // assumes it means.
       await recordRun(batch, job, result);
+      // Re-check the cancel AFTER the persist, not only before it.
+      //
+      // This window is a consequence of the reorder above and did not exist
+      // when the status was assigned first (Phase F security re-review). The job
+      // now stays `running` for the whole of `recordRun`, and `cancelBatch`
+      // flips `running` jobs to `cancelled` — so a Ctrl-C landing inside the
+      // persist would be overwritten back to `done` here, emitting
+      // `job-completed` AFTER `batch-cancelled` had already gone out. A
+      // post-terminal event is something a UI can act on, so the cancel wins.
+      //
+      // The row on disk is kept either way, which matches `cancelBatch`'s own
+      // rule that jobs which already finished keep their persisted run: the
+      // audit really did complete, and the archive should say so.
+      if (signal?.aborted || readStatus(job) === "cancelled") {
+        // `cancelBatch` may already have set it; don't restamp `finishedAt`.
+        if (readStatus(job) !== "cancelled") {
+          job.status = "cancelled";
+          job.finishedAt = now();
+        }
+        this.maybeFinalizeBatch(batch);
+        return;
+      }
       job.status = "done";
       job.finishedAt = now();
       job.result = toResultLite(result);

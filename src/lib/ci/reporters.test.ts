@@ -653,3 +653,27 @@ describe("describeViolation", () => {
     );
   });
 });
+
+describe("HTML verdict wording (Phase F security re-review, L-a)", () => {
+  it("says a page could not be audited rather than that it missed a budget", () => {
+    // With no budgets there is nothing to miss, but an errored page still fails.
+    // The two-branch version rendered "1 of 1 page missed a budget · 0
+    // violations." — self-contradicting, on the artifact a human reads.
+    const subject = report({
+      ok: false,
+      budgets: {},
+      violations: [],
+      totals: { pages: 1, passed: 0, failed: 1, errored: 1 },
+    });
+    const html = renderCiReport(subject, "html");
+    expect(html).toContain("could not be audited");
+    expect(html).not.toContain("missed a budget");
+  });
+
+  it("still says 'missed a budget' when a budget was actually missed", () => {
+    const subject = report({ ok: false });
+    const html = renderCiReport(subject, "html");
+    expect(html).toContain("missed a budget");
+    expect(html).not.toContain("could not be audited");
+  });
+});

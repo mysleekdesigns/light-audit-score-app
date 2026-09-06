@@ -277,6 +277,22 @@ export function parseFlags(argv: string[]): ParsedFlags {
  */
 export function normalizeUrl(raw: string): string {
   const trimmed = raw.trim();
+
+  // Refuse control characters outright, rather than canonicalising them away.
+  //
+  // WHATWG `URL` STRIPS tab/CR/LF while parsing, so `https://x.test/<CR>y`
+  // validates cleanly and then — because this function deliberately returns the
+  // string as typed (see below) — a raw CR would travel on into `runs.url`.
+  // Canonicalising instead would fix that and break something worse: the stored
+  // URL would stop matching what the web path stores, splitting the archive.
+  // Refusing keeps both properties, and nothing legitimate is lost — no real
+  // target contains a control character.
+  //
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(trimmed)) {
+    throw new CliUsageError(
+      `A URL must not contain control characters: ${clampForMessage(trimmed)}`,
+    );
+  }
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
     ? trimmed
     : `https://${trimmed}`;
@@ -316,9 +332,19 @@ export function normalizeUrl(raw: string): string {
   return withScheme;
 }
 
-/** Clamp a value echoed into an error message, so bad input can't flood a CI log. */
+/**
+ * A value echoed back into an error message: control characters stripped, then
+ * clamped.
+ *
+ * Clamping alone was not enough (Phase F security re-review, L-d). Refusing a
+ * target is still ECHOING it, so an ESC or CR in a `--urls-file` line could
+ * forge the log line from the rejection path after `displayUrl` closed it on the
+ * success path. `displayUrl` already does exactly this, so reuse it rather than
+ * keeping two nearly-identical strips that can drift.
+ */
 function clampForMessage(value: string): string {
-  return value.length <= 80 ? value : `${value.slice(0, 79)}…`;
+  const cleaned = displayUrl(value);
+  return cleaned.length <= 80 ? cleaned : `${cleaned.slice(0, 79)}…`;
 }
 
 /**
@@ -367,7 +393,9 @@ function numberValue(
   if (raw === undefined) return undefined;
   const parsed = Number(raw);
   if (!Number.isFinite(parsed)) {
-    throw new CliUsageError(`--${names[0]} must be a number (got "${raw}")`);
+    throw new CliUsageError(
+      `--${names[0]} must be a number (got "${clampForMessage(raw)}")`,
+    );
   }
   return parsed;
 }
@@ -498,7 +526,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
       deviceRaw !== "both"
     ) {
       throw new CliUsageError(
-        `--device must be mobile, desktop or both (got "${deviceRaw}")`,
+        `--device must be mobile, desktop or both (got "${clampForMessage(deviceRaw)}")`,
       );
     }
     device = deviceRaw;
@@ -509,7 +537,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
   if (reporterRaw !== undefined) {
     if (!(CI_REPORTERS as readonly string[]).includes(reporterRaw)) {
       throw new CliUsageError(
-        `--reporter must be one of ${CI_REPORTERS.join(", ")} (got "${reporterRaw}")`,
+        `--reporter must be one of ${CI_REPORTERS.join(", ")} (got "${clampForMessage(reporterRaw)}")`,
       );
     }
     reporter = reporterRaw as CiReporter;

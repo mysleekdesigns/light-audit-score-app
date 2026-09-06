@@ -105,11 +105,16 @@ export interface CiReport {
   totals: {
     /** Pages audited (persisted runs). */
     pages: number;
-    /** Pages with no violations. */
+    /** Pages with no violations that also ran successfully. */
     passed: number;
-    /** Pages with at least one violation. */
+    /**
+     * Pages with at least one violation, OR whose run errored. An errored page
+     * is never `passed`: with no budgets it has no violations, but it measured
+     * nothing, so counting it as clearing every bar would be a lie the exit code
+     * does not tell. `passed + failed === pages` always.
+     */
     failed: number;
-    /** Pages whose run errored (a subset of `failed` whenever budgets exist). */
+    /** Pages whose run errored. Always a subset of `failed`. */
     errored: number;
   };
   /** ISO timestamps bounding the run. */

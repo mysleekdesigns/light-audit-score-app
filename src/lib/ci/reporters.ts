@@ -582,10 +582,19 @@ function renderHtml(report: CiReport): string {
   const { totals } = report;
   const verdict = report.ok ? "PASS" : "FAIL";
   const verdictClass = report.ok ? "verdict--pass" : "verdict--fail";
+  // Three branches, not two. A page can fail without a budget existing: an
+  // errored run measured nothing, so it is never a pass. With no budgets set,
+  // the two-branch version rendered "1 of 1 page missed a budget · 0
+  // violations." — self-contradicting, on the one artifact a human actually
+  // reads, and it sends them looking for a budget that was never configured.
+  // (`printVerdict` on stderr already had this branch; the HTML did not.)
+  const pageWord = totals.pages === 1 ? "page" : "pages";
   const summary = report.ok
-    ? `${totals.pages} ${totals.pages === 1 ? "page" : "pages"} met every budget.`
-    : `${totals.failed} of ${totals.pages} ${totals.pages === 1 ? "page" : "pages"} missed a budget · ` +
-      `${report.violations.length} ${report.violations.length === 1 ? "violation" : "violations"}.`;
+    ? `${totals.pages} ${pageWord} met every budget.`
+    : report.violations.length === 0
+      ? `${totals.errored} of ${totals.pages} ${pageWord} could not be audited.`
+      : `${totals.failed} of ${totals.pages} ${pageWord} missed a budget · ` +
+        `${report.violations.length} ${report.violations.length === 1 ? "violation" : "violations"}.`;
 
   const budgetEntries = Object.entries(orderedBudgets(report.budgets)) as [
     LighthouseCategory,

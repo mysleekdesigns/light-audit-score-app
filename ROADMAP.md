@@ -1041,7 +1041,7 @@ forked worker → Chrome → SQLite).
   that file is `--import`ed by the worker as well as the CLI: an audit submitted through the
   running app completed normally (`performance 100`).
 
-Suite: lint · typecheck · build · **1571 tests**, all green (1450 → 1571).
+Suite: lint · typecheck · build · **1576 tests**, all green (1450 → 1576).
 
 **The Gate caught a real bug, and it was not in this phase's code.** The first passing run
 reported `pages: 1` for a two-URL invocation — a gate silently judging half of what it audited,
@@ -1121,6 +1121,32 @@ files): **no Critical. Two High, two Medium and four Low — all eight fixed rat
   into a CI log) — now a static message; `--output` wrote world-readable, now `0600`, since a
   report embeds every audited URL and Phase B made those able to be staging pages; and the flag
   map is null-prototype so a `--constructor` flag cannot read back an inherited member.
+
+*Re-review (same reviewer, against the fixed tree): **pass — no Critical, High or Medium.** It
+confirmed the `runJob` reorder is correct and that no event consumer sees an ordering change (the
+`job-completed` emit was already after the persist, so only pollers see `running` for longer), and
+noted that two existing consumers — the scheduler and the lineage helper — read `done` to mean "has
+a persisted row", which the old ordering made only *nearly* true. Its five new Lows were all fixed:*
+
+- **A window my own reorder opened.** `cancelBatch` flips `running` jobs to `cancelled`, and a job
+  now sits in `running` for the whole persist — so a Ctrl-C landing there was overwritten back to
+  `done`, emitting `job-completed` AFTER `batch-cancelled`. A post-terminal event is something a UI
+  can act on, so the cancel now wins; the persisted row is kept either way, matching `cancelBatch`'s
+  own rule that a finished job keeps its run.
+- **The HTML artifact contradicted itself.** With no budgets and an errored page it rendered
+  "1 of 1 page missed a budget · 0 violations" — sending a reader after a budget that was never
+  configured. It now says "could not be audited". The stderr path already had that branch; the HTML
+  did not.
+- **A forging vector that had moved rather than closed.** `displayUrl` cleaned the success path, but
+  refusing a target still echoes it, and the rejection path was raw. Both now share one strip.
+  Probing that fix turned up something better than the reported bug: WHATWG `URL` **strips** tab/CR/LF
+  while parsing, so `https://x.test/<CR>y` validated cleanly and the raw CR travelled on into
+  `runs.url`. Control characters in a target are now refused outright — which keeps the stored URL
+  identical to what the web path stores (canonicalising would have split the archive) and loses
+  nothing real.
+- Two stale docblocks my `ok` change had invalidated (`totals` in `types.ts`, the module header in
+  `budgets.ts`), plus a `keep this true` note on the `recordRun`-never-throws invariant the catch
+  block now depends on.
 
 The reviewer separately confirmed by walking the CLI's 32-module import graph that `src/proxy.ts`,
 `src/lib/http/localGate.ts` and all of `src/lib/http/` are unreachable and no `LH_SESSION_TOKEN`
