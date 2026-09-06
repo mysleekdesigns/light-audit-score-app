@@ -118,7 +118,7 @@ import type {
   WaterfallData,
   WaterfallRequest,
 } from "@/lib/reports/types";
-import { redactForExport } from "@/lib/redactUrl";
+import { redactForExport, redactUrlsInText } from "@/lib/redactUrl";
 import { METRIC_DISPLAY_ORDER, METRIC_META } from "@/lib/scores";
 import type { CategoryThresholds } from "@/lib/settings/defaults";
 import { safeText } from "@/lib/text/displaySafe";
@@ -146,6 +146,7 @@ const TEXT_CAPS = {
   opportunityDisplayValue: 80,
   metricDisplayValue: 40,
   lighthouseVersion: 32,
+  throttlingLabel: 48,
   /** The auditor's own settings — flattened so a stray newline can't split the header. */
   brandingTitle: 120,
   brandingSubtitle: 200,
@@ -208,7 +209,14 @@ export function deviceLabel(rows: HistoryRow[], fallback: FormFactor): string {
 export function throttlingLabel(batch: BatchInfo, rows: HistoryRow[]): string {
   const applied = rows.find((row) => row.environment?.throttlingMethod)?.environment
     ?.throttlingMethod;
-  if (applied) return throttlingMethodLabel(applied);
+  // Flattened like every other string read out of a stored run. It is
+  // Lighthouse's own config value rather than anything the page chose, and
+  // `throttlingMethodLabel` echoes an unrecognised one through — so the module's
+  // blanket rule ("every stored-file string goes through `safeText`") was not
+  // actually true of this one field. (Phase H review.)
+  if (applied) {
+    return safeText(throttlingMethodLabel(applied), TEXT_CAPS.throttlingLabel);
+  }
   return batch.options.throttling === "applied" ? "Applied" : "Simulated";
 }
 
@@ -526,10 +534,17 @@ export function assemblePage(
     device: row.formFactor,
     source: row.source,
     status: row.status,
+    // A failure message is free text we did not compose — Chrome and Lighthouse
+    // quote the request URL verbatim in it, so the same credentials that
+    // `redactForExport` strips from `url` walk back in through the error. Hence
+    // `redactUrlsInText`, which cleans every URL embedded in a sentence; it drops
+    // the query wholesale, which is right here (an error line is prose, not a
+    // waterfall row whose query is data) and then defangs any credential
+    // parameter that was never part of a parseable URL.
     errorMessage:
       row.errorMessage === null
         ? null
-        : safeText(row.errorMessage, TEXT_CAPS.errorMessage),
+        : safeText(redactUrlsInText(row.errorMessage), TEXT_CAPS.errorMessage),
     runs: failed ? null : row.runs,
     fetchTime: failed ? null : row.fetchTime,
     // The History and Batch views read these same fields, so the three surfaces
@@ -553,7 +568,12 @@ function toHighlight(row: HistoryRow | null): ReportHighlight | null {
   if (row === null) return null;
   return {
     runId: row.id,
-    url: safeText(row.url, TEXT_CAPS.url),
+    // Redacted like every other URL sink. This one is the MOST exposed, not the
+    // least: the Strongest/Weakest cards sit in the batch summary at the very top
+    // of the document, above the per-page section whose copy of the same URL is
+    // also redacted. Phase H's review found this printing `user:pass@` and a
+    // token above the fold while the page card below it was clean.
+    url: safeText(redactForExport(row.url), TEXT_CAPS.url),
     overall: overallScore(row.scores),
   };
 }
@@ -798,17 +818,28 @@ export async function readPageTrace(row: HistoryRow): Promise<PageTrace> {
     };
   }
 
-  const parsed = parseLhr(loaded.lhr, row.formFactor);
-  return {
-    status: "ok",
-    opportunities: parsed.opportunities,
-    waterfall: extractWaterfall(loaded.lhr),
-    filmstrip: extractFilmstrip(loaded.lhr),
-    lighthouseVersion: safeText(
-      parsed.lighthouseVersion,
-      TEXT_CAPS.lighthouseVersion,
-    ),
-  };
+  // `loadRunLhr` catches JSON-level corruption, but the projectors can still
+  // throw on a file that parses and is not a report — one that reads as `null`,
+  // or a hand-edited fixture. Without this guard that throw escapes
+  // `buildClientReport` and the route answers a blanket 500, so ONE bad file in
+  // sixty costs the user the whole export. `TraceOmission`'s `"unreadable"` is
+  // documented as "present and could not be read or parsed", which promises
+  // per-page degradation; this is what keeps that promise. (Phase H review.)
+  try {
+    const parsed = parseLhr(loaded.lhr, row.formFactor);
+    return {
+      status: "ok",
+      opportunities: parsed.opportunities,
+      waterfall: extractWaterfall(loaded.lhr),
+      filmstrip: extractFilmstrip(loaded.lhr),
+      lighthouseVersion: safeText(
+        parsed.lighthouseVersion,
+        TEXT_CAPS.lighthouseVersion,
+      ),
+    };
+  } catch {
+    return { status: "omitted", omission: "unreadable" };
+  }
 }
 
 /** Arguments for {@link buildClientReport}. */

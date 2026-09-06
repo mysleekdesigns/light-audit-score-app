@@ -705,7 +705,17 @@ function renderPassFail(summary: ReportSummary, thresholds: Record<LighthouseCat
  * anchor this module built and validated. A run whose id fails validation still
  * appears — as plain text, without a link.
  */
-function renderHighlights(summary: ReportSummary): string {
+/**
+ * @param printedIds Run ids that actually have a section in this document.
+ *   Above `REPORT_CAPS.pages` the best/worst page is chosen over the WHOLE batch
+ *   and may not be one of them, and an `<a href="#run-…">` to a section that was
+ *   never rendered is a link that goes nowhere. `notes` explains the situation at
+ *   the end of the document; the link itself should simply not be a link.
+ */
+function renderHighlights(
+  summary: ReportSummary,
+  printedIds: ReadonlySet<string>,
+): string {
   const cards: string[] = [];
   const entries: Array<["best" | "worst", string, ReportSummary["best"]]> = [
     ["best", "Strongest page", summary.best],
@@ -714,7 +724,9 @@ function renderHighlights(summary: ReportSummary): string {
 
   for (const [kind, label, highlight] of entries) {
     if (!highlight) continue;
-    const anchor = safeAnchorId(highlight.runId);
+    const anchor = printedIds.has(highlight.runId)
+      ? safeAnchorId(highlight.runId)
+      : null;
     const url = escapeHtml(highlight.url);
     cards.push(
       joinBlocks([
@@ -736,6 +748,15 @@ function renderHighlights(summary: ReportSummary): string {
 function renderSummary(report: ClientReport): string {
   const { summary } = report;
   const measured = summary.pageCount - summary.errorCount;
+  // Rows the pass/fail table below is computed over — the whole batch, failures
+  // included. Every category's tally covers every row, so the max is that count
+  // and stays right even if a category is missing from the record.
+  const batchRows = Math.max(
+    0,
+    ...LIGHTHOUSE_CATEGORIES.map(
+      (category) => summary.passFail[category]?.total ?? 0,
+    ),
+  );
 
   if (report.pages.length === 0) {
     return joinBlocks([
@@ -754,7 +775,23 @@ function renderSummary(report: ClientReport): string {
     sectionHead("Batch summary", `${summary.pageCount} pages`),
     renderRingRow(summary.overall, summary.averageScores, "Overall average across the batch"),
     `<div class="tiles">`,
-    tile(String(summary.pageCount), "Pages", `${measured} measured, ${summary.errorCount} failed`),
+    // The tile counts PRINTED pages while the pass/fail table below counts the
+    // whole batch, so above `REPORT_CAPS.pages` two denominators sit in one
+    // section. The reconciliation exists, but only as a note at the very end of a
+    // 60-page document — too far away to do the reader any good. Say it here.
+    // (Phase H review.)
+    //
+    // `batchRows` comes from the pass/fail tallies, NOT from `clearing.total`:
+    // clearing counts only pages that measured something, so a batch with two
+    // failures would reconcile against the wrong number and print a smaller
+    // denominator than the table beneath it. pass + fail is every row.
+    tile(
+      String(summary.pageCount),
+      "Pages",
+      batchRows > summary.pageCount
+        ? `${summary.pageCount} shown of ${batchRows} · ${measured} measured, ${summary.errorCount} failed`
+        : `${measured} measured, ${summary.errorCount} failed`,
+    ),
     tile(
       `${summary.clearing.clearing}/${summary.clearing.total}`,
       "Clearing",
@@ -767,7 +804,7 @@ function renderSummary(report: ClientReport): string {
     ),
     `</div>`,
     renderPassFail(summary, report.thresholds),
-    renderHighlights(summary),
+    renderHighlights(summary, new Set(report.pages.map((page) => page.runId))),
     `</section>`,
   ]);
 }
@@ -1064,7 +1101,8 @@ function omissionSentence(reason: TraceOmission): string {
       return (
         "No Lighthouse report was stored for this run, so there is no request " +
         "waterfall or filmstrip to show — the run either failed before a report " +
-        "was written or was never saved."
+        "was written, was never saved, or its stored report has since been " +
+        "removed."
       );
     case "unavailable":
       return (

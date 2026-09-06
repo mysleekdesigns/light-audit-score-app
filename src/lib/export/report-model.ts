@@ -400,7 +400,17 @@ export const ABSENT_VALUE = "—";
  * shape so the three sort together in a downloads folder.
  */
 export function reportFileName(shortId: string, stamp: string): string {
-  return `lighthouse-report-${shortId}-${stamp}.html`;
+  // `shortId` is a nanoid slice from our own database and `stamp` is ours, so
+  // neither is caller-supplied — and this string lands in a `Content-Disposition`
+  // header, where a quote or a newline would be a header-injection primitive
+  // rather than a cosmetic problem. `safeAnchorId` in the renderer already
+  // refuses to trust an id from the same database on the grounds that "ours" is
+  // not something a function can verify at runtime; this is the same reasoning
+  // applied to the one value that leaves the process as a header. (Phase H
+  // review noted the two disagreed.)
+  const safe = /^[A-Za-z0-9_-]+$/.test(shortId) ? shortId : "batch";
+  const safeStamp = /^[0-9T:-]+$/.test(stamp) ? stamp : "export";
+  return `lighthouse-report-${safe}-${safeStamp}.html`;
 }
 
 /* -------------------------------------------------------------------------- */

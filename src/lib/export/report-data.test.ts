@@ -53,6 +53,7 @@ import {
   EMPTY_BRANDING,
   REPORT_CAPS,
 } from "@/lib/export/report-model";
+import { renderClientReport } from "@/lib/export/report-html";
 import type {
   CategoryScores,
   CoreWebVitals,
@@ -953,5 +954,62 @@ describe("incomplete batches are declared, not silently shrunk", () => {
     expect(built.provenance.status).toBe("cancelled");
     expect(built.provenance.total).toBe(20);
     expect(built.notes[0]).toContain("cancelled");
+  });
+});
+
+/**
+ * ROADMAP Phase H security review, H1. The first redaction pass covered the
+ * waterfall row and the page URL but MISSED the highlight cards and the error
+ * message — and the highlight cards sit at the very top of the document, so the
+ * most exposed sink was the unfixed one.
+ *
+ * This test is deliberately written over the RENDERED HTML rather than per
+ * field: the failure mode is "someone adds a fifth place a URL is printed", and
+ * only a whole-document assertion catches that.
+ */
+describe("no page-derived credential survives into the document", () => {
+  const SECRET = "https://admin:hunter2@staging.example.com/dash?token=SUPERSECRET123";
+
+  it("strips userinfo and token values from every sink at once", () => {
+    const withSecret = (id: string, perf: number) =>
+      makeRow({ id, url: SECRET, scores: scores(perf, perf, perf, perf) });
+    const failing = makeRow({
+      id: "run-err",
+      url: SECRET,
+      status: "error",
+      runs: null,
+      fetchTime: null,
+      metrics: null,
+      hasJsonReport: false,
+      scores: scores(null, null, null, null),
+      errorMessage: `Chrome could not load ${SECRET} (timeout)`,
+    });
+
+    const built = assembleReport({
+      batch: makeBatch({ total: 3 }),
+      rows: [withSecret("run-a", 95), withSecret("run-b", 20), failing],
+      traces: traceMap({}),
+      thresholds: THRESHOLDS,
+      branding: EMPTY_BRANDING,
+      generatedAt: GENERATED_AT,
+    });
+
+    // Every field that carries a URL.
+    expect(built.summary.best?.url).not.toContain("hunter2");
+    expect(built.summary.worst?.url).not.toContain("hunter2");
+    expect(built.summary.best?.url).not.toContain("SUPERSECRET123");
+    for (const page of built.pages) {
+      expect(page.url).not.toContain("hunter2");
+      expect(page.url).not.toContain("SUPERSECRET123");
+      expect(page.errorMessage ?? "").not.toContain("hunter2");
+      expect(page.errorMessage ?? "").not.toContain("SUPERSECRET123");
+    }
+
+    // And the document as a whole — the assertion that survives a new sink.
+    const html = renderClientReport(built);
+    expect(html).not.toContain("hunter2");
+    expect(html).not.toContain("SUPERSECRET123");
+    // The host is still named: redaction must not blind the report to its subject.
+    expect(html).toContain("staging.example.com");
   });
 });
