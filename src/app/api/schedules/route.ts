@@ -8,6 +8,11 @@
  *
  * The persistence layer (`createSchedule` / `listSchedules`) is itself never-throwing,
  * so the route's job is purely to gate input + shape the response.
+ *
+ * The `Schedule` echoed back carries its regression-alert preferences
+ * (`notify`, ROADMAP Phase C) and nothing credential-shaped: the webhook URL is
+ * read from `LH_ALERT_WEBHOOK_URL` at delivery time and never travels with a
+ * schedule (see `schedules-schema.ts` and `.claude/rules/security.md`).
  */
 
 import { parseCreateScheduleBody } from "@/lib/api/schedules-schema";

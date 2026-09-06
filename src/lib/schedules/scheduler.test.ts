@@ -11,6 +11,9 @@
  *    itself stays real, which lets us assert that fired batches carry
  *    `scheduleId`. Discovery is mocked too so a crawl target never hits the
  *    network.
+ *  - Mocking `deliverAlerts` (ROADMAP Phase C) so the alert tests assert what
+ *    *would* be sent without an HTTP call. Everything below delivery — the
+ *    comparison, the SQLite rows, the idempotence marker — stays real.
  */
 
 import { promises as fs } from "node:fs";
@@ -28,16 +31,24 @@ vi.mock("@/lib/queue/runAuditWorker", () => ({
 }));
 // Mock discovery so a crawl target's resolveUrls() doesn't hit the network.
 vi.mock("@/lib/crawl/discover", () => ({ discover: vi.fn() }));
+// Mock webhook delivery: the alert tests care about what would be sent, not
+// about reaching a Slack endpoint. Nothing else in the alert path is stubbed.
+vi.mock("@/lib/alerts/deliver", () => ({ deliverAlerts: vi.fn() }));
 
 const { runAuditInWorker } = await import("@/lib/queue/runAuditWorker");
 const { discover } = await import("@/lib/crawl/discover");
+const { deliverAlerts } = await import("@/lib/alerts/deliver");
 const { resetDbForTests } = await import("@/lib/db/client");
-const { createSchedule, getSchedule, listSchedules } = await import(
-  "@/lib/db/schedules"
-);
-const { createSchedulerForTests, fireSchedule } = await import(
-  "@/lib/schedules/scheduler"
-);
+const {
+  createSchedule,
+  getAlertsEvaluatedBatchId,
+  getSchedule,
+  listSchedules,
+  recordScheduleFire,
+} = await import("@/lib/db/schedules");
+const { listScheduleAlerts } = await import("@/lib/db/alerts");
+const { createSchedulerForTests, evaluateBatchAlerts, fireSchedule } =
+  await import("@/lib/schedules/scheduler");
 const { getAuditQueue } = await import("@/lib/queue/AuditQueue");
 
 /** Wait until the audit queue is idle (all enqueued jobs done). */
@@ -51,6 +62,10 @@ async function drainQueue(): Promise<void> {
   }
 }
 
+import {
+  DEFAULT_SCHEDULE_NOTIFY,
+  type ScheduleNotify,
+} from "@/lib/alerts/types";
 import type { AuditOptions, AuditResult } from "@/lib/lighthouse/types";
 import { DEFAULT_OPTIONS } from "@/lib/lighthouse/options";
 import type { CreateScheduleInput } from "@/lib/schedules/types";
@@ -94,15 +109,23 @@ function auditedUrls(): string[] {
 
 const mockRunAudit = vi.mocked(runAuditInWorker);
 const mockDiscover = vi.mocked(discover);
+const mockDeliverAlerts = vi.mocked(deliverAlerts);
 
-function makeResult(url: string): AuditResult {
+/**
+ * Performance score the worker mock reports for the next fire. The alert tests
+ * move this between fires — the whole feature is "what changed since last
+ * time", so a schedule has to be able to produce two different numbers.
+ */
+let nextScore = 90;
+
+function makeResult(url: string, performance: number = nextScore): AuditResult {
   return {
     requestedUrl: url,
     finalUrl: url,
     options: DEFAULT_OPTIONS,
     runs: 1,
     median: {
-      scores: { performance: 90 },
+      scores: { performance },
       metrics: {
         "largest-contentful-paint": null,
         "cumulative-layout-shift": null,
@@ -115,7 +138,7 @@ function makeResult(url: string): AuditResult {
       bestPractices: [],
       lhr: { fake: true },
     },
-    perRunScores: [{ performance: 90 }],
+    perRunScores: [{ performance }],
     perRunEnvironments: [
       {
         benchmarkIndex: 1500,
@@ -159,9 +182,12 @@ beforeEach(async () => {
   process.env.LH_DATA_DIR = tmpDir;
   process.env.LH_DB_PATH = path.join(tmpDir, "test.db");
   resetDbForTests();
+  nextScore = 90;
   mockRunAudit.mockReset();
   mockRunAudit.mockImplementation((url) => Promise.resolve(makeResult(url)));
   mockDiscover.mockReset();
+  mockDeliverAlerts.mockReset();
+  mockDeliverAlerts.mockResolvedValue({ attempted: true, delivered: true });
 });
 
 afterEach(async () => {
@@ -551,5 +577,355 @@ describe("fireSchedule (direct)", () => {
     expect(result).toBeNull();
     // listSchedules should still work after the failure.
     expect(listSchedules().map((s) => s.id)).toContain(schedule.id);
+  });
+});
+
+/**
+ * Regression alerts (ROADMAP Phase C).
+ *
+ * The scheduler's job here is the wiring, not the comparison: arm an evaluation
+ * when a fire is submitted, run it once the batch settles, and never let any of
+ * it fail a batch or stop the tick loop. `compareBatches` has its own unit tests
+ * for what counts as a regression; these drive the real one through the real
+ * queue and the real SQLite so the seams are exercised end to end.
+ */
+describe("regression alerts", () => {
+  /** A schedule armed for alerts, at a time of day that never comes due. */
+  function makeArmedInput(
+    notify: Partial<ScheduleNotify> = {},
+    overrides: Partial<CreateScheduleInput> = {},
+  ): CreateScheduleInput {
+    return makeInput({
+      time: "23:59",
+      notify: { ...DEFAULT_SCHEDULE_NOTIFY, enabled: true, ...notify },
+      ...overrides,
+    });
+  }
+
+  /** Fire a schedule at `score` and wait for the batch to reach a terminal state. */
+  async function fireAt(
+    scheduler: ReturnType<typeof createSchedulerForTests>,
+    scheduleId: string,
+    score: number,
+  ): Promise<string> {
+    nextScore = score;
+    const outcome = (await scheduler.runNow(scheduleId))!;
+    await waitFor(
+      () => getAuditQueue().getBatch(outcome.batchId)?.status === "completed",
+      `batch ${outcome.batchId} completed`,
+    );
+    return outcome.batchId;
+  }
+
+  it("does not double-deliver when a sweep lands inside a slow delivery (review M1)", async () => {
+    // The persisted marker is written AFTER delivery, on purpose: a process
+    // killed mid-POST must retry rather than lose the regression. That leaves a
+    // window up to ALERT_DELIVERY_TIMEOUT_MS wide in which the minute tick would
+    // read the pre-delivery marker and evaluate the same batch a second time —
+    // a second POST to the user's channel and a duplicate set of rows. The
+    // synchronous claim in the scheduler is what closes it.
+    const schedule = createSchedule(makeArmedInput())!;
+    const scheduler = createSchedulerForTests();
+
+    const first = await fireAt(scheduler, schedule.id, 95);
+    await waitFor(
+      () => getAlertsEvaluatedBatchId(schedule.id) === first,
+      "baseline evaluated",
+    );
+
+    // Hold the delivery open so a concurrent evaluation is guaranteed to land
+    // inside the window rather than depending on timing luck.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mockDeliverAlerts.mockImplementation(async () => {
+      await held;
+      return { attempted: true, delivered: true };
+    });
+
+    const second = await fireAt(scheduler, schedule.id, 70);
+    // The queue subscription's evaluation is now parked inside deliverAlerts.
+    await waitFor(
+      () => mockDeliverAlerts.mock.calls.length === 1,
+      "delivery in flight",
+    );
+
+    // Everything that could re-enter while it is parked: two ticks and a direct
+    // re-evaluation, all racing the same batch.
+    await Promise.all([
+      scheduler.tick(new Date()),
+      scheduler.tick(new Date()),
+      evaluateBatchAlerts(schedule.id, second),
+    ]);
+
+    release();
+    await waitFor(
+      () => listScheduleAlerts(schedule.id).length > 0,
+      "alert recorded",
+    );
+
+    // Exactly one POST, exactly one row — not one per re-entry.
+    expect(mockDeliverAlerts).toHaveBeenCalledTimes(1);
+    expect(listScheduleAlerts(schedule.id)).toHaveLength(1);
+    expect(getAlertsEvaluatedBatchId(schedule.id)).toBe(second);
+  });
+
+  it("fires, completes, compares against the previous fire, and delivers", async () => {
+    const schedule = createSchedule(makeArmedInput())!;
+    const scheduler = createSchedulerForTests();
+
+    const first = await fireAt(scheduler, schedule.id, 95);
+    // Nothing to compare a first fire against — it is the baseline.
+    await waitFor(
+      () => getAlertsEvaluatedBatchId(schedule.id) === first,
+      "first fire evaluated",
+    );
+    expect(mockDeliverAlerts).not.toHaveBeenCalled();
+    expect(listScheduleAlerts(schedule.id)).toEqual([]);
+
+    const second = await fireAt(scheduler, schedule.id, 70);
+    await waitFor(
+      () => listScheduleAlerts(schedule.id).length > 0,
+      "second fire produced an alert",
+    );
+
+    expect(mockDeliverAlerts).toHaveBeenCalledTimes(1);
+    const [alerts, context] = mockDeliverAlerts.mock.calls[0];
+    expect(context).toEqual({
+      scheduleId: schedule.id,
+      scheduleName: schedule.name,
+      batchId: second,
+      priorBatchId: first,
+    });
+    expect(alerts).toEqual([
+      {
+        // 95 → 70 crosses the default 90 pass bar.
+        kind: "crossed_below",
+        url: "https://example.com/",
+        formFactor: "mobile",
+        category: "performance",
+        previous: 95,
+        current: 70,
+        delta: -25,
+        threshold: 90,
+      },
+    ]);
+
+    const rows = listScheduleAlerts(schedule.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      kind: "crossed_below",
+      category: "performance",
+      previous: 95,
+      current: 70,
+      batchId: second,
+      priorBatchId: first,
+      delivered: true,
+    });
+    expect(getAlertsEvaluatedBatchId(schedule.id)).toBe(second);
+  });
+
+  it("is silent when nothing moved — no webhook, no row", async () => {
+    const schedule = createSchedule(makeArmedInput())!;
+    const scheduler = createSchedulerForTests();
+
+    await fireAt(scheduler, schedule.id, 95);
+    const second = await fireAt(scheduler, schedule.id, 95);
+    await waitFor(
+      () => getAlertsEvaluatedBatchId(schedule.id) === second,
+      "quiet comparison evaluated",
+    );
+
+    expect(mockDeliverAlerts).not.toHaveBeenCalled();
+    expect(listScheduleAlerts(schedule.id)).toEqual([]);
+  });
+
+  it("never compares a disarmed schedule", async () => {
+    const schedule = createSchedule(
+      makeInput({ time: "23:59", notify: DEFAULT_SCHEDULE_NOTIFY }),
+    )!;
+    expect(schedule.notify.enabled).toBe(false);
+    const scheduler = createSchedulerForTests();
+
+    await fireAt(scheduler, schedule.id, 95);
+    const second = await fireAt(scheduler, schedule.id, 20);
+    await waitFor(
+      () => getAlertsEvaluatedBatchId(schedule.id) === second,
+      "disarmed fire evaluated",
+    );
+
+    expect(mockDeliverAlerts).not.toHaveBeenCalled();
+    expect(listScheduleAlerts(schedule.id)).toEqual([]);
+  });
+
+  it("records a failed delivery rather than losing it, and the batch still completes", async () => {
+    const schedule = createSchedule(makeArmedInput())!;
+    const scheduler = createSchedulerForTests();
+
+    await fireAt(scheduler, schedule.id, 95);
+    mockDeliverAlerts.mockResolvedValue({
+      attempted: true,
+      delivered: false,
+      reason: "webhook returned 500",
+    });
+    const second = await fireAt(scheduler, schedule.id, 70);
+    await waitFor(
+      () => listScheduleAlerts(schedule.id).length > 0,
+      "failed delivery still recorded",
+    );
+
+    // The batch is unaffected by the delivery outcome.
+    expect(getAuditQueue().getBatch(second)!.status).toBe("completed");
+    expect(listScheduleAlerts(schedule.id)[0].delivered).toBe(false);
+    expect(getAlertsEvaluatedBatchId(schedule.id)).toBe(second);
+  });
+
+  it("survives a delivery layer that throws outright", async () => {
+    const schedule = createSchedule(makeArmedInput())!;
+    const scheduler = createSchedulerForTests();
+
+    await fireAt(scheduler, schedule.id, 95);
+    mockDeliverAlerts.mockRejectedValue(new Error("network down"));
+    const second = await fireAt(scheduler, schedule.id, 70);
+    await waitFor(
+      () => listScheduleAlerts(schedule.id).length > 0,
+      "thrown delivery still recorded",
+    );
+
+    expect(getAuditQueue().getBatch(second)!.status).toBe("completed");
+    expect(listScheduleAlerts(schedule.id)[0].delivered).toBe(false);
+    // Marked anyway: the rows ARE the record, so the sweep must not retry and
+    // re-post the same comparison a minute later.
+    expect(getAlertsEvaluatedBatchId(schedule.id)).toBe(second);
+  });
+
+  it("never delivers the same comparison twice", async () => {
+    const schedule = createSchedule(makeArmedInput())!;
+    const scheduler = createSchedulerForTests();
+
+    await fireAt(scheduler, schedule.id, 95);
+    const second = await fireAt(scheduler, schedule.id, 70);
+    await waitFor(
+      () => listScheduleAlerts(schedule.id).length > 0,
+      "first evaluation delivered",
+    );
+    expect(mockDeliverAlerts).toHaveBeenCalledTimes(1);
+
+    // Both re-entry points — a direct re-evaluation and the minute sweep — are
+    // no-ops once the marker names the batch.
+    await evaluateBatchAlerts(schedule.id, second);
+    await scheduler.tick(new Date());
+    await scheduler.tick(new Date());
+
+    expect(mockDeliverAlerts).toHaveBeenCalledTimes(1);
+    expect(listScheduleAlerts(schedule.id)).toHaveLength(1);
+  });
+
+  it("the minute tick sweeps up a batch whose listener died with a restart", async () => {
+    const schedule = createSchedule(makeArmedInput())!;
+    const scheduler = createSchedulerForTests();
+    await fireAt(scheduler, schedule.id, 95);
+
+    // The state a restart leaves behind: the batch was submitted and the fire
+    // recorded, but the in-memory subscription that would have evaluated it
+    // never existed in this process. Submit it exactly as `fireSchedule` does,
+    // minus the arming.
+    nextScore = 70;
+    const orphan = getAuditQueue().createBatch({
+      urls: ["https://example.com/"],
+      device: schedule.device,
+      options: schedule.options,
+      source: schedule.source,
+      concurrency: schedule.concurrency,
+      accuracyMode: schedule.accuracyMode,
+      scheduleId: schedule.id,
+    });
+    recordScheduleFire(schedule.id, orphan.id);
+    await waitFor(
+      () => getAuditQueue().getBatch(orphan.id)?.status === "completed",
+      "orphan batch completed",
+    );
+    expect(mockDeliverAlerts).not.toHaveBeenCalled();
+
+    // A tick at a moment the schedule isn't due: the sweep is the only thing
+    // that can act here.
+    const notDue = new Date();
+    notDue.setHours(12, 0, 0, 0);
+    await scheduler.tick(notDue);
+
+    expect(mockDeliverAlerts).toHaveBeenCalledTimes(1);
+    expect(listScheduleAlerts(schedule.id)).toHaveLength(1);
+    expect(getAlertsEvaluatedBatchId(schedule.id)).toBe(orphan.id);
+  });
+
+  it("a cancelled batch never alerts", async () => {
+    const schedule = createSchedule(
+      makeArmedInput({}, {
+        target: { kind: "urls", urls: ["https://a.test/", "https://b.test/"] },
+        concurrency: 1,
+      }),
+    )!;
+    const scheduler = createSchedulerForTests();
+
+    // Baseline fire, then a second one paused part-way through.
+    nextScore = 95;
+    const first = (await scheduler.runNow(schedule.id))!;
+    await waitFor(
+      () => getAuditQueue().getBatch(first.batchId)?.status === "completed",
+      "baseline completed",
+    );
+
+    nextScore = 20;
+    blockJobs((url) => url === "https://b.test/");
+    const second = (await scheduler.runNow(schedule.id))!;
+    await waitFor(() => {
+      const counts = getAuditQueue().getBatch(second.batchId)?.counts;
+      return counts?.done === 1 && counts.running === 1;
+    }, "a done, b running");
+    scheduler.cancelActiveBatches(schedule.id);
+    await drainQueue();
+
+    // A paused batch holds a partial URL set; comparing it would report every
+    // unaudited page as a change.
+    expect(mockDeliverAlerts).not.toHaveBeenCalled();
+    expect(listScheduleAlerts(schedule.id)).toEqual([]);
+    // And the tick sweep agrees — a cancelled batch is not a comparable one.
+    await scheduler.tick(new Date());
+    expect(mockDeliverAlerts).not.toHaveBeenCalled();
+  });
+
+  it("watches only the categories the schedule selected", async () => {
+    const schedule = createSchedule(makeArmedInput({ categories: ["seo"] }))!;
+    const scheduler = createSchedulerForTests();
+
+    await fireAt(scheduler, schedule.id, 95);
+    const second = await fireAt(scheduler, schedule.id, 20);
+    await waitFor(
+      () => getAlertsEvaluatedBatchId(schedule.id) === second,
+      "narrowed comparison evaluated",
+    );
+
+    // Performance collapsed, but this schedule only watches SEO.
+    expect(mockDeliverAlerts).not.toHaveBeenCalled();
+    expect(listScheduleAlerts(schedule.id)).toEqual([]);
+  });
+
+  it("an alert failure never stops the tick loop or a sibling schedule's fire", async () => {
+    const armed = createSchedule(makeArmedInput({}, { name: "armed" }))!;
+    const scheduler = createSchedulerForTests();
+    await fireAt(scheduler, armed.id, 95);
+    mockDeliverAlerts.mockRejectedValue(new Error("network down"));
+    await fireAt(scheduler, armed.id, 70);
+
+    // A schedule that IS due, created after the armed one so the tick reaches
+    // it while the failing evaluation is still in play.
+    const due = createSchedule(makeInput({ name: "due", time: "09:00" }))!;
+    mockRunAudit.mockClear();
+    await scheduler.tick(new Date(2026, 4, 28, 9, 0, 0, 0));
+    await drainQueue();
+
+    expect(getSchedule(due.id)!.lastBatchId).not.toBeNull();
+    expect(mockRunAudit).toHaveBeenCalled();
   });
 });

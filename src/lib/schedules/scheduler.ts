@@ -19,19 +19,54 @@
  *
  * Pure cadence math lives in {@link shouldFireNow} (cadence.ts) so the scheduler
  * can be tested with a fast-forwarded clock (PRD Phase 14 Verify).
+ *
+ * ## Regression alerts (ROADMAP Phase C)
+ *
+ * Phase 14 built this whole loop and it notified nobody. What closes that is
+ * {@link evaluateBatchAlerts}: compare a finished fire against the schedule's
+ * previous one, deliver what changed, persist it.
+ *
+ * The plan puts delivery "after `recordScheduleFire`", and the shape that has to
+ * take is worth spelling out: `recordScheduleFire` runs at *fire* time, when the
+ * batch has not audited a single URL, so what happens there is **arming**, not
+ * sending. Two paths then reach the evaluation, because either alone has a hole:
+ *
+ *  - **The queue subscription** ({@link armAlertEvaluation}) evaluates the moment
+ *    the batch emits `batch-completed`. Immediate, but purely in-memory — a
+ *    server restart mid-batch loses the listener.
+ *  - **The minute tick** ({@link sweepScheduleAlerts}) re-checks every schedule
+ *    whose most recent batch has finished and not yet been evaluated. Slower, but
+ *    it survives a restart.
+ *
+ * Both converge on the same function, so `alerts_evaluated_batch_id` is the
+ * idempotence marker that makes the overlap harmless: evaluating a batch twice
+ * delivers nothing the second time.
+ *
+ * Nothing in the alert path may fail a batch or stop the tick loop — an audit
+ * that succeeded must not be undone by a webhook that didn't. Every entry point
+ * catches, warns, and moves on.
  */
 
+import { compareBatches } from "@/lib/alerts/compare";
+import { deliverAlerts } from "@/lib/alerts/deliver";
+import {
+  previousCompletedBatchId,
+  readBatchRunScores,
+  recordAlerts,
+} from "@/lib/db/alerts";
 import { reconstructBatch } from "@/lib/db/persistence";
 import {
+  getAlertsEvaluatedBatchId,
   getSchedule,
   listSchedules,
+  markAlertsEvaluated,
   recordScheduleFire,
 } from "@/lib/db/schedules";
 import { discover } from "@/lib/crawl/discover";
 import { resolveFormFactors } from "@/lib/lighthouse/options";
 import type { FormFactor } from "@/lib/lighthouse/types";
 import { getAuditQueue } from "@/lib/queue/AuditQueue";
-import type { Batch } from "@/lib/queue/types";
+import type { Batch, BatchStatus, ProgressListener } from "@/lib/queue/types";
 import { shouldFireNow } from "@/lib/schedules/cadence";
 import type { Schedule } from "@/lib/schedules/types";
 
@@ -158,6 +193,204 @@ function completedUrlsOfPausedRun(schedule: Schedule): {
   return { done, resumedFrom };
 }
 
+// --- Regression alerts (ROADMAP Phase C) -----------------------------------
+
+/** Batch statuses whose run set is final and complete enough to compare. */
+function isComparableStatus(status: BatchStatus): boolean {
+  return status === "completed" || status === "completed_with_errors";
+}
+
+/**
+ * Evaluations in flight, keyed `scheduleId:batchId`.
+ *
+ * `alerts_evaluated_batch_id` is the marker that survives a restart, but it is
+ * written *after* delivery — deliberately, so a process killed mid-POST retries
+ * on the next sweep rather than losing the regression silently. That leaves a
+ * window: delivery may block for up to `ALERT_DELIVERY_TIMEOUT_MS`, and a minute
+ * tick landing inside it would read the old marker and evaluate the same batch a
+ * second time, posting the same alerts to the channel twice and writing a
+ * duplicate set of rows.
+ *
+ * This closes that window the only way an in-process race can be closed: a claim
+ * taken **synchronously**, before the first `await`, and released in a `finally`.
+ * Both entry points (the queue subscription and the sweep) run in this one
+ * process, so a Set is sufficient; it is deliberately not a substitute for the
+ * persisted marker, which covers the restart case a Set cannot.
+ */
+const evaluating = new Set<string>();
+
+/**
+ * Compare a finished batch against the schedule's previous fire, deliver what
+ * changed, and record it.
+ *
+ * Exported so tests (and the two callers below) can drive one evaluation
+ * directly. Idempotent in both halves it needs to be: {@link evaluating} rejects
+ * a re-entry while one is still in flight, and `alerts_evaluated_batch_id`
+ * rejects one after the fact (including across a restart). That is what lets the
+ * queue subscription and the minute-tick sweep both point at this without ever
+ * risking a duplicate webhook.
+ *
+ * **Quiet means silent.** When the comparison finds nothing, the batch is marked
+ * evaluated and that is all — no webhook call, no row, no log line. A monitoring
+ * tool that announces every uneventful night trains its user to ignore it.
+ *
+ * Never throws: an alert is a note about work that already succeeded, so a
+ * failure here is logged and the batch, the fire and the tick loop carry on.
+ */
+export async function evaluateBatchAlerts(
+  scheduleId: string,
+  batchId: string,
+): Promise<void> {
+  try {
+    // Re-read rather than taking a Schedule argument: the config may have been
+    // edited between the fire and the batch finishing, and the run that just
+    // completed should be judged by the rules in force now.
+    const schedule = getSchedule(scheduleId);
+    if (!schedule) return;
+    if (getAlertsEvaluatedBatchId(scheduleId) === batchId) return;
+
+    // Claim before the first await (see `evaluating`). Everything from here to
+    // the `finally` is one logical evaluation of this batch.
+    const claim = `${scheduleId}:${batchId}`;
+    if (evaluating.has(claim)) return;
+    evaluating.add(claim);
+    try {
+      await evaluateClaimedBatch(schedule, scheduleId, batchId);
+    } finally {
+      evaluating.delete(claim);
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[scheduler] alert evaluation for schedule ${scheduleId} failed: ${message}`,
+    );
+  }
+}
+
+/**
+ * The body of one claimed evaluation: compare, deliver, record, mark.
+ *
+ * Split out of {@link evaluateBatchAlerts} purely so the claim/release pair
+ * around it stays a single readable `try`/`finally` rather than being threaded
+ * through every early return below.
+ */
+async function evaluateClaimedBatch(
+  schedule: Schedule,
+  scheduleId: string,
+  batchId: string,
+): Promise<void> {
+  if (!schedule.notify.enabled) {
+    // Marked, not just skipped. Arming alerts must not retro-fire on a fire
+    // that completed while the schedule was disarmed — the user armed them to
+    // hear about the *next* regression, not this morning's — and the marker
+    // also stops the minute sweep re-reading this batch forever.
+    markAlertsEvaluated(scheduleId, batchId);
+    return;
+  }
+
+  const priorBatchId = previousCompletedBatchId(scheduleId, batchId);
+  if (!priorBatchId) {
+    // A schedule's first fire has nothing to compare against; it is the
+    // baseline the *next* one is judged by.
+    markAlertsEvaluated(scheduleId, batchId);
+    return;
+  }
+
+  const alerts = compareBatches(
+    readBatchRunScores(priorBatchId),
+    readBatchRunScores(batchId),
+    schedule.notify,
+  );
+  if (alerts.length === 0) {
+    markAlertsEvaluated(scheduleId, batchId);
+    return;
+  }
+
+  // Delivery is the one step that talks to the outside world, so it gets its
+  // own guard: a webhook that times out, 500s or throws must still leave the
+  // comparison recorded. `deliverAlerts` reports an ordinary failure as
+  // `delivered: false`; this catch covers the case where it doesn't get that
+  // far at all.
+  let delivered = false;
+  try {
+    const result = await deliverAlerts(alerts, {
+      scheduleId,
+      scheduleName: schedule.name,
+      batchId,
+      priorBatchId,
+    });
+    delivered = result.delivered;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[scheduler] alert delivery for schedule ${scheduleId} failed: ${message}`,
+    );
+  }
+  // Persist either way, and mark evaluated either way: the rows ARE the
+  // record (the Archive strip reads them with no webhook configured at all),
+  // so a delivery failure must not queue a retry that re-posts tomorrow's
+  // comparison twice.
+  recordAlerts(scheduleId, batchId, priorBatchId, alerts, delivered);
+  markAlertsEvaluated(scheduleId, batchId);
+}
+
+/**
+ * Subscribe to a just-fired batch and evaluate its alerts the moment it
+ * completes.
+ *
+ * The listener unsubscribes on either terminal event, so it can never leak:
+ * `batch-completed` evaluates and detaches; `batch-cancelled` only detaches,
+ * because a paused batch holds results for whichever URLs happened to finish
+ * first and comparing that partial set would report every unaudited page as a
+ * change.
+ */
+function armAlertEvaluation(scheduleId: string, batchId: string): void {
+  try {
+    let unsubscribe: (() => void) | null = null;
+    const detach = (): void => {
+      unsubscribe?.();
+      unsubscribe = null;
+    };
+    const listener: ProgressListener = (event) => {
+      if (event.type === "batch-completed") {
+        detach();
+        void evaluateBatchAlerts(scheduleId, batchId);
+      } else if (event.type === "batch-cancelled") {
+        detach();
+      }
+    };
+    unsubscribe = getAuditQueue().subscribe(batchId, listener);
+  } catch (err) {
+    // The tick sweep is the backstop, so a failed subscription costs latency,
+    // not the alert.
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[scheduler] arming alerts for batch ${batchId} failed: ${message}`,
+    );
+  }
+}
+
+/**
+ * Minute-tick backstop for {@link armAlertEvaluation}: evaluate a schedule whose
+ * most recent batch has finished but was never evaluated — the state left behind
+ * when the server restarted while a batch was in flight, taking the in-memory
+ * subscription with it.
+ *
+ * Cheap in the common case: the marker check short-circuits before the batch is
+ * looked up at all, so a schedule whose alerts are already settled costs one
+ * indexed read per tick.
+ */
+async function sweepScheduleAlerts(schedule: Schedule): Promise<void> {
+  const batchId = schedule.lastBatchId;
+  if (!batchId) return;
+  if (getAlertsEvaluatedBatchId(schedule.id) === batchId) return;
+  // `findBatch` prefers the live queue and falls back to the persisted index,
+  // which is exactly the batch a restart left behind.
+  const batch = findBatch(batchId);
+  if (!batch || !isComparableStatus(batch.status)) return;
+  await evaluateBatchAlerts(schedule.id, batchId);
+}
+
 /**
  * Fire a single schedule: resolve its URLs, submit the batch through the queue
  * with `scheduleId` set, then record the fire. With `resume`, URLs the paused
@@ -210,6 +443,10 @@ export async function fireSchedule(
       priorBatchId: resumedFrom ?? undefined,
     });
     recordScheduleFire(schedule.id, batch.id);
+    // Arm the regression comparison for this fire. Nothing is compared yet — the
+    // batch has not audited a URL — so this only attaches the listener that runs
+    // the comparison once the batch settles.
+    armAlertEvaluation(schedule.id, batch.id);
     return {
       batchId: batch.id,
       urlCount: submit.length,
@@ -256,6 +493,10 @@ function createScheduler(): Scheduler {
   const tick: Tick = async (now: Date = new Date()) => {
     const schedules = listSchedules();
     for (const schedule of schedules) {
+      // Sweep BEFORE firing: a due schedule is about to overwrite `lastBatchId`,
+      // and the batch that pointer currently names is the one still owed an
+      // alert comparison.
+      await sweepScheduleAlerts(schedule);
       if (!shouldFireNow(schedule, now)) continue;
       await fire(schedule);
     }

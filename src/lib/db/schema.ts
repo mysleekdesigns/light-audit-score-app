@@ -19,6 +19,7 @@
  */
 
 import {
+  index,
   integer,
   real,
   sqliteTable,
@@ -164,11 +165,89 @@ export const schedules = sqliteTable("schedules", {
   lastFiredAt: text("last_fired_at"),
   /** Last batch id this schedule produced (null until it has fired). */
   lastBatchId: text("last_batch_id"),
+  /**
+   * Regression-alert preferences as JSON (`ScheduleNotify`) — armed flag, watched
+   * categories, per-category pass bars, and the minimum drop that counts (ROADMAP
+   * Phase C). Nullable so every row written before migration 0008 reads back as
+   * the factory default, which is **off**: upgrading the app must never start
+   * posting to a webhook on a schedule the user never armed.
+   *
+   * One JSON column rather than three scalar ones, matching this table's existing
+   * style (`urls`, `crawl_spec`, `options`): the shape is read whole, written
+   * whole, and passed through `sanitizeNotify` on every read, so widening it
+   * later needs no migration.
+   *
+   * Preferences only. The webhook URL is credential-shaped and lives in
+   * `process.env.LH_ALERT_WEBHOOK_URL` — never here (see `.claude/rules/security.md`).
+   */
+  notify: text("notify"),
+  /**
+   * The most recent batch whose alert comparison has already run. The scheduler
+   * evaluates on `batch-completed` and also sweeps on its minute tick (so a batch
+   * that finished while the process was restarting still alerts); this marker is
+   * what makes the second path idempotent instead of a duplicate-delivery bug.
+   */
+  alertsEvaluatedBatchId: text("alerts_evaluated_batch_id"),
   /** ISO creation timestamp. */
   createdAt: text("created_at").notNull(),
   /** ISO timestamp of the last edit. */
   updatedAt: text("updated_at").notNull(),
 });
+
+/**
+ * Regression alerts a schedule's fires produced (ROADMAP Phase C).
+ *
+ * One row per (URL, device, category) border crossing between a schedule's
+ * newest batch and the one before it. Persisted rather than recomputed so the
+ * Archive strip can show the last N events per schedule with no webhook
+ * configured at all — the feature has to be useful before delivery is set up —
+ * and so a delivery failure leaves a record of what *would* have been sent.
+ *
+ * Child of `schedules` via `schedule_id` (FK is ON, so deleting a schedule takes
+ * its alert history with it). Deliberately NOT a child of `batches`: history can
+ * be cleared batch-wide from the History view, and losing the record of a
+ * regression because its batch was tidied away would be the wrong trade — the
+ * batch ids are kept as plain provenance columns instead.
+ */
+export const scheduleAlerts = sqliteTable(
+  "schedule_alerts",
+  {
+    /** Alert id (nanoid). */
+    id: text("id").primaryKey(),
+    /** The schedule whose fire produced this alert. */
+    scheduleId: text("schedule_id")
+      .notNull()
+      .references(() => schedules.id),
+    /** The newest batch — the one compared against its predecessor. */
+    batchId: text("batch_id").notNull(),
+    /** The batch it was compared against. */
+    priorBatchId: text("prior_batch_id").notNull(),
+    /** crossed_below | recovered_above | dropped_by (see `AlertKind`). */
+    kind: text("kind").notNull(),
+    /** Audited URL, exactly as the run recorded it. */
+    url: text("url").notNull(),
+    /** mobile | desktop — a mobile drop is not a desktop drop. */
+    formFactor: text("form_factor").notNull(),
+    /**
+     * One of `LIGHTHOUSE_CATEGORIES`. Free text validated at the comparison seam,
+     * exactly as `analyses.category` is, so a sixth category needs no migration.
+     */
+    category: text("category").notNull(),
+    /** Score in the previous fire (0–100). */
+    previous: integer("previous").notNull(),
+    /** Score in the newest fire (0–100). */
+    current: integer("current").notNull(),
+    /** `current - previous`; negative for a regression. */
+    delta: integer("delta").notNull(),
+    /** Pass bar in play, or null for a bar-independent `dropped_by`. */
+    threshold: integer("threshold"),
+    /** Whether the webhook accepted this alert (false = in-app only). */
+    delivered: integer("delivered", { mode: "boolean" }).notNull().default(false),
+    /** ISO timestamp the comparison ran. */
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("schedule_alerts_schedule_created_idx").on(t.scheduleId, t.createdAt)],
+);
 
 /**
  * AI score analyses (the "explain & fix my score" feature).
@@ -246,3 +325,5 @@ export type ScheduleRow = typeof schedules.$inferSelect;
 export type NewScheduleRow = typeof schedules.$inferInsert;
 export type AnalysisRow = typeof analyses.$inferSelect;
 export type NewAnalysisRow = typeof analyses.$inferInsert;
+export type ScheduleAlertRow = typeof scheduleAlerts.$inferSelect;
+export type NewScheduleAlertRow = typeof scheduleAlerts.$inferInsert;

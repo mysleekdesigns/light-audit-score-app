@@ -5,7 +5,14 @@
  * Mirrors `src/app/api/audits/[id]/route.ts`: Next 16 async params, structured
  * error envelopes for failures, raw errors never leak. PATCH uses
  * `parseUpdateScheduleBody` so a body with only `{ enabled: false }` is enough
- * to pause without re-sending the whole config.
+ * to pause without re-sending the whole config — and, symmetrically, a body with
+ * only `{ notify: … }` arms or disarms regression alerts (ROADMAP Phase C)
+ * without touching the target. A patch that omits `notify` leaves the stored
+ * config alone; the echoed `Schedule` carries the sanitized value and never a
+ * webhook URL or any other credential (`.claude/rules/security.md`).
+ *
+ * DELETE removes the schedule's alert history with it — `deleteSchedule` clears
+ * the `schedule_alerts` children first, since the FK is `ON DELETE no action`.
  */
 
 import { parseUpdateScheduleBody } from "@/lib/api/schedules-schema";

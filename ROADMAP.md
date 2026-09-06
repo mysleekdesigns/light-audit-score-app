@@ -1,9 +1,11 @@
 # ROADMAP — Competitive differentiation plan (Phases A–H)
 
-> **Status (updated 2026-09-05):** **Phases A and B complete** — the Agentic Browsing category is
-> live end-to-end (engine → SQLite → UI → PSI → AI analysis), and audits can now authenticate
-> (basic auth, cookies, headers) for both auditing and crawl discovery, with credentials redacted
-> at every persistence boundary. Phases C–H are unbuilt; **C, D are unblocked and independent**.
+> **Status (updated 2026-09-05):** **Phases A, B and C complete** — the Agentic Browsing category is
+> live end-to-end (engine → SQLite → UI → PSI → AI analysis), audits can now authenticate
+> (basic auth, cookies, headers) for both auditing and crawl discovery with credentials redacted
+> at every persistence boundary, and the daily scheduler finally notifies: an armed schedule
+> compares each fire with the one before it and reports what crossed, in-app and to an optional
+> webhook. Phases D–H are unbuilt; **D is unblocked and independent**.
 > This file is a **plan**, not a record — it was drafted from a competitor survey of the
 > free/local Lighthouse tooling space (Unlighthouse, Lighthouse CI, sitespeed.io,
 > Lighthouse Parade) and the commercial monitoring tier (DebugBear, Foo.software,
@@ -374,26 +376,124 @@ from `process.env` (`LH_ALERT_WEBHOOK_URL`), never from `app_settings` and never
 field. Non-secret preferences (enabled/disabled, which categories, the delta threshold) may
 live in `app_settings`, consistent with the CrawlForge research switch.
 
-- [ ] **Comparison core**: a pure, unit-tested module that takes a schedule's newest batch and
+- [x] **Comparison core**: a pure, unit-tested module that takes a schedule's newest batch and
       its previous one and emits typed alert events — `crossed_below`, `recovered_above`,
       `dropped_by` — per URL and per category, using the existing threshold settings.
       Deliberately quiet: no event when nothing crosses.
-- [ ] **Delivery**: a `POST` to `LH_ALERT_WEBHOOK_URL` with a Slack-compatible JSON body
+      *Done: `src/lib/alerts/compare.ts`, pure (no DB/queue/fetch import). Pairs runs by
+      `(url, formFactor)` — a mobile drop is not a desktop drop — and emits at most ONE event per
+      (url, device, category): a crossing is never also reported as a slide. The load-bearing
+      decision is that **a missing score is silence, not zero**: a category absent, `null` or `NaN`
+      on either side yields nothing, because treating a failed run as 0 would fire `crossed_below`
+      on every category of every flaky night. A rise is only ever reported when it clears a bar the
+      score was under. `minDelta` is defensively lifted off 0 — `prev - cur >= 0` is true for every
+      **unchanged** category, the exact failure this module exists to prevent. Ordering is a
+      property of the engine, not of config-writing order.*
+- [x] **Delivery**: a `POST` to `LH_ALERT_WEBHOOK_URL` with a Slack-compatible JSON body
       (plain-text fallback + the score deltas), fired from the scheduler after
       `recordScheduleFire`. Failure to deliver is logged and never fails the batch.
-- [ ] **Per-schedule config**: `notify` fields on the `schedules` row (enabled, categories,
+      *Done, with the plan's timing clarified rather than followed literally: `recordScheduleFire`
+      runs at FIRE time, when the batch has not audited a URL, so what happens there is **arming**,
+      not sending. Two paths reach the evaluation because either alone has a hole — a queue
+      subscription (immediate, but in-memory, so a restart loses it) and the minute-tick sweep
+      (slower, but survives a restart). The URL never reaches a log line, an error message or a
+      return value: `fetch` failures embed it in the cause chain and a 4xx body can echo it, so
+      every path is reduced to a URL-free reason (`http 404`, `timeout`, `network error`), asserted
+      by spying on `console.warn`.*
+- [x] **Per-schedule config**: `notify` fields on the `schedules` row (enabled, categories,
       minimum delta) — migration `0008`, self-healing — surfaced in the existing
       `EditScheduleDialog` and the `/archive` schedule card.
-- [ ] **In-app surface**: an alert strip on `/archive` showing the last N alert events per
+      *Done: `drizzle/0008_powerful_silk_fever.sql`, purely additive (two nullable `ALTER TABLE
+      ADD`s plus the `schedule_alerts` table). Rehearsed against a COPY of the real database before
+      anything shipped: the migration self-heals on first access and the pre-existing schedule reads
+      back `notify IS NULL` → `sanitizeNotify(null)` → **disarmed**. Upgrading the app can never
+      start posting to a webhook on a schedule nobody armed.
+      **One deviation worth recording:** the plan says the comparison uses "the existing threshold
+      settings", but those live in `localStorage` (`useAuditDefaults`) — a scheduler firing at 03:00
+      has no browser to read. Resolved by **seeding**: the Edit dialog copies the user's current
+      Settings bars into the schedule's `notify.thresholds` when they arm alerts, and the schedule
+      owns them from then on. That is also the better semantics — dragging a Settings dial to
+      eyeball one batch must not silently re-arm alerts configured months ago.*
+- [x] **In-app surface**: an alert strip on `/archive` showing the last N alert events per
       schedule, so the feature is useful with no webhook configured at all.
-- [ ] **Settings status**: Settings shows webhook **presence as a boolean** plus `.env`
+      *Done, backed by a real `schedule_alerts` table rather than recomputation — "the last N events"
+      needs a record, and persisting it also means a delivery failure leaves evidence of what would
+      have been sent (rows show `SENT` vs `IN-APP`). No new colour, font or token: kind maps to the
+      existing bands (`crossed_below`→poor, `dropped_by`→average, `recovered_above`→**forced** good,
+      since a category with a bar at 50 can recover into the average band and an amber recovery reads
+      as a warning). `dropped_by` is distinguished without colour too — it prints no `bar N`, because
+      there was none to cross. Three empty states, gated on the number of FIRES rather than of rows:
+      "watching, nothing crossed" is a false claim for a schedule that has only fired once. The
+      card's telemetry grid was re-cut for a fifth cell.*
+- [x] **Settings status**: Settings shows webhook **presence as a boolean** plus `.env`
       guidance — never the URL, never an entry field.
-- [ ] **Verify**: a fast-forwarded-clock test proves fire → compare → alert, recovery
+      *Done: `GET /api/settings/alert-status` returns `{configured: boolean}` — byte-for-byte the
+      `psi-status` shape, behind the same request gate, and its handler takes no `request` argument
+      at all, so there is nothing to reflect. The panel contains **zero** input/form elements.*
+- [x] **Verify**: a fast-forwarded-clock test proves fire → compare → alert, recovery
       alerting, quiet-when-unchanged, and that a delivery failure is isolated; then a live
       end-to-end fire against a local sink URL.
+      *Done both ways. The suite grew 909 → 1039 tests, extending the existing fast-forwarded-clock
+      harness rather than replacing it; live verification is the Gate note below.*
 
 **Gate:** a real schedule fires twice against a URL whose score is forced to change, and both
 the drop and the recovery alerts deliver, with the webhook URL absent from SQLite and logs.
+
+*Gate green (2026-09-05).* Verified against a purpose-built local fixture whose score can be forced
+to change deterministically — the lever is SEO (`<title>` + meta description present or absent),
+because Performance varies run-to-run and a Gate must not depend on noise.
+
+- **Three fires through the real stack** (HTTP API → queue → forked worker → Chrome → SQLite):
+  baseline `seo 100`, forced regression `seo 82`, restored `seo 100`. The first fire was correctly
+  **silent** (nothing to compare a baseline against); the second delivered
+  `Crossed below · … SEO 100 → 82 (-18)`; the third delivered `Recovered · … SEO 82 → 100 (+18)`.
+  Performance sat at 100 throughout and never spoke, and the three categories the run didn't select
+  stayed silent rather than alerting on a `null`.
+- **The webhook URL appears nowhere.** Zero hits for its host:port and a distinctive path sentinel
+  across the SQLite DB (after a FULL WAL checkpoint), the WAL, the SHM, every stored report, and the
+  server log — with a **control grep proving the method works** (the audited host is found 9× in the
+  DB and 22× in the WAL). It is absent from the rendered Settings DOM too.
+- **Quiet when unchanged**, live: a fourth fire with nothing altered delivered nothing and wrote no
+  row.
+- **A delivery failure is isolated**, live: with the sink killed, the batch still completed, the
+  alert still persisted (`delivered = 0`, so the in-app strip keeps the record), and the log line was
+  exactly `[alerts] webhook delivery failed: network error` — no URL.
+- **UI driven in real Chrome**: the Archive card shows `ALERTS · Armed · 5/5 categories · ≥5pt` and
+  the strip renders each event with its band-coloured before/after pair and `SENT` / `IN-APP`
+  provenance. **Zero console errors.**
+
+Suite: lint · typecheck · build · 1039 tests, all green.
+
+*Security review (read-only `security-reviewer`, required by `.claude/rules/security.md` because the
+phase introduces a credential-shaped env var, the app's first unsolicited outbound request, and a new
+client-facing status endpoint): **pass — no Critical, no High.** Both Mediums and all four Lows were
+fixed rather than deferred.*
+
+- **M1 — duplicate webhook delivery.** The idempotence marker is written *after* delivery, so a
+  minute tick landing inside a slow POST (up to the 10s timeout) re-evaluated the same batch and
+  posted twice. Fixed with a claim taken **synchronously** before the first `await` and released in a
+  `finally`. The marker deliberately still writes after delivery — a process killed mid-POST should
+  retry, not lose the regression silently — so the Set covers the in-process race and the marker
+  covers the restart. The regression test drives two concurrent ticks plus a direct re-evaluation
+  against a held-open delivery; it was **confirmed to fail with the claim disabled**.
+- **M2 — "Clear history" left audited URLs behind.** `clearHistory` deleted runs, batches and reports
+  but not `schedule_alerts`, whose rows carry the audited URL and both scores and keep rendering.
+  Someone clearing history to remove the record of what they audited did not get that. Alert rows are
+  history, not config: they are now deleted with everything else, and each schedule's stale
+  evaluation marker is nulled.
+- **L1 — a hostile audited site could format an alert line.** A crawl target takes its URLs from
+  links and sitemap entries on the site under audit, and `*`, `_`, `~`, a backtick and CR/LF all
+  survive URL normalization — so `https://evil.example/*Nothing wrong here*` rendered bold in the
+  user's channel, and an embedded newline forged an entire extra alert line. Fixed by
+  percent-encoding those characters in the URL only, which is **lossless** (`%2A` is the same URL and
+  still resolves) where a lookalike substitution would silently change the address the reader sees.
+- Also fixed: an unconsumed failed-response body holding the socket (L2), `describeCounts` using `in`
+  and so walking the prototype (L3), and `previousCompletedBatchId` not scoping its reference batch
+  to the schedule (L4). The reviewer additionally caught a docblock my own M1 fix orphaned.
+
+The reviewer confirmed the diff leaves untouched the request gate, `localGate.ts`, Phase B
+audit-credential redaction, session-token resolution and the loopback binding, and that stored alert
+rows are whitelisted on read and rendered as React-escaped text.
 
 ---
 

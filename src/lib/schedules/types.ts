@@ -11,6 +11,7 @@
  * that satisfies the PRD's "daily @ HH:MM" example.
  */
 
+import type { ScheduleNotify } from "@/lib/alerts/types";
 import type {
   AuditOptions,
   AuditSource,
@@ -61,6 +62,13 @@ export interface Schedule {
   accuracyMode: boolean;
   /** Engine each fired batch runs on ("local" | "psi"); defaults to "local". */
   source: AuditSource;
+  /**
+   * Regression-alert preferences (ROADMAP Phase C). Always present on a read —
+   * a row stored before the 0008 migration reads back as the factory default,
+   * which is disarmed. Contains no credential: the webhook URL is read from
+   * `LH_ALERT_WEBHOOK_URL` and never travels with a schedule.
+   */
+  notify: ScheduleNotify;
   /** ISO timestamp of the most recent fire, or null. */
   lastFiredAt: string | null;
   /** Batch id the most recent fire produced, or null. */
@@ -82,6 +90,8 @@ export interface CreateScheduleInput {
   accuracyMode: boolean;
   /** Engine each fired batch runs on ("local" | "psi"). */
   source: AuditSource;
+  /** Regression-alert preferences. Omitted by older callers → disarmed default. */
+  notify?: ScheduleNotify;
 }
 
 /** Shape accepted by `updateSchedule` / `PATCH /api/schedules/:id`. */

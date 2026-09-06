@@ -6,6 +6,7 @@ import {
   nextFireAt,
   shouldFireNow,
 } from "@/lib/schedules/cadence";
+import { DEFAULT_SCHEDULE_NOTIFY } from "@/lib/alerts/types";
 import type { Schedule } from "@/lib/schedules/types";
 
 function makeSchedule(patch: Partial<Schedule> = {}): Schedule {
@@ -27,6 +28,9 @@ function makeSchedule(patch: Partial<Schedule> = {}): Schedule {
     device: "mobile",
     accuracyMode: false,
     source: "local",
+    // Cadence math is alert-agnostic; the disarmed default keeps the helper a
+    // valid `Schedule` without pulling notification behaviour into these cases.
+    notify: DEFAULT_SCHEDULE_NOTIFY,
     lastFiredAt: null,
     lastBatchId: null,
     createdAt: "2026-05-28T00:00:00.000Z",

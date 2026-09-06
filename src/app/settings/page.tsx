@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import { PageHeader } from "@/components/page-header";
 import { AiProviderSettings } from "@/components/settings/ai-provider-settings";
+import { AlertWebhookSettings } from "@/components/settings/alert-webhook-settings";
 import { ResearchServerSettings } from "@/components/settings/research-server-settings";
 import { PsiKeySettings } from "@/components/settings/psi-key-settings";
 
@@ -21,6 +22,7 @@ export default function SettingsPage() {
       <PsiKeySettings />
       <AiProviderSettings />
       <ResearchServerSettings />
+      <AlertWebhookSettings />
     </div>
   );
 }

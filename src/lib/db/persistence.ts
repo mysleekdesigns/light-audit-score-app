@@ -43,7 +43,14 @@ import {
   reportJsonFilename,
   reportJsonPath,
 } from "@/lib/db/paths";
-import { batches, runs, type BatchRow, type RunRow } from "@/lib/db/schema";
+import {
+  batches,
+  runs,
+  scheduleAlerts,
+  schedules,
+  type BatchRow,
+  type RunRow,
+} from "@/lib/db/schema";
 import {
   redactAuditOptions,
   scrubLhrCredentials,
@@ -428,10 +435,23 @@ export async function deleteBatch(batchId: string): Promise<boolean> {
 }
 
 /**
- * Delete ALL persisted history: every `runs` and `batches` row plus the entire
- * reports directory. Runs are deleted before batches to respect the
- * `runs.batchId → batches.id` FK. The `schedules` table is left untouched (it's
- * config, not history). Returns the counts removed. Never throws.
+ * Delete ALL persisted history: every `runs` and `batches` row, every regression
+ * alert, plus the entire reports directory. Runs are deleted before batches to
+ * respect the `runs.batchId → batches.id` FK.
+ *
+ * The `schedules` table itself is left untouched — it is config, not history —
+ * but its `schedule_alerts` children ARE history and go: an alert row records an
+ * audited URL and the two scores either side of a regression, and it keeps
+ * rendering in the Archive strip. Someone clearing history to remove the record
+ * of what they audited must not be left with that record intact in a second
+ * table (ROADMAP Phase C security review, M2).
+ *
+ * Each schedule's `alerts_evaluated_batch_id` is cleared with them, because the
+ * batch it names no longer exists; leaving it would be a marker pointing at
+ * nothing. Its absence is harmless either way — the next fire has no prior
+ * completed batch to compare against, so it simply becomes the new baseline.
+ *
+ * Returns the counts removed. Never throws.
  */
 export async function clearHistory(): Promise<{ runs: number; batches: number }> {
   try {
@@ -443,6 +463,10 @@ export async function clearHistory(): Promise<{ runs: number; batches: number }>
     deleteAllAnalyses();
     db.delete(runs).run();
     db.delete(batches).run();
+    // Alerts are history too (see the docblock). They reference `schedules`, not
+    // `batches`, so they are not swept by the deletes above and need their own.
+    db.delete(scheduleAlerts).run();
+    db.update(schedules).set({ alertsEvaluatedBatchId: null }).run();
 
     // Wipe report files wholesale; the directory is recreated lazily by recordRun.
     try {

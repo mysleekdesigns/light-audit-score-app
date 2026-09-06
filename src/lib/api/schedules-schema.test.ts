@@ -4,7 +4,14 @@ import {
   parseCreateScheduleBody,
   parseUpdateScheduleBody,
 } from "@/lib/api/schedules-schema";
+import {
+  DEFAULT_ALERT_DELTA,
+  DEFAULT_SCHEDULE_NOTIFY,
+  MAX_ALERT_DELTA,
+  MIN_ALERT_DELTA,
+} from "@/lib/alerts/types";
 import { DEFAULT_OPTIONS } from "@/lib/lighthouse/options";
+import { DEFAULT_THRESHOLDS } from "@/lib/settings/defaults";
 import { DEFAULT_CONCURRENCY, MAX_CONCURRENCY } from "@/lib/queue/types";
 import { MAX_SCHEDULE_URLS } from "@/lib/schedules/types";
 
@@ -42,6 +49,8 @@ describe("parseCreateScheduleBody — valid bodies", () => {
       accuracyMode: false,
       // source defaults to the local forked-Chrome engine.
       source: "local",
+      // Regression alerts default to the disarmed factory config.
+      notify: DEFAULT_SCHEDULE_NOTIFY,
     });
   });
 
@@ -373,5 +382,150 @@ describe("schedule bodies — credentials", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.issues.some((i) => i.path.startsWith("options"))).toBe(true);
+  });
+});
+
+/**
+ * Regression-alert preferences on a schedule body (ROADMAP Phase C).
+ *
+ * Two properties matter here. The config is *preference only* — a webhook URL or
+ * any other credential-shaped field must never survive parsing, because the
+ * destination is read from `.env` and Settings is read-only status
+ * (`.claude/rules/security.md`). And the parsed value is run through
+ * `sanitizeNotify`, so what the route echoes back is exactly what a later read
+ * of the row returns.
+ */
+describe("schedule bodies — notify", () => {
+  const FULL_NOTIFY = {
+    enabled: true,
+    categories: ["performance", "seo"],
+    minDelta: 12,
+    thresholds: { ...DEFAULT_THRESHOLDS, performance: 75 },
+  };
+
+  it("defaults to the disarmed factory config when notify is omitted", () => {
+    const result = parseCreateScheduleBody({ time: "09:00", target: URL_TARGET });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.notify).toEqual(DEFAULT_SCHEDULE_NOTIFY);
+    expect(result.value.notify!.enabled).toBe(false);
+  });
+
+  it("accepts a full notify config and returns it sanitized", () => {
+    const result = parseCreateScheduleBody({
+      time: "09:00",
+      target: URL_TARGET,
+      notify: FULL_NOTIFY,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.notify).toEqual({
+      enabled: true,
+      // Whitelisted back into canonical LIGHTHOUSE_CATEGORIES order.
+      categories: ["performance", "seo"],
+      minDelta: 12,
+      thresholds: { ...DEFAULT_THRESHOLDS, performance: 75 },
+    });
+  });
+
+  it("fills the gaps in a partial notify from the factory default", () => {
+    const result = parseCreateScheduleBody({
+      time: "09:00",
+      target: URL_TARGET,
+      notify: { enabled: true },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.notify).toEqual({
+      ...DEFAULT_SCHEDULE_NOTIFY,
+      enabled: true,
+    });
+    expect(result.value.notify!.minDelta).toBe(DEFAULT_ALERT_DELTA);
+  });
+
+  it("upgrades a thresholds map missing a category rather than rejecting it", () => {
+    const result = parseCreateScheduleBody({
+      time: "09:00",
+      target: URL_TARGET,
+      notify: { thresholds: { performance: 50 } },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.notify!.thresholds).toEqual({
+      ...DEFAULT_THRESHOLDS,
+      performance: 50,
+    });
+  });
+
+  it("rejects a minDelta outside MIN..MAX", () => {
+    for (const minDelta of [MIN_ALERT_DELTA - 1, MAX_ALERT_DELTA + 1, 2.5]) {
+      const result = parseCreateScheduleBody({
+        time: "09:00",
+        target: URL_TARGET,
+        notify: { minDelta },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.issues.some((i) => i.path.startsWith("notify.minDelta"))).toBe(
+        true,
+      );
+    }
+  });
+
+  it("rejects an unknown category and an out-of-range threshold", () => {
+    const badCategory = parseCreateScheduleBody({
+      time: "09:00",
+      target: URL_TARGET,
+      notify: { categories: ["not-a-category"] },
+    });
+    expect(badCategory.ok).toBe(false);
+
+    const badThreshold = parseCreateScheduleBody({
+      time: "09:00",
+      target: URL_TARGET,
+      notify: { thresholds: { performance: 900 } },
+    });
+    expect(badThreshold.ok).toBe(false);
+  });
+
+  it("never lets a credential-shaped field through", () => {
+    const result = parseCreateScheduleBody({
+      time: "09:00",
+      target: URL_TARGET,
+      notify: {
+        enabled: true,
+        webhookUrl: "https://hooks.example.test/services/T000/B000/xxxxxxxx",
+        token: "alert-destination-token",
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Only the four whitelisted preference fields survive.
+    expect(Object.keys(result.value.notify!).sort()).toEqual([
+      "categories",
+      "enabled",
+      "minDelta",
+      "thresholds",
+    ]);
+    expect(JSON.stringify(result.value)).not.toContain("hooks.example.test");
+    expect(JSON.stringify(result.value)).not.toContain("alert-destination-token");
+  });
+
+  it("a PATCH that omits notify leaves the key off the patch entirely", () => {
+    const result = parseUpdateScheduleBody({ enabled: false });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Not `notify: DEFAULT` — the DB layer must keep whatever is stored.
+    expect("notify" in result.value).toBe(false);
+  });
+
+  it("a PATCH that carries notify returns it sanitized", () => {
+    const result = parseUpdateScheduleBody({ notify: { enabled: true } });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.notify).toEqual({
+      ...DEFAULT_SCHEDULE_NOTIFY,
+      enabled: true,
+    });
   });
 });

@@ -8,7 +8,24 @@
  * accepted a partial update, but nothing in the app ever called it, so changing
  * a fire time meant deleting the schedule and rebuilding it from the audit form.
  * This edits the three fields that decide *when* a schedule runs — name, daily
- * time, and whether it is armed at all — and sends only what actually changed.
+ * time, and whether it is armed at all — plus, since ROADMAP Phase C, what it
+ * notifies about, and sends only what actually changed.
+ *
+ * ## Arming alerts copies your Settings bars; it does not mirror them
+ *
+ * The per-category pass bars are a *browser* setting (`useAuditDefaults`, backed
+ * by `localStorage`). A scheduler firing at 03:00 on the server has no
+ * `localStorage` to read, so arming alerts here copies the bars into the
+ * schedule's own `notify.thresholds` and the schedule owns them from then on.
+ * That is deliberate rather than a workaround — nudging a Settings dial to
+ * eyeball one batch must not silently re-arm every schedule you configured
+ * months ago — so the section says so in a line of copy rather than leaving the
+ * user to discover it. See the `ScheduleNotify` docblock.
+ *
+ * There is no webhook field here, and there must never be one. A webhook URL is
+ * credential-shaped: anyone holding it can post into the channel. It is read
+ * from `process.env.LH_ALERT_WEBHOOK_URL` and never reaches this form, the
+ * `schedules` row, or any payload the client sees (`.claude/rules/security.md`).
  *
  * What it deliberately does NOT edit is the target and the audit options. Those
  * are a whole audit form's worth of controls, they are already authored on the
@@ -29,10 +46,11 @@
  * no new colours and no new fonts.
  */
 
-import { useId, useMemo, useState } from "react";
-import { CalendarClock, Loader2, TriangleAlert } from "lucide-react";
+import { useCallback, useId, useMemo, useState } from "react";
+import { BellRing, CalendarClock, Loader2, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 
+import { notifyEquals } from "@/components/archive/alerts-data";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -47,7 +65,22 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import {
+  ToggleGroup,
+  ToggleGroupItem,
+} from "@/components/ui/toggle-group";
+import { useAuditDefaults } from "@/hooks/useAuditDefaults";
 import { useMinuteTick } from "@/hooks/useMinuteTick";
+import {
+  MAX_ALERT_DELTA,
+  MIN_ALERT_DELTA,
+  type ScheduleNotify,
+} from "@/lib/alerts/types";
+import {
+  LIGHTHOUSE_CATEGORIES,
+  type LighthouseCategory,
+} from "@/lib/lighthouse/types";
+import { CATEGORY_LABELS, CATEGORY_SHORT_LABELS } from "@/lib/scores";
 import { isDueAt, lastDueMoment, nextFireAt } from "@/lib/schedules/cadence";
 import {
   describeTarget,
@@ -55,6 +88,7 @@ import {
   formatTimestamp,
 } from "@/lib/schedules/format";
 import { isValidTime, type Schedule } from "@/lib/schedules/types";
+import { cn } from "@/lib/utils";
 
 /** Mono uppercase tracked label — house "telemetry" style. */
 const SECTION_LABEL =
@@ -88,6 +122,12 @@ interface EditablePatch {
   name?: string;
   time?: string;
   enabled?: boolean;
+  /**
+   * The whole notify config, or absent when nothing about it moved. Sent whole
+   * rather than per-field: the API sanitises it as one unit, and a half-config
+   * (categories without their bars) has no meaning.
+   */
+  notify?: ScheduleNotify;
 }
 
 /**
@@ -105,7 +145,11 @@ export function EditScheduleDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="sm:max-w-md"
+        // The Alerts section made this dialog tall enough to exceed a laptop
+        // viewport, and `DialogContent` is a centred fixed grid with no height
+        // cap — it would clip at both ends with nothing to scroll. Cap it and
+        // give the middle row the scroll; header and footer stay put.
+        className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-lg"
         onCloseAutoFocus={(event) => {
           const trigger = restoreFocusRef?.current;
           // No ref supplied: leave Radix's own restore behaviour alone.
@@ -120,8 +164,8 @@ export function EditScheduleDialog({
             Edit schedule
           </DialogTitle>
           <DialogDescription>
-            Rename it, move the daily fire time, or disarm it. The target and
-            audit options stay as they were saved.
+            Rename it, move the daily fire time, disarm it, or choose what it
+            alerts on. The target and audit options stay as they were saved.
           </DialogDescription>
         </DialogHeader>
 
@@ -147,11 +191,29 @@ function EditScheduleForm({
   const nameId = useId();
   const timeId = useId();
   const enabledId = useId();
+  const notifyId = useId();
+  const categoriesId = useId();
+  const categoriesHintId = useId();
+  const deltaId = useId();
+  const deltaHintId = useId();
 
   const [name, setName] = useState(schedule.name);
   const [time, setTime] = useState(schedule.time);
   const [enabled, setEnabled] = useState(schedule.enabled);
+  // Alerts. Seeded from the saved config at mount like every other field —
+  // Radix unmounts this form on close, so re-opening re-reads the schedule.
+  const [notifyEnabled, setNotifyEnabled] = useState(schedule.notify.enabled);
+  const [categories, setCategories] = useState<LighthouseCategory[]>(
+    schedule.notify.categories,
+  );
+  // Held as text so the field can be cleared mid-edit without the value
+  // snapping to a clamped number under the caret.
+  const [deltaText, setDeltaText] = useState(String(schedule.notify.minDelta));
   const [saving, setSaving] = useState(false);
+
+  // The user's live Settings bars — the source arming copies from, and nothing
+  // more: once a schedule is armed it owns its own bars (see the file header).
+  const { defaults, loaded: defaultsLoaded } = useAuditDefaults();
 
   // Same wall clock the card's "Next run" cell reads, so the preview below and
   // the cell behind the dialog can never disagree.
@@ -166,6 +228,24 @@ function EditScheduleForm({
     [schedule.target],
   );
 
+  // Alerts validity. An empty category set is refused rather than quietly
+  // meaning "all" (which is how `sanitizeCategories` would read it) — a form
+  // that silently watched five categories after you cleared them would be
+  // lying about what it saved.
+  const deltaValue = Number(deltaText);
+  const deltaValid =
+    /^\d+$/.test(deltaText.trim()) &&
+    deltaValue >= MIN_ALERT_DELTA &&
+    deltaValue <= MAX_ALERT_DELTA;
+  const categoriesValid = categories.length > 0;
+  const notifyValid = !notifyEnabled || (deltaValid && categoriesValid);
+
+  // Arming for the first time is the moment the Settings bars are copied. An
+  // already-armed schedule keeps the bars it owns, and disarming leaves them
+  // untouched so re-arming later doesn't silently re-copy.
+  const arming = notifyEnabled && !schedule.notify.enabled;
+  const thresholds = arming ? defaults.thresholds : schedule.notify.thresholds;
+
   // Only what actually changed goes over the wire: PATCH takes a partial body,
   // and sending an untouched field would bump `updatedAt` for nothing.
   const patch = useMemo<EditablePatch>(() => {
@@ -173,10 +253,40 @@ function EditScheduleForm({
     if (trimmedName !== schedule.name) next.name = trimmedName;
     if (time !== schedule.time) next.time = time;
     if (enabled !== schedule.enabled) next.enabled = enabled;
+
+    const notify: ScheduleNotify = {
+      enabled: notifyEnabled,
+      categories,
+      // An invalid delta never leaves the client: save is blocked while alerts
+      // are armed, and a disarmed schedule keeps the number it had.
+      minDelta: deltaValid ? deltaValue : schedule.notify.minDelta,
+      thresholds,
+    };
+    if (!notifyEquals(notify, schedule.notify)) next.notify = notify;
     return next;
-  }, [trimmedName, time, enabled, schedule.name, schedule.time, schedule.enabled]);
+  }, [
+    trimmedName,
+    time,
+    enabled,
+    notifyEnabled,
+    categories,
+    deltaValid,
+    deltaValue,
+    thresholds,
+    schedule.name,
+    schedule.time,
+    schedule.enabled,
+    schedule.notify,
+  ]);
 
   const dirty = Object.keys(patch).length > 0;
+
+  // Categories are stored in canonical order so `notifyEquals` can compare them
+  // positionally, and so the API's own `sanitizeCategories` is a no-op.
+  const handleCategories = useCallback((values: string[]) => {
+    const picked = new Set(values);
+    setCategories(LIGHTHOUSE_CATEGORIES.filter((c) => picked.has(c)));
+  }, []);
 
   // What "Next run" becomes once this is saved: the next occurrence of the
   // edited time, and whether the scheduler will consider the schedule overdue
@@ -193,7 +303,12 @@ function EditScheduleForm({
     };
   }, [enabled, timeValid, now, time, schedule.lastFiredAt]);
 
-  const canSave = timeValid && dirty && !saving;
+  // Arming is blocked until the Settings bars have actually been read from
+  // `localStorage`. The store hydrates on its first client subscription, so
+  // this is a single frame in practice — but saving inside it would copy the
+  // factory 90s and quietly call them the user's thresholds.
+  const seedReady = !arming || defaultsLoaded;
+  const canSave = timeValid && notifyValid && seedReady && dirty && !saving;
 
   async function handleSave() {
     if (!canSave) return;
@@ -219,6 +334,12 @@ function EditScheduleForm({
         preview?.due
           ? "Schedule updated — it is overdue, so a run starts within a minute."
           : "Schedule updated.",
+        arming
+          ? {
+              description:
+                "Alerts armed — the pass bars were copied from Settings and are this schedule's from now on.",
+            }
+          : undefined,
       );
       onSaved?.();
       onOpenChange(false);
@@ -233,7 +354,10 @@ function EditScheduleForm({
 
   return (
     <>
-      <div className="flex flex-col gap-4">
+      {/* The scrolling row of the dialog grid. `overscroll-contain` keeps a
+          wheel at the end of this list from scrolling the page behind the
+          modal; the negative margin keeps focus rings off the clip edge. */}
+      <div className="-mx-1 flex flex-col gap-4 overflow-y-auto overscroll-contain px-1">
         <Field>
           <FieldLabel htmlFor={nameId}>Name</FieldLabel>
           <Input
@@ -339,6 +463,134 @@ function EditScheduleForm({
               ) : null}
             </div>
           )}
+        </section>
+
+        {/* Regression alerts. There is no webhook field here by design — the
+            URL is credential-shaped and lives in `.env` only; Settings shows
+            whether one is configured, as a boolean. Everything below is
+            preference, so it is safe to persist on the schedules row. */}
+        <section
+          aria-label="Regression alerts"
+          className="flex flex-col gap-3 rounded-md border border-border/60 bg-card/30 p-3"
+        >
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <Label
+                htmlFor={notifyId}
+                className="inline-flex items-center gap-2 text-sm font-medium"
+              >
+                <BellRing aria-hidden className="size-3.5 text-primary" />
+                Alerts
+              </Label>
+              <p className="font-mono text-[0.65rem] leading-relaxed text-muted-foreground">
+                {notifyEnabled
+                  ? "Each fire is compared with the one before it. Events land on this card whether or not a webhook is configured."
+                  : "Off — fires are recorded but never compared, so nothing is reported."}
+              </p>
+            </div>
+            <Switch
+              id={notifyId}
+              checked={notifyEnabled}
+              onCheckedChange={setNotifyEnabled}
+            />
+          </div>
+
+          {notifyEnabled ? (
+            <div className="flex flex-col gap-4 border-t border-border/50 pt-3">
+              <Field data-invalid={!categoriesValid ? true : undefined}>
+                <FieldLabel htmlFor={categoriesId}>
+                  Watched categories
+                </FieldLabel>
+                {/* The FieldLabel is a <label>, which can't name a role=group
+                    div — the group needs its own accessible name. */}
+                <ToggleGroup
+                  id={categoriesId}
+                  type="multiple"
+                  variant="outline"
+                  spacing={0}
+                  aria-label="Watched categories"
+                  aria-describedby={categoriesValid ? undefined : categoriesHintId}
+                  value={categories}
+                  onValueChange={handleCategories}
+                  className="w-full"
+                >
+                  {LIGHTHOUSE_CATEGORIES.map((category) => (
+                    <ToggleGroupItem
+                      key={category}
+                      value={category}
+                      title={CATEGORY_LABELS[category]}
+                      className="min-w-0 flex-1 px-1 font-mono text-[0.7rem] uppercase tracking-[0.08em]"
+                    >
+                      {CATEGORY_SHORT_LABELS[category]}
+                    </ToggleGroupItem>
+                  ))}
+                </ToggleGroup>
+                {categoriesValid ? null : (
+                  <p
+                    id={categoriesHintId}
+                    className="font-mono text-[0.65rem] text-score-poor"
+                  >
+                    Pick at least one category — an empty set watches nothing.
+                  </p>
+                )}
+              </Field>
+
+              <Field data-invalid={!deltaValid ? true : undefined}>
+                <FieldLabel htmlFor={deltaId}>Minimum drop (points)</FieldLabel>
+                <Input
+                  id={deltaId}
+                  type="number"
+                  inputMode="numeric"
+                  min={MIN_ALERT_DELTA}
+                  max={MAX_ALERT_DELTA}
+                  step={1}
+                  value={deltaText}
+                  onChange={(event) => setDeltaText(event.target.value)}
+                  autoComplete="off"
+                  aria-invalid={!deltaValid}
+                  aria-describedby={deltaHintId}
+                  className="font-mono text-sm tabular-nums"
+                />
+                <p
+                  id={deltaHintId}
+                  className={cn(
+                    "font-mono text-[0.65rem] leading-relaxed",
+                    deltaValid ? "text-muted-foreground" : "text-score-poor",
+                  )}
+                >
+                  {deltaValid
+                    ? `A fall of ${deltaValue} or more is reported even when it crosses no bar. Lighthouse drifts a couple of points between identical runs, so lower is noisier.`
+                    : `Must be ${MIN_ALERT_DELTA}–${MAX_ALERT_DELTA}.`}
+                </p>
+              </Field>
+
+              {/* The bars themselves, shown so "copied from Settings" is a
+                  claim the user can check rather than take on trust. */}
+              <div className="flex flex-col gap-1.5">
+                <span className={SECTION_LABEL}>
+                  Pass bars {arming ? "(copying now)" : "(this schedule's)"}
+                </span>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[0.65rem] uppercase tracking-[0.12em] text-muted-foreground tabular-nums">
+                  {LIGHTHOUSE_CATEGORIES.map((category) => (
+                    <span key={category}>
+                      {CATEGORY_SHORT_LABELS[category]}{" "}
+                      <span className="text-foreground">
+                        {thresholds[category]}
+                      </span>
+                    </span>
+                  ))}
+                </div>
+                <p className="font-mono text-[0.65rem] leading-relaxed text-muted-foreground">
+                  {arming
+                    ? "Copied from your Settings thresholds when you save. The schedule keeps its own copy from then on — moving a Settings dial later won't change it."
+                    : "Copied from Settings when alerts were first armed. This schedule owns them now; Settings no longer affects it."}
+                  {arming && !defaultsLoaded
+                    ? " Reading your saved thresholds…"
+                    : null}
+                </p>
+              </div>
+            </div>
+          ) : null}
         </section>
 
         {/* What this dialog does not edit — shown so the schedule still

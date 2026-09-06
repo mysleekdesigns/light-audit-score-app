@@ -23,6 +23,7 @@ import { getAnalysis, saveAnalysis } from "@/lib/db/analyses";
 import { getDb, resetDbForTests } from "@/lib/db/client";
 import { reportJsonPath } from "@/lib/db/paths";
 import {
+  clearHistory,
   deleteBatch,
   getRunReport,
   listBatches,
@@ -33,7 +34,7 @@ import {
   recordRun,
   updateBatchStatus,
 } from "@/lib/db/persistence";
-import { batches, runs } from "@/lib/db/schema";
+import { batches, runs, scheduleAlerts, schedules } from "@/lib/db/schema";
 import { REDACTED } from "@/lib/lighthouse/credentials";
 import type { AuditOptions, AuditResult } from "@/lib/lighthouse/types";
 import type { AuditJob, Batch } from "@/lib/queue/types";
@@ -824,5 +825,71 @@ describe("persistence — credential redaction", () => {
     // No empty placeholders, no `[redacted]` markers on an ordinary audit.
     expect(rawBatchOptions("plain-batch")).not.toContain(REDACTED);
     expect(JSON.parse(rawRunOptions("plain-run"))).toEqual(OPTIONS);
+  });
+});
+
+
+describe("clearHistory and regression alerts (security review M2)", () => {
+  it("removes alert rows, which record audited URLs, and clears the stale marker", async () => {
+    // An alert row holds the audited URL and the scores either side of a
+    // regression. Clearing history is how a user removes the record of what they
+    // audited, so leaving that record intact in a second table would defeat it.
+    const url = "https://private.example/secret-staging/";
+    const job = makeJob("run-alert", 0, url);
+    const batch = makeBatch("b-alert", [job]);
+    recordBatch(batch);
+    await recordRun(batch, job, makeResult(url));
+
+    const db = getDb();
+    const now = new Date().toISOString();
+    db.insert(schedules)
+      .values({
+        id: "sch-1",
+        name: "Nightly",
+        enabled: true,
+        cadence: "daily",
+        time: "09:00",
+        urls: JSON.stringify(["https://private.example/secret-staging"]),
+        crawlSpec: null,
+        options: JSON.stringify(OPTIONS),
+        concurrency: 1,
+        device: "mobile",
+        source: "local",
+        accuracyMode: false,
+        alertsEvaluatedBatchId: "b-alert",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+    db.insert(scheduleAlerts)
+      .values({
+        id: "a-1",
+        scheduleId: "sch-1",
+        batchId: "b-alert",
+        priorBatchId: "b-old",
+        kind: "crossed_below",
+        url: "https://private.example/secret-staging",
+        formFactor: "mobile",
+        category: "seo",
+        previous: 95,
+        current: 40,
+        delta: -55,
+        threshold: 90,
+        delivered: false,
+        createdAt: now,
+      })
+      .run();
+
+    expect(db.select().from(scheduleAlerts).all()).toHaveLength(1);
+
+    await clearHistory();
+
+    // The alert — and the audited URL it carries — is gone.
+    expect(db.select().from(scheduleAlerts).all()).toEqual([]);
+    // The schedule itself survives: it is config, not history.
+    const rows = db.select().from(schedules).all();
+    expect(rows).toHaveLength(1);
+    // ...but its marker pointed at a batch that no longer exists.
+    expect(rows[0].alertsEvaluatedBatchId).toBeNull();
   });
 });

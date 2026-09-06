@@ -57,6 +57,13 @@
       "when": 1788648690336,
       "tag": "0007_abandoned_susan_delgado",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1788659104157,
+      "tag": "0008_powerful_silk_fever",
+      "breakpoints": true
     }
   ]
 }

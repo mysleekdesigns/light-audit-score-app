@@ -1,17 +1,19 @@
 /**
- * Scheduled archive page (PRD §6 Phase 14).
+ * Scheduled archive page (PRD §6 Phase 14; alerts added in ROADMAP Phase C).
  *
  * Server component that reads the local SQLite store directly (mirrors
- * `/history/page.tsx`): every persisted schedule + every persisted batch
- * (the Archive console filters batches per schedule via `scheduleId`). All
- * pause/enable/delete/run-now mutations flow through the client console
- * via Agent A's `/api/schedules/**` routes, which call `router.refresh()`
- * to re-fetch this server render.
+ * `/history/page.tsx`): every persisted schedule, every persisted batch, and
+ * the most recent alert events per schedule. The Archive console groups the
+ * latter two by `scheduleId` itself, so the page reads each table exactly once
+ * however many cards it renders. All pause/enable/delete/run-now/notify
+ * mutations flow through the client console via Agent A's `/api/schedules/**`
+ * routes, which call `router.refresh()` to re-fetch this server render.
  */
 
 import { ArchiveConsole } from "@/components/archive/archive-console";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
+import { listRecentAlerts } from "@/lib/db/alerts";
 import { listBatches } from "@/lib/db/persistence";
 import { listSchedules } from "@/lib/db/schedules";
 
@@ -23,13 +25,14 @@ export const dynamic = "force-dynamic";
 export default function ArchivePage() {
   const schedules = listSchedules();
   const batches = listBatches();
+  const alerts = listRecentAlerts();
 
   return (
     <div className="flex flex-col gap-8">
       <PageHeader
         kicker="04 — Archive"
         title="Scheduled archive"
-        description="Daily recurring audits. Each schedule fires at its HH:MM, re-resolves its target (URL list or crawl), and persists the batch alongside ad-hoc runs."
+        description="Daily recurring audits. Each schedule fires at its HH:MM, re-resolves its target (URL list or crawl), and persists the batch alongside ad-hoc runs. Armed schedules compare each fire with the one before it and log what crossed."
       >
         <Badge variant="outline" className="font-mono text-xs">
           {schedules.length}{" "}
@@ -37,7 +40,11 @@ export default function ArchivePage() {
         </Badge>
       </PageHeader>
 
-      <ArchiveConsole schedules={schedules} batches={batches} />
+      <ArchiveConsole
+        schedules={schedules}
+        batches={batches}
+        alerts={alerts}
+      />
     </div>
   );
 }

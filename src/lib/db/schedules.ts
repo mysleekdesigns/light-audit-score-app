@@ -21,11 +21,28 @@
  * (`LH_AUDIT_BASIC_AUTH` / `LH_AUDIT_EXTRA_HEADERS` / `LH_AUDIT_COOKIES`, read
  * inside the forked worker via `credentialsFromEnv`): a long-lived credential
  * belongs in the gitignored `.env`, never in SQLite.
+ *
+ * ## Regression-alert preferences (ROADMAP Phase C)
+ *
+ * The `notify` column is a nullable JSON blob, so every row written before
+ * migration 0008 reads back as {@link DEFAULT_SCHEDULE_NOTIFY} — which is
+ * **disarmed**. That is the self-healing clause the plan asks for: upgrading the
+ * app must never start posting to a webhook on a schedule nobody armed. Both
+ * write paths run the value through `sanitizeNotify`, so what the caller gets
+ * back is byte-for-byte what a later read produces.
+ *
+ * `alerts_evaluated_batch_id` is deliberately **not** on the public
+ * {@link Schedule}: that type is serialized straight to the browser, and the
+ * marker is scheduler bookkeeping with no meaning in the UI. It is read and
+ * written through {@link getAlertsEvaluatedBatchId} / {@link markAlertsEvaluated}
+ * instead.
  */
 
 import { desc, eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
+import { sanitizeNotify } from "@/lib/alerts/types";
+import { deleteScheduleAlerts } from "@/lib/db/alerts";
 import { getDb } from "@/lib/db/client";
 import { schedules, type ScheduleRow } from "@/lib/db/schema";
 import { stripAuditCredentials } from "@/lib/lighthouse/credentials";
@@ -99,6 +116,11 @@ function rowToSchedule(row: ScheduleRow): Schedule | null {
     device,
     accuracyMode: row.accuracyMode,
     source: row.source === "psi" ? "psi" : "local",
+    // `notify IS NULL` on every pre-0008 row; `sanitizeNotify(null)` is the
+    // disarmed factory default, so a legacy schedule reads back valid and quiet.
+    notify: sanitizeNotify(
+      safeParse<unknown>(row.notify, "rowToSchedule:notify"),
+    ),
     lastFiredAt: row.lastFiredAt,
     lastBatchId: row.lastBatchId,
     createdAt: row.createdAt,
@@ -126,6 +148,9 @@ export function createSchedule(input: CreateScheduleInput): Schedule | null {
     // A schedule never carries credentials (see the module docblock): strip them
     // here, and return the stripped options so the caller's echo matches the row.
     const options = stripAuditCredentials(input.options);
+    // Same contract for the alert config: sanitize once, store and echo the
+    // sanitized value, so `create → read` is a fixed point.
+    const notify = sanitizeNotify(input.notify);
     getDb()
       .insert(schedules)
       .values({
@@ -141,6 +166,8 @@ export function createSchedule(input: CreateScheduleInput): Schedule | null {
         device: input.device,
         accuracyMode: input.accuracyMode,
         source: input.source,
+        notify: JSON.stringify(notify),
+        alertsEvaluatedBatchId: null,
         lastFiredAt: null,
         lastBatchId: null,
         createdAt: now,
@@ -151,6 +178,7 @@ export function createSchedule(input: CreateScheduleInput): Schedule | null {
       id,
       ...input,
       options,
+      notify,
       lastFiredAt: null,
       lastBatchId: null,
       createdAt: now,
@@ -179,6 +207,9 @@ export function updateSchedule(
       // introduces credentials must not turn a credential-free schedule into one
       // that records them.
       options: stripAuditCredentials(patch.options ?? existing.options),
+      // A patch that omits `notify` must not disarm the schedule: fall back to
+      // what is already stored (itself already sanitized on read).
+      notify: sanitizeNotify(patch.notify ?? existing.notify),
       updatedAt: nowIso(),
     };
     const cols = targetColumns(next.target);
@@ -196,6 +227,7 @@ export function updateSchedule(
         device: next.device,
         accuracyMode: next.accuracyMode,
         source: next.source,
+        notify: JSON.stringify(next.notify),
         updatedAt: next.updatedAt,
       })
       .where(eq(schedules.id, id))
@@ -220,9 +252,19 @@ export function recordScheduleFire(id: string, batchId: string): void {
   }
 }
 
-/** Delete a schedule. */
+/**
+ * Delete a schedule, and its alert history with it.
+ *
+ * The children go first: `foreign_keys = ON` (see `db/client.ts`) and
+ * `schedule_alerts.schedule_id` is `ON DELETE no action`, so deleting a schedule
+ * that has ever alerted raises a constraint error — which this module would
+ * swallow into a `false`, surfacing to the user as `DELETE /api/schedules/:id`
+ * → 404 "no schedule found" for a schedule that plainly exists. Same ordering
+ * `deleteRun` uses for `analyses`.
+ */
 export function deleteSchedule(id: string): boolean {
   try {
+    deleteScheduleAlerts(id);
     const result = getDb()
       .delete(schedules)
       .where(eq(schedules.id, id))
@@ -231,6 +273,49 @@ export function deleteSchedule(id: string): boolean {
   } catch (err) {
     warn("deleteSchedule", err);
     return false;
+  }
+}
+
+/**
+ * Record that `batchId`'s alert comparison has run for this schedule.
+ *
+ * The scheduler evaluates on the queue's `batch-completed` event *and* sweeps on
+ * its minute tick (so a batch that finished while the process was restarting
+ * still alerts). This marker is what makes the second path idempotent instead of
+ * a duplicate-delivery bug. Best-effort like every write here.
+ */
+export function markAlertsEvaluated(scheduleId: string, batchId: string): void {
+  try {
+    getDb()
+      .update(schedules)
+      .set({ alertsEvaluatedBatchId: batchId })
+      .where(eq(schedules.id, scheduleId))
+      .run();
+  } catch (err) {
+    warn("markAlertsEvaluated", err);
+  }
+}
+
+/**
+ * The batch this schedule last evaluated alerts for, or `undefined`.
+ *
+ * Deliberately a separate reader rather than a field on {@link Schedule}: that
+ * type is serialized to the browser on every `GET /api/schedules`, and this is
+ * scheduler bookkeeping the UI has no use for.
+ */
+export function getAlertsEvaluatedBatchId(
+  scheduleId: string,
+): string | undefined {
+  try {
+    const row = getDb()
+      .select({ batchId: schedules.alertsEvaluatedBatchId })
+      .from(schedules)
+      .where(eq(schedules.id, scheduleId))
+      .get();
+    return row?.batchId ?? undefined;
+  } catch (err) {
+    warn("getAlertsEvaluatedBatchId", err);
+    return undefined;
   }
 }
 

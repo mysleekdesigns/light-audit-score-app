@@ -16,12 +16,19 @@
  * the `useMinuteTick` wall clock, so the "Next run" tick stays fresh without
  * server work and without a hydration mismatch. The Edit dialog reads the same
  * clock, so its preview and the card's cell can never disagree.
+ *
+ * Each card also carries its regression alerts (ROADMAP Phase C): an Alerts
+ * telemetry cell describing the *saved* notify config, and the {@link AlertStrip}
+ * listing what has actually crossed. Both are fed from one page-level read,
+ * pre-grouped by `scheduleId` here exactly as batches already are.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  BellOff,
+  BellRing,
   CalendarClock,
   CheckCircle2,
   Clock,
@@ -36,6 +43,11 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { AlertStrip } from "@/components/archive/alert-strip";
+import {
+  describeAlertsStatus,
+  groupAlertsBySchedule,
+} from "@/components/archive/alerts-data";
 import { EditScheduleDialog } from "@/components/archive/edit-schedule-dialog";
 import { ScorePill } from "@/components/audit/score-pill";
 import {
@@ -69,6 +81,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useBatchStream } from "@/hooks/useBatchStream";
 import { useMinuteTick } from "@/hooks/useMinuteTick";
+import type { ScheduleAlertRecord } from "@/lib/alerts/types";
 import { deleteBatch } from "@/lib/client/auditClient";
 import type { BatchInfo, HistoryRow } from "@/lib/db/persistence";
 import { nextFireAt } from "@/lib/schedules/cadence";
@@ -94,6 +107,12 @@ interface ArchiveConsoleProps {
    */
   batches: BatchInfo[];
   /**
+   * The most recent alert events across every schedule, newest first — the same
+   * single-read-then-group seam `batches` uses, so the page still touches
+   * SQLite once no matter how many cards it renders.
+   */
+  alerts?: ScheduleAlertRecord[];
+  /**
    * Optional preloaded run rows per batch id (compact trend strips). Not used
    * today (Archive shows a batch-level trend, not run-level), but reserved so
    * a future expand could enrich without re-shaping the seam.
@@ -101,7 +120,17 @@ interface ArchiveConsoleProps {
   runs?: HistoryRow[];
 }
 
-export function ArchiveConsole({ schedules, batches }: ArchiveConsoleProps) {
+/**
+ * Hoisted so the default `alerts` is referentially stable — an inline `[]`
+ * would be a fresh array every render and re-run the grouping memo for nothing.
+ */
+const NO_ALERTS: ScheduleAlertRecord[] = [];
+
+export function ArchiveConsole({
+  schedules,
+  batches,
+  alerts = NO_ALERTS,
+}: ArchiveConsoleProps) {
   // Pre-group batches by scheduleId once — each card slices its own slice.
   const batchesBySchedule = useMemo(() => {
     const map = new Map<string, BatchInfo[]>();
@@ -113,6 +142,9 @@ export function ArchiveConsole({ schedules, batches }: ArchiveConsoleProps) {
     }
     return map;
   }, [batches]);
+
+  // Same pass for alert rows — one grouping for the page, one slice per card.
+  const alertsBySchedule = useMemo(() => groupAlertsBySchedule(alerts), [alerts]);
 
   if (schedules.length === 0) {
     return (
@@ -145,6 +177,7 @@ export function ArchiveConsole({ schedules, batches }: ArchiveConsoleProps) {
             <ScheduleCard
               schedule={schedule}
               batches={batchesBySchedule.get(schedule.id) ?? []}
+              alerts={alertsBySchedule.get(schedule.id) ?? NO_ALERTS}
             />
           </li>
         ))}
@@ -156,9 +189,11 @@ export function ArchiveConsole({ schedules, batches }: ArchiveConsoleProps) {
 interface ScheduleCardProps {
   schedule: Schedule;
   batches: BatchInfo[];
+  /** This schedule's slice of the page's alert rows, newest first. */
+  alerts: ScheduleAlertRecord[];
 }
 
-function ScheduleCard({ schedule, batches }: ScheduleCardProps) {
+function ScheduleCard({ schedule, batches, alerts }: ScheduleCardProps) {
   const router = useRouter();
   const [pendingAction, setPendingAction] = useState<
     "delete" | "run" | "pause" | null
@@ -182,6 +217,12 @@ function ScheduleCard({ schedule, batches }: ScheduleCardProps) {
   );
 
   const target = useMemo(() => describeTarget(schedule.target), [schedule.target]);
+  // Describes what was *saved*, never the browser's live Settings bars — a card
+  // that mirrored Settings would misstate what the next 03:00 fire will do.
+  const alertsStatus = useMemo(
+    () => describeAlertsStatus(schedule.notify),
+    [schedule.notify],
+  );
   // A schedule with no name is titled by its target instead, so the line under
   // the title carries only what the title does not: the target when a real name
   // owns the title, and the count when there is more than one URL. For an
@@ -407,7 +448,7 @@ function ScheduleCard({ schedule, batches }: ScheduleCardProps) {
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
-                Edit name, fire time, or whether it is armed
+                Edit name, fire time, whether it is armed, and its alerts
               </TooltipContent>
             </Tooltip>
             <Tooltip>
@@ -446,10 +487,13 @@ function ScheduleCard({ schedule, batches }: ScheduleCardProps) {
       </CardHeader>
 
       <CardContent className="flex flex-col gap-5">
-        {/* Cadence telemetry strip — four dense cells, like the batch summary. */}
+        {/* Cadence telemetry strip — dense cells, like the batch summary. Five
+            of them since Phase C added Alerts, so the wide breakpoint moved to
+            five columns; `lg` holds 3 + 2 rather than cramping five cells into
+            a card-width row. */}
         <section
           aria-label="Cadence telemetry"
-          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
+          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"
         >
           <TelemetryCell label="Cadence" value={`Daily @ ${schedule.time}`}>
             <Clock aria-hidden className="size-3" />
@@ -498,7 +542,28 @@ function ScheduleCard({ schedule, batches }: ScheduleCardProps) {
           >
             <RotateCw aria-hidden className="size-3" />
           </TelemetryCell>
+          <TelemetryCell
+            label="Alerts"
+            value={alertsStatus.value}
+            sub={alertsStatus.detail}
+          >
+            {alertsStatus.armed ? (
+              <BellRing aria-hidden className="size-3" />
+            ) : (
+              <BellOff aria-hidden className="size-3" />
+            )}
+          </TelemetryCell>
         </section>
+
+        {/* What crossed since the previous fire. Sits above the run history
+            because it is the reason to open this page at all — the runs below
+            are how you get to the report behind a row. */}
+        <AlertStrip
+          alerts={alerts}
+          notify={schedule.notify}
+          runCount={totalRuns}
+          now={nowTick}
+        />
 
         {/* Day-over-day run history strip — a simple list of dated batches with
             their lifecycle status; richer score trends live in /batches. */}

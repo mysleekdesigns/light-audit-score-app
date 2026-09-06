@@ -7,11 +7,33 @@
  *
  * Kept free of Next.js / queue-runtime imports so it stays trivially testable
  * — same shape as `audits-schema.ts`.
+ *
+ * ## The alert config is preference only (ROADMAP Phase C)
+ *
+ * `notify` accepts an armed flag, watched categories, a minimum drop and the
+ * per-category pass bars — and **nothing credential-shaped**: no webhook URL, no
+ * token, no destination of any kind. The webhook is read from
+ * `process.env.LH_ALERT_WEBHOOK_URL`, Settings is read-only status plus `.env`
+ * guidance, and a route that accepted a URL here would be a write path into
+ * SQLite for a value anyone holding it can post with
+ * (`.claude/rules/security.md`). Two layers keep that true: zod strips unknown
+ * keys at parse, and `sanitizeNotify` rebuilds the object from a four-field
+ * whitelist, so an extra field cannot reach the DB even if this schema is later
+ * loosened.
  */
 
 import { z } from "zod";
 
+import {
+  MAX_ALERT_DELTA,
+  MIN_ALERT_DELTA,
+  sanitizeNotify,
+} from "@/lib/alerts/types";
 import { auditOptionsSchema } from "@/lib/lighthouse/options";
+import {
+  LIGHTHOUSE_CATEGORIES,
+  type LighthouseCategory,
+} from "@/lib/lighthouse/types";
 import {
   MAX_EXCLUDE_PATHS,
   MAX_EXCLUDE_PATH_LENGTH,
@@ -85,6 +107,40 @@ const targetSchema = z.discriminatedUnion("kind", [
   crawlTargetSchema,
 ]);
 
+/** `LIGHTHOUSE_CATEGORIES` as the non-empty tuple `z.enum` wants. */
+const CATEGORY_VALUES = [...LIGHTHOUSE_CATEGORIES] as [
+  LighthouseCategory,
+  ...LighthouseCategory[],
+];
+
+/**
+ * Regression-alert preferences. Every field optional — the Edit-schedule dialog
+ * sends only what the user touched, and `sanitizeNotify` fills the rest from the
+ * disarmed factory default. Bounds are validated here so a nonsense value is a
+ * 400 the dialog can point at, rather than a silent clamp the user never sees.
+ */
+const notifySchema = z.object({
+  enabled: z.boolean().optional(),
+  categories: z.array(z.enum(CATEGORY_VALUES)).optional(),
+  minDelta: z
+    .int("notify.minDelta must be an integer.")
+    .min(MIN_ALERT_DELTA, `notify.minDelta must be at least ${MIN_ALERT_DELTA}.`)
+    .max(MAX_ALERT_DELTA, `notify.minDelta must be at most ${MAX_ALERT_DELTA}.`)
+    .optional(),
+  // Keyed loosely (not by the category enum) so a partial map is legal and a
+  // blob written before a category existed still parses; `sanitizeThresholds`
+  // inside `sanitizeNotify` rebuilds the full record and fills the gaps.
+  thresholds: z
+    .record(
+      z.string(),
+      z
+        .int("notify.thresholds values must be integers.")
+        .min(0, "notify.thresholds values must be at least 0.")
+        .max(100, "notify.thresholds values must be at most 100."),
+    )
+    .optional(),
+});
+
 /**
  * Zod schema for `POST /api/schedules`. Required: `target`, `time`. Defaults
  * applied for everything else (mirroring `auditOptionsSchema`).
@@ -106,6 +162,8 @@ export const createScheduleBodySchema = z.object({
   accuracyMode: z.boolean().optional().default(false),
   // Engine each fired batch runs on (PSI feature). Defaults to the local engine.
   source: z.enum(["local", "psi"]).optional().default("local"),
+  // Regression alerts (ROADMAP Phase C). Omitted → the disarmed default.
+  notify: notifySchema.optional(),
 });
 
 /** Partial-update schema — every field optional. */
@@ -144,6 +202,9 @@ export function parseCreateScheduleBody(raw: unknown): ParseCreateScheduleResult
       device,
       accuracyMode: data.accuracyMode,
       source: data.source,
+      // Sanitize at the API seam as well as in the DB layer, so the value the
+      // route echoes back is identical to the one a later read returns.
+      notify: sanitizeNotify(data.notify),
     },
   };
 }
@@ -164,5 +225,8 @@ export function parseUpdateScheduleBody(raw: unknown): ParseUpdateScheduleResult
   else if (data.options !== undefined) value.device = data.options.formFactor;
   if (data.accuracyMode !== undefined) value.accuracyMode = data.accuracyMode;
   if (data.source !== undefined) value.source = data.source;
+  // Only when the patch actually carries it: an update that omits `notify` must
+  // leave the schedule's current arming alone, not reset it to the default.
+  if (data.notify !== undefined) value.notify = sanitizeNotify(data.notify);
   return { ok: true, value };
 }
