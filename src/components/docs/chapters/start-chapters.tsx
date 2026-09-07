@@ -77,6 +77,30 @@ export function StartChapters() {
           ]}
         />
 
+        <H3>Three ways to start an audit</H3>
+        <P>
+          The app in your browser is the obvious one, and the rest of this manual is mostly about
+          it. Two others exist, and they matter because all three write into the{" "}
+          <strong className="font-medium text-foreground">same history</strong>: a page audited by
+          your build pipeline on Tuesday is a legitimate comparison for one you audit by hand on
+          Friday.
+        </P>
+        <List>
+          <LI>
+            <strong className="font-medium text-foreground">In the app</strong> — paste addresses
+            or crawl a site, watch the results arrive.
+          </LI>
+          <LI>
+            <strong className="font-medium text-foreground">In your pipeline</strong> — one command
+            that audits a list of pages against budgets and fails the build when one misses. See{" "}
+            <DocLink href="#ci">Budgets in CI</DocLink>.
+          </LI>
+          <LI>
+            <strong className="font-medium text-foreground">From your coding agent</strong> — audit
+            the page you just changed and ask whether it regressed. See{" "}
+            <DocLink href="#mcp">Your coding agent</DocLink>.
+          </LI>
+        </List>
       </DocsSection>
 
       <DocsSection
@@ -149,6 +173,27 @@ npm start`}
                 <>
                   Needed only for the “why is this score low?” analysis. See{" "}
                   <DocLink href="#ai-providers">Claude, Ollama, or your own</DocLink>.
+                </>
+              ),
+            },
+            {
+              term: "Site credentials",
+              value: "LH_AUDIT_*",
+              detail: (
+                <>
+                  Needed only to audit a staging site or a page behind a login, and only when you
+                  reuse the same values. See{" "}
+                  <DocLink href="#authentication">Auditing behind a login</DocLink>.
+                </>
+              ),
+            },
+            {
+              term: "Alert webhook",
+              value: "LH_ALERT_WEBHOOK_URL",
+              detail: (
+                <>
+                  Needed only to have a scheduled audit post its regressions into a chat channel.
+                  See <DocLink href="#schedule">Scheduled audits</DocLink>.
                 </>
               ),
             },

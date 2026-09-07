@@ -1,5 +1,5 @@
 /**
- * Manual chapters 17–21: the Settings panels, where files live, what the local
+ * Manual chapters 21–25: the Settings panels, where files live, what the local
  * server does to stay private, and the two lists a stuck user reaches for.
  */
 
@@ -25,7 +25,7 @@ export function ReferenceChapters() {
         id="settings"
         index={docsPlate("settings")}
         title="Settings"
-        lede="Three panels that report what is configured. Only one of them writes anything."
+        lede="Five panels that report what is configured. Most of them only read; two of them save something."
       >
         <P>
           <DocLink href="/settings">Settings</DocLink> is mostly a status display. It tells you what
@@ -50,8 +50,7 @@ export function ReferenceChapters() {
               value: "writable",
               detail: (
                 <>
-                  The one panel that saves a choice: which AI runs the analysis, and which model.
-                  Takes effect immediately. See{" "}
+                  Which AI runs the analysis, and which model. Takes effect immediately. See{" "}
                   <DocLink href="#ai-providers">Claude, Ollama, or your own</DocLink>.
                 </>
               ),
@@ -66,6 +65,28 @@ export function ReferenceChapters() {
                 </>
               ),
             },
+            {
+              term: "Alert webhook",
+              value: "read-only",
+              detail: (
+                <>
+                  Whether a chat webhook is configured for regression alerts — a yes or no, never
+                  the address. Alerts are armed per schedule, not here. See{" "}
+                  <DocLink href="#schedule">Scheduled audits</DocLink>.
+                </>
+              ),
+            },
+            {
+              term: "Report header",
+              value: "writable",
+              detail: (
+                <>
+                  Title, strapline, logo and date printed above an exported client report. The only
+                  panel that stores what you type into it. See{" "}
+                  <DocLink href="#batches">Batches &amp; thresholds</DocLink>.
+                </>
+              ),
+            },
           ]}
         />
         <Callout tone="note" label="No key ever goes in a form">
@@ -73,6 +94,12 @@ export function ReferenceChapters() {
           <Code>.env</Code>, are read only when needed, and the app reports their presence as a
           yes-or-no. A key you can only see in a file is a key that cannot end up in a database, a
           log, or a screenshot.
+        </Callout>
+        <Callout tone="note" label="The one panel that does take a secret">
+          <DocLink href="#authentication">Authentication</DocLink> on the audit form accepts a
+          password, a cookie or a token — but those are the audited{" "}
+          <em>site’s</em> secrets rather than the app’s, and they are held in memory for one batch
+          and never written anywhere. That is why they live on the audit form and not here.
         </Callout>
         <P>
           Your audit preferences — device, repeats, concurrency, categories, pass thresholds, table
@@ -166,10 +193,28 @@ export function ReferenceChapters() {
             to that service.
           </LI>
           <LI>
+            If — and only if — you configure a webhook, a scheduled audit posts its regression
+            alerts to that address: the page, the category, and the two scores. See{" "}
+            <DocLink href="#schedule">Scheduled audits</DocLink>.
+          </LI>
+          <LI>
+            A credential you enter in <DocLink href="#authentication">Authentication</DocLink> is
+            sent to the site being audited, which is the point of it — and to the third parties that
+            site’s pages load, which is not. That is the one caveat in this list worth reading
+            twice.
+          </LI>
+          <LI>
             There is no telemetry, no analytics, and no account. The app never reports on you to
             anyone, including its authors.
           </LI>
         </List>
+        <Callout tone="note" label="Two things that reach in rather than out">
+          A <DocLink href="#ci">CI run</DocLink> and an{" "}
+          <DocLink href="#mcp">agent’s audit</DocLink> both write into the same local database this
+          app reads, without going through the server or its token — they are separate programs on
+          your own machine, not requests. An agent you connect can therefore read every address you
+          have ever audited.
+        </Callout>
 
         <Callout tone="warn" label="On a shared machine">
           While the app is launching your browser, the start-up link — token included — is briefly
@@ -290,6 +335,76 @@ export function ReferenceChapters() {
                 "Some sites reject unfamiliar browsers. Set the user agent to Desktop Chrome or Mobile Chrome so the audit looks like an ordinary visitor.",
             },
             {
+              term: "“The page could not be loaded”",
+              detail: (
+                <>
+                  Often a protected page answering the audit with a 401. Open{" "}
+                  <UiLabel>Authentication</UiLabel> in Run config and give it the credential — see{" "}
+                  <DocLink href="#authentication">chapter {docsPlate("authentication")}</DocLink>.
+                </>
+              ),
+            },
+            {
+              term: ".env credential ignored",
+              detail: (
+                <>
+                  <Code>LH_AUDIT_CREDENTIAL_HOSTS</Code> is missing. Without it the other audit
+                  credentials are inert by design, and the terminal prints a warning saying so. Add
+                  the hosts they belong to and restart.
+                </>
+              ),
+            },
+            {
+              term: "Can’t re-run an authenticated batch",
+              detail:
+                "Expected. The credential was never saved, so re-running it would audit signed out and quietly report the wrong scores. Set it up again in the Authentication panel, or move the value into .env so re-runs work.",
+            },
+            {
+              term: "Trace tab is empty",
+              detail: (
+                <>
+                  The run predates the feature, or it did not include Performance. Neither can be
+                  reconstructed — re-run the page. See{" "}
+                  <DocLink href="#trace">Trace &amp; filmstrip</DocLink>.
+                </>
+              ),
+            },
+            {
+              term: "“No stored report to diff”",
+              detail:
+                "What Changed reads both runs’ full reports, and one of the two has none on disk — usually a run whose report was deleted. The score and Core Web Vitals diff above it still works.",
+            },
+            {
+              term: "Alerts never fire",
+              detail: (
+                <>
+                  They are armed per schedule — the pencil on its card — not in Settings. The first
+                  firing of a schedule is always silent, since there is nothing to compare it with,
+                  and a category that failed to score says nothing rather than reporting a zero.
+                </>
+              ),
+            },
+            {
+              term: "npm run ci exits 2",
+              detail: (
+                <>
+                  That is a usage error, not a regression: bad flags, an unreadable config file, or
+                  no targets. The message names the problem. See{" "}
+                  <DocLink href="#ci">Budgets in CI</DocLink>.
+                </>
+              ),
+            },
+            {
+              term: "Agent audits aren’t in History",
+              detail: (
+                <>
+                  The MCP server is writing to a different archive from the app — almost always an{" "}
+                  <Code>LH_DATA_DIR</Code> the two do not agree on. See{" "}
+                  <DocLink href="#mcp">Your coding agent</DocLink>.
+                </>
+              ),
+            },
+            {
               term: "Port already in use",
               detail: (
                 <>
@@ -354,8 +469,26 @@ export function ReferenceChapters() {
 
         <H3>Can I audit a site that is not public?</H3>
         <P>
-          Anything your machine can reach, including a local development server. Pages behind a login
-          will be audited as a logged-out visitor sees them.
+          Anything your machine can reach, including a local development server. A page behind a
+          login is audited as a logged-out visitor sees it{" "}
+          <em>unless</em> you give the run a credential — basic auth, a session cookie or a preview
+          token — in the <DocLink href="#authentication">Authentication</DocLink> panel. The same
+          credential is used to crawl the site, so a protected staging environment can be discovered
+          and audited in one go.
+        </P>
+
+        <H3>Can I put this in my build pipeline?</H3>
+        <P>
+          Yes. <Code>npm run ci</Code> audits a list of pages against budgets and exits non-zero
+          when one misses, and every run it does joins the same archive as the app’s. See{" "}
+          <DocLink href="#ci">Budgets in CI</DocLink>.
+        </P>
+
+        <H3>Can my coding agent use it?</H3>
+        <P>
+          Yes — the app runs as an MCP server with four tools, so an agent can audit the page you
+          just changed and compare it against your own stored baselines. See{" "}
+          <DocLink href="#mcp">Your coding agent</DocLink>.
         </P>
 
         <H3>How many pages can one batch hold?</H3>

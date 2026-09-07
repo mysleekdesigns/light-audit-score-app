@@ -37,6 +37,7 @@ export const DOCS_GROUPS: readonly DocsGroupMeta[] = [
       { id: "audit-settings", label: "Audit settings" },
       { id: "accuracy", label: "Trustworthy numbers" },
       { id: "discovery", label: "Finding pages" },
+      { id: "authentication", label: "Behind a login" },
       { id: "pagespeed", label: "PageSpeed Insights" },
       { id: "agentic-browsing", label: "Agentic Browsing" },
     ],
@@ -53,9 +54,17 @@ export const DOCS_GROUPS: readonly DocsGroupMeta[] = [
     title: "Working with results",
     sections: [
       { id: "history", label: "History" },
+      { id: "trace", label: "Trace & filmstrip" },
       { id: "compare", label: "Compare & trends" },
       { id: "batches", label: "Batches & thresholds" },
       { id: "schedule", label: "Scheduled audits" },
+    ],
+  },
+  {
+    title: "Automation",
+    sections: [
+      { id: "ci", label: "Budgets in CI" },
+      { id: "mcp", label: "Your coding agent" },
     ],
   },
   {

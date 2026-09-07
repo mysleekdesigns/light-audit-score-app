@@ -1,8 +1,14 @@
 /**
- * Manual chapters 05–09: the run-config dials, how to get numbers you can
- * trust, finding pages to audit, the Google-hosted PageSpeed engine, and the
- * fifth category — which lands here, after both engines, because it is scored
- * on both and its caveats belong beside "Trustworthy numbers".
+ * Manual chapters 05–10: the run-config dials, how to get numbers you can
+ * trust, finding pages to audit, auditing a page that needs a credential, the
+ * Google-hosted PageSpeed engine, and the fifth category — which lands last,
+ * after both engines, because it is scored on both and its caveats belong
+ * beside "Trustworthy numbers".
+ *
+ * "Behind a login" sits between discovery and PageSpeed on purpose: one
+ * credential block feeds both the audit and the crawl (so it has to follow
+ * "Finding pages"), and PageSpeed cannot use it at all (so the chapter that
+ * says why reads better immediately after).
  */
 
 import {
@@ -17,6 +23,7 @@ import {
   SpecList,
   Step,
   Steps,
+  Terminal,
   UiLabel,
 } from "@/components/docs/docs-primitives";
 import { docsPlate } from "@/components/docs/sections";
@@ -303,6 +310,123 @@ export function AuditingChapters() {
           What you typed, which tab you were on, and what you selected are all kept if you navigate
           away and come back.
         </P>
+      </DocsSection>
+
+      <DocsSection
+        id="authentication"
+        index={docsPlate("authentication")}
+        title="Auditing behind a login"
+        lede="Staging sites, preview deployments and pages that need a session — audited with a credential the app holds for one batch and never writes down."
+      >
+        <P>
+          Every audit runs in a fresh, private copy of Chrome with no history, no extensions and
+          none of your logins, so by default it sees exactly what a signed-out stranger sees. That
+          is the right default, and it is the wrong one the moment the page you actually want to
+          measure is a staging box or a members’ area. The{" "}
+          <UiLabel>Authentication</UiLabel> panel is where you change it.
+        </P>
+        <P>
+          It sits inside <UiLabel>Run config</UiLabel> on the Lighthouse page, folded away until
+          you open it, with a status chip on the row that reads <Code>Off</Code>,{" "}
+          <Code>Basic +2</Code> or <Code>Check fields</Code> — so a run that is about to
+          authenticate never does so silently.
+        </P>
+
+        <H3>Three ways in</H3>
+        <SpecList
+          rows={[
+            {
+              term: "Basic auth",
+              value: "user + password",
+              detail: (
+                <>
+                  The browser pop-up an old-fashioned protected directory shows. Sent as an{" "}
+                  <Code>Authorization</Code> header. Leave both boxes blank if the site does not
+                  use it.
+                </>
+              ),
+            },
+            {
+              term: "Cookies",
+              value: "name / value pairs",
+              detail: (
+                <>
+                  For a session. Copy the pair out of your browser’s developer tools and paste it
+                  in. They are serialised into a single <Code>Cookie</Code> header; a value may
+                  not contain a semicolon or a line break.
+                </>
+              ),
+            },
+            {
+              term: "Request headers",
+              value: "name / value pairs",
+              detail: (
+                <>
+                  Anything else a protected environment expects — a preview token, a bypass
+                  header, a bearer. <Code>X-Preview-Token</Code> is the typical shape. Up to 32
+                  cookies and 32 headers.
+                </>
+              ),
+            },
+          ]}
+        />
+        <P>
+          Whatever you enter is used for the audit <em>and</em> for{" "}
+          <DocLink href="#discovery">Crawl site</DocLink> discovery, including the site’s{" "}
+          <Code>robots.txt</Code> and sitemap. A protected staging site can therefore be
+          discovered and then audited with one set of credentials, which is the order you would
+          actually work in.
+        </P>
+
+        <Callout tone="note" label="Nothing you type here is written down">
+          The credential is held in memory for that one batch and dies with the page. It never
+          reaches the database, a report file, a log, an export, or the AI. What the history record
+          keeps is the header and cookie <em>names</em>, so you can see what a run authenticated
+          with; every value is stored as <Code>[redacted]</Code>. The one visible consequence: a
+          stored authenticated batch cannot be re-run from History, because the values were never
+          saved — the app says so rather than quietly re-running it signed out.
+        </Callout>
+
+        <Callout tone="warn" label="The credential goes everywhere the page does">
+          Chrome applies these headers per <em>page</em>, not per origin, so they ride every
+          request the page makes — fonts, analytics, CDNs, any third party it loads. Confining
+          them would mean intercepting every request, which distorts the very timings this tool
+          exists to measure, so the app tells you instead. Use a credential scoped to the site
+          under audit: a staging or preview token rather than a production session cookie.
+        </Callout>
+
+        <H3>Values you use more than once</H3>
+        <P>
+          Typing a token into a panel is fine once. For a staging box you audit every week, put it
+          in <Code>.env</Code> instead — those are read inside the audit worker and never travel
+          through your browser at all.
+        </P>
+        <Terminal caption=".env">
+          {`LH_AUDIT_CREDENTIAL_HOSTS=staging.example.com,*.preview.example.com
+LH_AUDIT_BASIC_AUTH=name:secret
+LH_AUDIT_EXTRA_HEADERS={"X-Preview-Token":"…"}
+LH_AUDIT_COOKIES=session=…; csrf=…`}
+        </Terminal>
+        <Callout tone="warn" label="The host list is not optional">
+          Without <Code>LH_AUDIT_CREDENTIAL_HOSTS</Code>, the other three are ignored entirely and
+          the app prints a warning in the terminal saying so. A value in a file is ambient: it
+          would otherwise ride along on every audit you ever run, so a batch of thirty competitor
+          URLs would each be handed your staging password. An entry may carry a port
+          (<Code>box.local:8443</Code>) and may start with <Code>*.</Code> to cover subdomains
+          only — <Code>*.preview.example.com</Code> matches a preview build but not the apex
+          domain.
+        </Callout>
+        <P>
+          Anything typed into the panel layers over the file entry by entry, so you can keep a
+          long-lived token in <Code>.env</Code> and add a one-off cookie for a single batch.
+        </P>
+
+        <Callout tone="note" label="Two things that will not work">
+          A credential in the address itself — <Code>https://user:pass@example.com</Code> — is
+          refused, because the address is stored verbatim in your history and rendered on screen.
+          And PageSpeed has no Authentication panel at all: it runs on Google’s servers, which
+          cannot reach a page only your machine can.
+        </Callout>
       </DocsSection>
 
       <DocsSection

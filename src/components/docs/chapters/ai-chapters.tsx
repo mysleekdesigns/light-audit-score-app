@@ -1,5 +1,5 @@
 /**
- * Manual chapters 10–12: the AI score analysis, choosing which AI runs it, and
+ * Manual chapters 11–13: the AI score analysis, choosing which AI runs it, and
  * connecting a research server so the answers cite real pages.
  */
 
@@ -85,6 +85,14 @@ export function AiChapters() {
           instantly and costs nothing. Press <UiLabel>Re-analyze</UiLabel> to spend a fresh request
           on it, or <UiLabel>Stop</UiLabel> to abandon one mid-flight.
         </P>
+
+        <Callout tone="tip" label="The other question you can ask">
+          This one answers “why is this score low?”. On{" "}
+          <DocLink href="#compare">Compare</DocLink>, the What Changed card’s{" "}
+          <UiLabel>Explain</UiLabel> tab answers a different and often more useful one — “why did it
+          drop?” — by handing the AI the diff between two runs, so it accounts for the regression
+          rather than re-diagnosing the whole page.
+        </Callout>
 
         <Callout tone="warn" label="Nothing is configured out of the box">
           If the Analysis tab says <UiLabel>Bring your own AI</UiLabel>, no provider is set up yet.

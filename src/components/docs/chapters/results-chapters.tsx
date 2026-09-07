@@ -1,6 +1,12 @@
 /**
- * Manual chapters 13–16: the four pages that work with results you already have
- * — the archive, trends and diffs, batch summaries, and daily schedules.
+ * Manual chapters 14–18: working with results you already have — the archive,
+ * what a single run recorded while it loaded, trends and audit-level diffs,
+ * batch summaries and the client report, and daily schedules with their
+ * regression alerts.
+ *
+ * "Trace & filmstrip" is the one chapter here that is not a page: it is a tab
+ * inside a run, and it sits second because that is the reading order — find the
+ * run in History, then look inside it, then compare it with another.
  */
 
 import {
@@ -15,6 +21,7 @@ import {
   SpecList,
   Step,
   Steps,
+  Terminal,
   UiLabel,
 } from "@/components/docs/docs-primitives";
 import { docsPlate } from "@/components/docs/sections";
@@ -121,6 +128,72 @@ export function ResultsChapters() {
       </DocsSection>
 
       <DocsSection
+        id="trace"
+        index={docsPlate("trace")}
+        title="Trace & filmstrip"
+        lede="Every file the page fetched, and what the screen actually looked like while it loaded. Both were always in the report; this is where you can finally see them."
+      >
+        <P>
+          Open any finished result — <UiLabel>View →</UiLabel> in the live panel or in History —
+          and pick the <UiLabel>Trace</UiLabel> tab, beside <UiLabel>Report</UiLabel> and{" "}
+          <UiLabel>Analysis</UiLabel>. Nothing extra was measured to produce it: every audit has
+          always recorded this, and Google’s own report never shows it.
+        </P>
+
+        <H3>The filmstrip</H3>
+        <P>
+          Screenshots taken through the load, laid out against a time axis with each frame’s
+          capture time underneath. The frame where the largest element finished painting carries an{" "}
+          <Code>LCP</Code> badge, and the heading repeats that time as a number — so “the LCP
+          happened at 2.4 s” never depends on spotting a mark. Click any frame to enlarge it,
+          because a thumbnail tells you something was painting but not what a visitor could
+          actually read at 1.2 seconds.
+        </P>
+
+        <H3>The waterfall</H3>
+        <P>
+          Four figures across the top — <UiLabel>Requests</UiLabel>,{" "}
+          <UiLabel>Transferred</UiLabel>, <UiLabel>Third-party</UiLabel> and{" "}
+          <UiLabel>Timeline</UiLabel> — then one row per request.
+        </P>
+        <List>
+          <LI>
+            Columns for the request, its type, its size, a bar showing when it started and how long
+            it took, and that duration as a figure. Click any heading to sort; the order Lighthouse
+            recorded is always recoverable.
+          </LI>
+          <LI>
+            Two marks worth hunting for. <Code>RB</Code> means render-blocking — the page could not
+            paint until that file arrived. <Code>3P</Code> means third-party, something served by
+            somebody other than the site itself. Both are words, not just bar colours.
+          </LI>
+          <LI>
+            The total transferred here is the same number Lighthouse reports as the page weight, so
+            it can be checked against the full report rather than taken on trust.
+          </LI>
+        </List>
+        <Callout tone="note" label="The rows are deliberately not links">
+          A page under audit chooses its own subresource addresses, and a hostile one would be
+          choosing what a hundred clickable links in your browser point at. The full address is on
+          hover instead.
+        </Callout>
+
+        <H3>It is read only when you ask for it</H3>
+        <P>
+          A stored report is often 0.7–1.5 MB, so nothing is read until you open the tab — History
+          stays exactly as fast as it was — and your browser is only ever sent the small extract,
+          never the report itself. Once read it is remembered for that run, so switching to
+          Analysis and back costs nothing.
+        </P>
+        <Callout tone="warn" label="Older runs have no trace">
+          A run audited before this feature existed shows an empty state saying so rather than an
+          error; the data was never stored and cannot be reconstructed. Re-run the page to capture
+          it. A run that did not include the Performance category has no filmstrip either — that is
+          the audit the frames come from.
+        </Callout>
+      </DocsSection>
+
+      <DocsSection
         id="compare"
         index={docsPlate("compare")}
         title="Compare & trends"
@@ -171,6 +244,66 @@ export function ResultsChapters() {
           If a page has both local and PageSpeed audits, Compare warns you before you diff one
           against the other. They were measured on different hardware, so the difference is not only
           the page.
+        </Callout>
+
+        <H3>What Changed — why the score moved</H3>
+        <P>
+          The two tables above tell you Performance fell eight points. The third card tells you
+          which eight points. It uses the same <UiLabel>Baseline</UiLabel> and{" "}
+          <UiLabel>Comparison</UiLabel> pickers, and it waits to be asked — press{" "}
+          <UiLabel>Show what changed</UiLabel>, because answering means reading both stored reports
+          in full, where everything above was already on the page.
+        </P>
+        <P>
+          Four figures lead: how many individual checks moved, how the opportunities changed, and
+          how the request count and total transfer differ. Then four tabs.
+        </P>
+        <SpecList
+          rows={[
+            {
+              term: "Audits",
+              detail:
+                "Every individual Lighthouse check that moved, tallied as regressed, improved, and present-on-one-side-only. The ones that did not move — usually around 150 of them — are counted and not listed, which is what makes the short list believable.",
+            },
+            {
+              term: "Opportunities",
+              detail:
+                "Ranked by how much the estimated saving changed, biggest regression first. An opportunity that appeared on only one of the two runs is still shown, which is normally the whole point.",
+            },
+            {
+              term: "Requests",
+              detail:
+                "What the page fetched that it did not before, what it stopped fetching, and what grew. Totals lead the tab, then the rows whose size actually changed.",
+            },
+            {
+              term: "Explain",
+              detail: (
+                <>
+                  Hands that diff to your AI so it explains <em>this change</em> rather than
+                  re-diagnosing the page from scratch. See{" "}
+                  <DocLink href="#ai-analysis">Ask why a score is low</DocLink>.
+                </>
+              ),
+            },
+          ]}
+        />
+        <Callout tone="note" label="Expect churn in the request list">
+          Analytics and advertising beacons put a fresh session id in their address on every load,
+          so two runs of an unchanged page can show a dozen requests “added” and a dozen “removed”
+          that are really the same requests. The totals at the top do not move with that, and the
+          rows whose size changed sort first — read those.
+        </Callout>
+        <Callout tone="tip" label="The shortcut from a re-run">
+          On <DocLink href="/batches">Batches</DocLink>, a card that repeated an earlier batch
+          carries a <Code>↻ re-run of …</Code> chip with a <UiLabel>what changed</UiLabel> link
+          beside it. It lands here with the right pair already chosen — matched on the same page and
+          the same device, and pointing at whichever page lost the most points — and the card
+          already open.
+        </Callout>
+        <Callout tone="note">
+          An explanation is generated fresh each time and is not saved. It never replaces the run’s
+          own stored analysis, so asking “why did this drop?” here cannot overwrite “why is this
+          score low?” there.
         </Callout>
       </DocsSection>
 
@@ -249,8 +382,8 @@ export function ResultsChapters() {
           Print it from the browser (<Code>⌘P</Code>) and it switches to a light, ink-sane layout
           made for paper rather than the dark console you see on screen. Choose{" "}
           <UiLabel>Save as PDF</UiLabel> and you have a client-ready document with no extra tool
-          involved. To put your own name on it, fill in{" "}
-          <UiLabel>Report branding</UiLabel> on the Settings page.
+          involved. To put your own name on it, fill in <UiLabel>Report header</UiLabel> on the
+          Settings page — a title, a strapline, a logo and whether to print the date.
         </P>
 
         <H3>Check it before you send it</H3>
@@ -340,6 +473,100 @@ export function ResultsChapters() {
           Pressing <UiLabel>Run now</UiLabel> afterwards picks up from where it stopped rather than
           starting over. The daily cadence keeps firing either way — to stop a schedule recurring,
           delete it.
+        </Callout>
+
+        <H3>Regression alerts</H3>
+        <P>
+          A schedule that runs every night is only half a monitor. The other half is being told
+          when something moved. Each schedule can compare every firing with the one before it and
+          report what crossed — on its own card, and optionally into a chat channel.
+        </P>
+        <P>
+          Alerts are armed per schedule, not globally: press the pencil ({" "}
+          <UiLabel>Edit schedule</UiLabel> ) on a card and switch{" "}
+          <UiLabel>Alerts</UiLabel> on. They are off by default, so updating the app never starts
+          anything talking on a schedule nobody armed.
+        </P>
+        <SpecList
+          rows={[
+            {
+              term: "Watched categories",
+              value: "all five",
+              detail: "Which of the five scores this schedule pays attention to.",
+            },
+            {
+              term: "Minimum drop",
+              value: "5 points",
+              detail:
+                "A fall of this many points is reported even when it crosses no bar. Lighthouse drifts a couple of points between identical runs, so a lower number is a noisier one.",
+            },
+            {
+              term: "Pass bars",
+              value: "copied on arming",
+              detail: (
+                <>
+                  The thresholds a crossing is measured against. They are copied from your{" "}
+                  <DocLink href="#batches">Batches</DocLink> thresholds the moment you arm alerts,
+                  and the schedule owns its copy from then on — a scheduler firing at 03:00 has no
+                  browser to read your settings from, and dragging a dial to eyeball one batch must
+                  not silently re-arm a monitor you configured months ago. The dialog prints the
+                  bars it is using.
+                </>
+              ),
+            },
+          ]}
+        />
+
+        <H3>What it reports</H3>
+        <List>
+          <LI>
+            <strong className="font-medium text-foreground">Crossed below</strong> — a score fell
+            through its pass bar. The event names the bar it crossed.
+          </LI>
+          <LI>
+            <strong className="font-medium text-foreground">Recovered</strong> — it climbed back
+            over a bar it was under. Recoveries are reported as loudly as regressions, which is the
+            point: you want to know the fix landed.
+          </LI>
+          <LI>
+            <strong className="font-medium text-foreground">Dropped</strong> — a slide of at least
+            your minimum that crossed nothing. It prints no bar, because there was none.
+          </LI>
+        </List>
+        <P>
+          Mobile and desktop are compared separately, a page is only ever compared with itself, and
+          each score produces at most one event — a crossing is never also reported as a slide.
+          Nothing crossing means nothing is said.
+        </P>
+        <Callout tone="note" label="Silence is not always agreement">
+          The very first firing of a new schedule never alerts: there is nothing to compare it
+          against, and the card says so rather than claiming all is well. A category that failed to
+          score is also silence rather than a zero — otherwise one flaky night would report every
+          category of every page as collapsed.
+        </Callout>
+
+        <H3>Where alerts appear</H3>
+        <P>
+          On the schedule’s own card, always. The telemetry row shows{" "}
+          <Code>Alerts · Armed · 5/5 categories · ≥5pt</Code> or <Code>Disarmed</Code>, and an{" "}
+          <UiLabel>Alerts</UiLabel> strip underneath lists recent events — the before and after
+          scores, the change, the bar, the category, the device and the page. Each row is tagged{" "}
+          <Code>sent</Code> or <Code>in-app</Code> depending on whether a webhook took it.
+        </P>
+        <P>
+          To be told without opening the app, add a Slack or Discord incoming webhook to{" "}
+          <Code>.env</Code> and restart. The body is Slack-compatible; a Discord webhook works if
+          you append <Code>/slack</Code> to it.
+        </P>
+        <Terminal caption=".env">
+          {`LH_ALERT_WEBHOOK_URL=https://your-chat-host.example/webhook/id`}
+        </Terminal>
+        <Callout tone="note">
+          Anyone holding that address can post into your channel, so it is treated as a credential:
+          it lives in <Code>.env</Code> only, never in a schedule, and Settings reports nothing
+          beyond whether one is present. A delivery that fails is logged without the address and
+          never fails the audit — the event is still recorded on the card, tagged{" "}
+          <Code>in-app</Code>.
         </Callout>
 
         <H3>Run history</H3>

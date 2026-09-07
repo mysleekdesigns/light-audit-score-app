@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Compass, Cpu, Gauge } from "lucide-react";
+import { Compass, Cpu, Gauge, TerminalSquare } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
 import { DocsChapters } from "@/components/docs/docs-chapter";
@@ -9,16 +9,17 @@ import { StartChapters } from "@/components/docs/chapters/start-chapters";
 import { AuditingChapters } from "@/components/docs/chapters/auditing-chapters";
 import { AiChapters } from "@/components/docs/chapters/ai-chapters";
 import { ResultsChapters } from "@/components/docs/chapters/results-chapters";
+import { AutomationChapters } from "@/components/docs/chapters/automation-chapters";
 import { ReferenceChapters } from "@/components/docs/chapters/reference-chapters";
 import { DOCS_SECTIONS } from "@/components/docs/sections";
 
 export const metadata: Metadata = {
   title: "Documentation — LightAudit Score",
   description:
-    "How to use LightAudit Score: running audits, reading the scores, AI analysis with Claude or a local Ollama model, schedules, and where your data lives.",
+    "How to use LightAudit Score: running audits, auditing behind a login, reading the scores and the request waterfall, AI analysis with Claude or a local Ollama model, schedules and regression alerts, CI budgets, the MCP server, and where your data lives.",
 };
 
-/** The three things a first-time reader most often wants to do. */
+/** The four things a first-time reader most often wants to do. */
 const ENTRY_POINTS = [
   {
     href: "#first-audit",
@@ -41,6 +42,13 @@ const ENTRY_POINTS = [
     title: "Trustworthy numbers",
     detail: "Why a fast laptop flatters a page, and the one button that fixes it.",
   },
+  {
+    href: "#ci",
+    icon: TerminalSquare,
+    kicker: "Automation",
+    title: "CI and your agent",
+    detail: "The same engine as a build gate, and as a tool your coding agent drives.",
+  },
 ] as const;
 
 /**
@@ -51,7 +59,7 @@ const ENTRY_POINTS = [
  * into. Two small islands hydrate over it — the contents rail, which needs an
  * observer to know which chapter you are in, and the chapter shell, which turns
  * the chapters into a single-open accordion below `xl`, where the rail cannot
- * sit beside the text and twenty full chapters would be a very long scroll.
+ * sit beside the text and two dozen full chapters would be a very long scroll.
  * Both fall back to something usable before they hydrate: a native `<details>`
  * for the rail, and CSS alone for which chapter is open.
  *
@@ -72,9 +80,11 @@ export default function DocumentationPage() {
         </span>
       </PageHeader>
 
-      {/* Three doors in, for the reader who arrived with a specific question and
-          would otherwise have to parse a twenty-item contents list first. */}
-      <ul role="list" className="grid list-none gap-3 p-0 sm:grid-cols-3">
+      {/* Four doors in, for the reader who arrived with a specific question and
+          would otherwise have to parse a twenty-five-item contents list first.
+          Two-up before it is four-up, because four cards on a tablet leaves each
+          one too narrow for its sentence. */}
+      <ul role="list" className="grid list-none gap-3 p-0 sm:grid-cols-2 xl:grid-cols-4">
         {ENTRY_POINTS.map(({ href, icon: Icon, kicker, title, detail }) => (
           <li key={href} className="min-w-0">
             <Link
@@ -105,6 +115,7 @@ export default function DocumentationPage() {
             <AuditingChapters />
             <AiChapters />
             <ResultsChapters />
+            <AutomationChapters />
             <ReferenceChapters />
 
             <footer className="mt-8 border-t border-border/60 pt-6 xl:mt-0">
