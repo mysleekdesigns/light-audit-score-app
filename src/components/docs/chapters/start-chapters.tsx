@@ -63,11 +63,12 @@ export function StartChapters() {
             },
             {
               term: "PageSpeed Insights",
-              value: "Google-hosted",
+              value: "Google-hosted · online only",
               detail: (
                 <>
                   Runs on Google’s servers under fixed conditions, so nothing about your laptop can
-                  influence the number. It also returns{" "}
+                  influence the number. Because every audit is a request to Google, it only works
+                  while you are online. It also returns{" "}
                   <strong className="font-medium text-foreground">real-world data</strong> from
                   people who actually visited the page. Results are badged <Code>PSI</Code>. Use it
                   for the number you would quote to someone else.
@@ -161,8 +162,8 @@ npm start`}
               value: "PAGESPEED_API_KEY",
               detail: (
                 <>
-                  Needed only for the PageSpeed page. Free from Google. See{" "}
-                  <DocLink href="#pagespeed">PageSpeed Insights</DocLink>.
+                  Needed only for the PageSpeed page, which is online-only. Free from Google.
+                  See <DocLink href="#pagespeed">PageSpeed Insights</DocLink>.
                 </>
               ),
             },

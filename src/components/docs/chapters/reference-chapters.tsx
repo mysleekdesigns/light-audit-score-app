@@ -40,7 +40,8 @@ export function ReferenceChapters() {
               value: "read-only",
               detail: (
                 <>
-                  Whether a Google key is present. Set it in <Code>.env</Code> and restart. See{" "}
+                  Whether a Google key is present. Set it in <Code>.env</Code> and restart. The
+                  PageSpeed page it unlocks only works online. See{" "}
                   <DocLink href="#pagespeed">PageSpeed Insights</DocLink>.
                 </>
               ),
@@ -184,8 +185,8 @@ export function ReferenceChapters() {
         <List>
           <LI>The pages you audit are fetched, exactly as a browser would fetch them.</LI>
           <LI>
-            PageSpeed audits are requests to Google, so the addresses you audit are sent to Google.
-            Local Lighthouse audits are not.
+            PageSpeed audits are requests to Google, so they only work online and the addresses you
+            audit are sent to Google. Local Lighthouse audits send nothing to Google.
           </LI>
           <LI>
             AI analysis sends the audit data to whichever provider you chose. With Ollama that is
@@ -250,10 +251,11 @@ export function ReferenceChapters() {
               term: "PageSpeed fails",
               detail: (
                 <>
-                  Almost always a missing key — the anonymous quota is zero, so it fails instantly.
-                  Add <Code>PAGESPEED_API_KEY</Code> and restart. If the key is set and it still
-                  fails, the PageSpeed Insights API is probably not enabled on that key’s Google
-                  Cloud project.
+                  PageSpeed only works online, so check your connection first — offline, every
+                  run fails. Otherwise it is almost always a missing key — the anonymous quota is
+                  zero, so it fails instantly. Add <Code>PAGESPEED_API_KEY</Code> and restart. If
+                  the key is set and it still fails, the PageSpeed Insights API is probably not
+                  enabled on that key’s Google Cloud project.
                 </>
               ),
             },
@@ -456,8 +458,17 @@ export function ReferenceChapters() {
 
         <H3>Which engine should I quote?</H3>
         <P>
-          PageSpeed, because your hardware plays no part in it and it includes real visitors. Use
-          local Lighthouse while you are working, when you want fast feedback and full control.
+          PageSpeed, because your hardware plays no part in it and it includes real visitors. It
+          only works online, though. Use local Lighthouse while you are working, when you want fast
+          feedback, full control, and no dependence on a connection.
+        </P>
+
+        <H3>Does PageSpeed work offline?</H3>
+        <P>
+          No. Every PageSpeed audit is a request to Google’s servers, so it is online-only: it needs
+          an internet connection, and Google must be able to reach the page. Local Lighthouse
+          audits run entirely on your machine and audit anything it can reach, with or without an
+          internet connection.
         </P>
 
         <H3>Does any of this cost money?</H3>
@@ -474,7 +485,8 @@ export function ReferenceChapters() {
           <em>unless</em> you give the run a credential — basic auth, a session cookie or a preview
           token — in the <DocLink href="#authentication">Authentication</DocLink> panel. The same
           credential is used to crawl the site, so a protected staging environment can be discovered
-          and audited in one go.
+          and audited in one go. This is the local engine only: PageSpeed is online-only and runs on
+          Google’s servers, so it can reach only what the internet can.
         </P>
 
         <H3>Can I put this in my build pipeline?</H3>

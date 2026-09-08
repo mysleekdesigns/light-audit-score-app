@@ -32,9 +32,11 @@ everything else is optional (see [Setup](#setup)).
   tool/schema coverage, `llms.txt`, layout stability — scored beside the classic four, on both the
   local and the PageSpeed engine.
 
-This is **local lab data only** — no PageSpeed Insights / CrUX field data. It uses the *same*
-`lighthouse` engine (v13) that PageSpeed Insights runs, so the local scores are legitimate
-lab measurements.
+The local engine produces **lab data only** and runs entirely on your machine, using the *same*
+`lighthouse` engine (v13) that PageSpeed Insights runs, so its scores are legitimate lab
+measurements. The PageSpeed engine (the `/pagespeed` page) adds CrUX field data from real visitors,
+but it is **online only**: every audit is a request to Google's hosted API, so it needs an internet
+connection and cannot run offline.
 
 For the full design rationale and phased build history, see [`PRD.md`](./PRD.md).
 
@@ -75,9 +77,10 @@ Copy `.env.example` to `.env` and fill in what you need — everything is option
 cp .env.example .env
 ```
 
-**PageSpeed Insights** (the `/pagespeed` page) calls Google's hosted API and needs an API key —
-keyless PSI is now capped at a **0 daily quota** (instant HTTP 429). With a key you get the free tier's
-25,000 requests/day (~240/min):
+**PageSpeed Insights** (the `/pagespeed` page) is **online only** — every audit is a request to
+Google's hosted API, so it needs an internet connection and never works offline. It also needs an
+API key — keyless PSI is now capped at a **0 daily quota** (instant HTTP 429). With a key you get the
+free tier's 25,000 requests/day (~240/min):
 
 ```bash
 # .env
@@ -483,7 +486,8 @@ agent does on Friday.
   Web Vitals (LCP, CLS, TBT, FCP, SI, TTI), and open the stored full HTML report from the detail
   view.
 - **PageSpeed** — the same paste/crawl input, but audited by **Google PageSpeed Insights** (hosted
-  Lighthouse, no local Chrome). Adds **real-world Core Web Vitals** from the Chrome UX Report (CrUX),
+  Lighthouse, no local Chrome — **online only**, since every audit is a request to Google). Adds
+  **real-world Core Web Vitals** from the Chrome UX Report (CrUX),
   shown per-URL and per-origin with distribution bars, alongside Google's lab scores. Reuses the same
   live results grid, History, and daily-schedule machinery as the local engine (PSI runs carry a
   cyan **PSI** badge in History).

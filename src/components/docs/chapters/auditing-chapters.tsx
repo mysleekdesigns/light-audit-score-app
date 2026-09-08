@@ -206,7 +206,7 @@ export function AuditingChapters() {
           Mobile, simulated throttling, calibrated multiplier, accuracy mode on, three or five runs.
           Slower, but as steady as a local measurement gets. For a number to quote to someone
           outside your team, use the <DocLink href="#pagespeed">PageSpeed</DocLink> engine instead —
-          your hardware plays no part in it.
+          it only works online, but your hardware plays no part in it.
         </Callout>
       </DocsSection>
 
@@ -424,8 +424,8 @@ LH_AUDIT_COOKIES=session=…; csrf=…`}
         <Callout tone="note" label="Two things that will not work">
           A credential in the address itself — <Code>https://user:pass@example.com</Code> — is
           refused, because the address is stored verbatim in your history and rendered on screen.
-          And PageSpeed has no Authentication panel at all: it runs on Google’s servers, which
-          cannot reach a page only your machine can.
+          And PageSpeed has no Authentication panel at all: it is online-only and runs on Google’s
+          servers, which cannot reach a page only your machine can.
         </Callout>
       </DocsSection>
 
@@ -433,7 +433,7 @@ LH_AUDIT_COOKIES=session=…; csrf=…`}
         id="pagespeed"
         index={docsPlate("pagespeed")}
         title="PageSpeed Insights"
-        lede="The same audit, run on Google’s hardware instead of yours — plus data from real people who visited the page."
+        lede="The same audit, run on Google’s hardware instead of yours — plus data from real people who visited the page. Online only."
       >
         <P>
           The <DocLink href="/pagespeed">PageSpeed</DocLink> page works exactly like the Lighthouse
@@ -453,6 +453,13 @@ LH_AUDIT_COOKIES=session=…; csrf=…`}
             which no local audit can tell you.
           </LI>
         </List>
+
+        <Callout tone="warn" label="Online only">
+          Every PageSpeed audit is a request to Google’s servers, so this page only works while
+          your machine has an internet connection. Nothing about it runs offline — not a single
+          run, not a scheduled batch — and the page you audit must be reachable from the internet,
+          because Google fetches it, not you. Local Lighthouse audits have neither requirement.
+        </Callout>
 
         <H3>You need a free API key</H3>
         <P>

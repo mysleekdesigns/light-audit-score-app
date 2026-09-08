@@ -19,7 +19,7 @@ export default async function PageSpeedPage({
       <PageHeader
         kicker="02 — PageSpeed"
         title="PageSpeed Insights"
-        description="Audit URLs with Google's hosted Lighthouse and read real-world Core Web Vitals from the Chrome UX Report. Google runs the analysis — no local Chrome — and returns lab scores alongside field data."
+        description="Audit URLs with Google's hosted Lighthouse and read real-world Core Web Vitals from the Chrome UX Report. Google runs the analysis — no local Chrome, online only — and returns lab scores alongside field data."
       />
       <PageSpeedConsole initialBatchId={initialBatchId} />
     </div>

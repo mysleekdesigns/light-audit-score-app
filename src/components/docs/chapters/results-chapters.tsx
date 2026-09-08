@@ -426,7 +426,8 @@ export function ResultsChapters() {
           Schedules are created from the audit form, not from the Schedule page. Set up the pages
           and settings you want repeated, then press <UiLabel>Save as daily</UiLabel> in the run
           config footer. It is on both the Lighthouse and the PageSpeed page, so a schedule can use
-          either engine.
+          either engine. A PageSpeed schedule needs the machine to be online when it fires, because
+          PageSpeed only works online.
         </P>
         <Steps>
           <Step title="Name it">

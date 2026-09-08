@@ -210,7 +210,9 @@ Lighthouse engine.
 - Clean dashboard UI: live progress, score rings, Core Web Vitals, drill-down reports.
 
 **Non-goals**
-- No PageSpeed Insights / CrUX field data (local lab data only).
+- ~~No PageSpeed Insights / CrUX field data (local lab data only).~~ *Superseded in a later phase:
+  a PageSpeed Insights engine (`/pagespeed`) was added. It is **online only** — every audit is a
+  request to Google's hosted API — while the local engine remains lab data only.*
 - Not a hosted/multi-user SaaS — single-user local tool.
 
 ## 3. Research findings that shaped this design

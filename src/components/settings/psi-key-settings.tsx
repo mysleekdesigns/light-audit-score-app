@@ -67,8 +67,9 @@ export function PsiKeySettings() {
 
       <div className="flex flex-col gap-5 px-5 py-5">
         <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
-          PageSpeed audits call Google&apos;s hosted API, which needs your own free
-          API key (the keyless quota is effectively zero). Create one in the{" "}
+          PageSpeed audits call Google&apos;s hosted API — so they only work online — and
+          need your own free API key (the keyless quota is effectively zero). Create one in
+          the{" "}
           <a
             href="https://developers.google.com/speed/docs/insights/v5/get-started#APIKey"
             target="_blank"
