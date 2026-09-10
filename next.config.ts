@@ -3,6 +3,27 @@ import type { NextConfig } from "next";
 import { CLIENT_REPORT_CSP, HTML_REPORT_CSP } from "./src/lib/http/reportCsp";
 
 const nextConfig: NextConfig = {
+  /**
+   * Hosts `next dev` will serve its DEV-ONLY resources to (HMR socket, dev
+   * overlay). Development-only — it has no effect on `next build` / `npm start`,
+   * and it does not widen the request gate in `src/proxy.ts`, which still
+   * decides who may reach the app's own routes in every mode.
+   *
+   * Next blocks cross-origin access to dev resources for any host outside its
+   * built-in list — `localhost`, `**.localhost`, and the `--hostname` the dev
+   * server was started with, which plain `npm run dev` does not pass. Matching
+   * is by hostname, so `127.0.0.1` was refused while `localhost` was not, even
+   * though both name this machine. `scripts/start.mjs`
+   * prints a `http://127.0.0.1:<port>/?token=…` link, so that is the address
+   * this app trains you to open — and on `next dev` it was silently a DIFFERENT
+   * origin from `localhost`: the HMR WebSocket was refused, the client never
+   * finished bootstrapping, and the page rendered but never hydrated. Every
+   * control (the Crawl site tab, Discover, the run buttons) was dead, while the
+   * same page on `localhost` worked. Both loopback spellings are listed so the
+   * dev server behaves the same whichever one you type.
+   */
+  allowedDevOrigins: ["127.0.0.1", "localhost", "[::1]"],
+
   // Lighthouse, chrome-launcher and better-sqlite3 are native / ESM-heavy packages
   // that must NOT be bundled by Next — they run in the Node runtime only.
   // See PRD §5 ("Critical Next.js config").
