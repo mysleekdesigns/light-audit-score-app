@@ -27,6 +27,8 @@ export const metadata: Metadata = {
   title: "LightAudit Score",
   description:
     "An instrument for measuring Lighthouse scores across one or many pages: median-of-N runs, bounded concurrency, persisted history.",
+  metadataBase: new URL("https://lightauditscore.com/"),
+  applicationName: "LightAudit Score",
 };
 
 export default function RootLayout({

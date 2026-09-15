@@ -9,7 +9,8 @@
  * Relocating the data dir:
  *   - LH_DATA_DIR  → set this to keep audit data outside the project directory
  *                    (e.g. ~/Library/Application Support/LightAudit on macOS)
- *   - LH_MIGRATIONS_DIR → path to drizzle/ inside app.asar (set by main process)
+ *   - LH_MIGRATIONS_DIR → explicit path to the drizzle/ folder, for the rare
+ *     case of running from a directory that is not the repo root.
  *     Falls back to process.cwd()/drizzle when not set (dev / next start).
  *   Never write inside the install directory.
  */
@@ -36,8 +37,7 @@ export function getDbPath(): string {
  *
  * Resolution order:
  *   1. LH_MIGRATIONS_DIR env var — an explicit override pointing at the
- *      drizzle/ folder inside app.asar (accessible as a plain path even inside
- *      the ASAR because drizzle just reads SQL files, no fork/dlopen needed).
+ *      drizzle/ folder, for a process whose cwd is not the repo root.
  *   2. process.cwd()/drizzle — dev / next start from the repo root.
  *
  * Tests can override via LH_MIGRATIONS_DIR pointing at a temp copy of the

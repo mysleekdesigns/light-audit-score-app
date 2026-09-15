@@ -186,7 +186,7 @@ describe("redactCredentialParams", () => {
 
   it("covers presigned-asset signatures, which is how a sensitive URL usually arrives", () => {
     const signed =
-      "https://b.s3.amazonaws.com/k.png?X-Amz-Signature=deadbeef&X-Amz-Expires=900";
+      "https://assets.example.com/k.png?X-Amz-Signature=deadbeef&X-Amz-Expires=900";
     expect(redactCredentialParams(signed)).toContain("X-Amz-Signature=[redacted]");
     // Not a credential — it is metadata, and blanking it would say less truthfully.
     expect(redactCredentialParams(signed)).toContain("X-Amz-Expires=900");

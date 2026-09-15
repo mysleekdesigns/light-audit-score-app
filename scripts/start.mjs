@@ -68,9 +68,9 @@ function localBin(name) {
 const nextBin = localBin("next");
 
 if (!hasProductionBuild()) {
-  console.log("[LightAudit] No production build found — building once (this takes a minute)…\n");
+  console.log("[LightAudit Score] No production build found — building once (this takes a minute)…\n");
   await run([nextBin, "build"]);
-  console.log("\n[LightAudit] Build complete.\n");
+  console.log("\n[LightAudit Score] Build complete.\n");
 }
 
 // Next loads `.env` into the server itself; this script needs a few of the
@@ -90,7 +90,7 @@ let source;
 try {
   ({ token, source } = resolveSessionToken({ env: process.env, dotEnv, dataDir }));
 } catch (err) {
-  console.error(`[LightAudit] ${err instanceof Error ? err.message : String(err)}`);
+  console.error(`[LightAudit Score] ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 }
 
@@ -113,11 +113,11 @@ const tokenNote =
       ? `from ${path.relative(root, dataDir) || "."}/session-token`
       : `generated → ${path.relative(root, dataDir) || "."}/session-token`;
 
-console.log(`[LightAudit] Starting on http://${host}:${port}  (session token ${tokenNote})`);
-console.log(`[LightAudit] Open the app with this link — it sets your session cookie:\n\n    ${link}\n`);
+console.log(`[LightAudit Score] Starting on http://${host}:${port}  (session token ${tokenNote})`);
+console.log(`[LightAudit Score] Open the app with this link — it sets your session cookie:\n\n    ${link}\n`);
 if (!loopback) {
   console.log(
-    `[LightAudit] Bound to ${host}: requests are only answered for Host headers ` +
+    `[LightAudit Score] Bound to ${host}: requests are only answered for Host headers ` +
       `${allowedHosts ? `in: ${allowedHosts}` : "on loopback — set LH_ALLOWED_HOSTS for others"}.\n`,
   );
 }

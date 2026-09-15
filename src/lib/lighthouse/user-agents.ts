@@ -1,7 +1,7 @@
 /**
  * User-agent presets for the optional `emulatedUserAgent` parity lever.
  *
- * Bot-sensitive sites (e.g. Cloudflare-fronted apps like example.com) can serve
+ * Sites behind a bot-protection layer can serve
  * different content to an automated/headless engine, which shifts the
  * environment-sensitive Best Practices audits. Pinning the page UA to a real
  * desktop/mobile Chrome makes the site serve the same markup a developer's

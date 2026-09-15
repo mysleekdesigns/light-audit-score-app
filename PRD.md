@@ -1,4 +1,4 @@
-# PRD — Local Lighthouse Auditing Tool
+# PRD — LightAudit Score
 
 > **Status (Phase 16):** Phase 16 complete — **all 17 phases (0–16) are done.** A completed Lighthouse or
 > PageSpeed run on the console now has explicit dismissal controls: **Archive** (remove from the console,
@@ -41,12 +41,11 @@
 > dark "precision-instrument" visual design **untouched** (the cooled `oklch(0.165 …)` palette, cyan
 > primary, green/amber/red score bands, Archivo + JetBrains-Mono with tabular figures, hairline 9%
 > borders, instrument-grid texture) and only reclaims wasted screen space + borrows proven tools from
-> swing's dense Lighthouse console. Scope: a toggleable **dense results table** (one row per URL,
+> a reference dense Lighthouse console. Scope: a toggleable **dense results table** (one row per URL,
 > compact score pills) alongside the ring cards, a **compact control bar**, true **full-bleed**
 > wide-screen layouts, **Desktop + Mobile paired** audits, one-click **re-run / regenerate**, **crawl
 > exclude-paths + max-count**, and a scheduled **daily archive**. Detailed checklists in §6
-> (Phases 11–14). (The swing layout was analysed from a full-page screenshot — its live site blocks
-> automated fetch behind an invalid-cert-authority, so crawl/stealth/fetch all failed.)
+> (Phases 11–14). (The reference layout was studied from a single full-page screenshot.)
 
 > **Status:** Phase 14 complete — **all 15 phases (0–14) are done.** The **Scheduled daily archive** layer adds a tiny
 > `globalThis`-pinned scheduler that fires saved targets through the *existing* `AuditQueue.createBatch` path (no new
@@ -707,7 +706,7 @@ Results are durably persisted to SQLite + disk, so nothing is lost on restart.
 > palette (`--background oklch(0.165 …)`), cyan primary, the green/amber/red **score bands**, Archivo +
 > JetBrains-Mono with `tabular-nums`, hairline (9%) borders, and the instrument-grid texture. No new
 > colours, fonts, or generic "shadcn-default" surfaces. We only reclaim wasted horizontal/vertical
-> space and add proven tools observed on swing's dense Lighthouse console. All four phases reuse the
+> space and add proven tools observed on a reference dense Lighthouse console. All four phases reuse the
 > existing seams (`AuditOptions` → `CreateBatchInput` → persisted `runs`; the `/api/discover` +
 > `/api/audits` routes; the `useAuditDefaults` store) — no new architecture beyond Phase 14's local
 > scheduler. Per CLAUDE.md, UI work here MUST invoke **frontend-design** (drives the visuals) +
@@ -717,7 +716,7 @@ Results are durably persisted to SQLite + disk, so nothing is lost on restart.
 **Why:** the canvas is already full-width (commit `c53671f`) but the *content* stays sparse — live
 results cap at `sm:grid-cols-2` ring cards (~400 px, only 2-across on a 1600 px+ monitor), the
 New-Audit form is a tall 2:1 `lg:grid-cols-3` panel with a ~440 px right rail, and History / Compare /
-Batches are single-column stacks. Make the content as dense as swing's, in *our* theme.
+Batches are single-column stacks. Make the content as dense as that reference, in *our* theme.
 
 - [x] **Score-pill primitive** (`src/components/audit/score-pill.tsx`): a small rounded mono chip — a
       dense counterpart to `score-ring.tsx` — reusing the *existing* 0–49 / 50–89 / 90–100 band logic
@@ -759,7 +758,7 @@ Batches are single-column stacks. Make the content as dense as swing's, in *our*
       *Done: batch cards now flow `xl:grid-cols-2 2xl:grid-cols-3`; the trend chart height capped (`h-64`→`h-56`)
       and the compare Trend/Diff cards sit side-by-side on `xl`; History rows densified (`py-2 leading-tight`,
       sticky header) and gained the table↔cards toggle + a ring-card grid over the same filtered rows.*
-- [x] **Footer score-band legend**: a compact green/amber/red key (mirroring swing's footer legend).
+- [x] **Footer score-band legend**: a compact green/amber/red key (mirroring a reference footer legend).
       *Done: a server-safe `ScoreBandLegend` (token swatches via `scoreBandSolidClass`, range text so colour
       isn't the only signal) rendered site-wide in the layout footer.*
 - [x] **Verify**: lint + typecheck + build + the full unit suite green (the band-helper + defaults
@@ -779,7 +778,7 @@ Batches are single-column stacks. Make the content as dense as swing's, in *our*
       or fonts were introduced.*
 
 ### Phase 12 — Desktop + Mobile paired audits
-**Why:** swing's standout feature — audit both form factors in one run and show paired score columns
+**Why:** a reference tool's standout feature — audit both form factors in one run and show paired score columns
 per URL. We already persist `device` per run, so this is a job fan-out + a pairing projection, not new
 storage.
 
@@ -833,7 +832,7 @@ storage.
       tests).*
 
 ### Phase 13 — Re-run / Regenerate + crawl exclude-paths & max-count
-**Why:** small, high-value power-user tools from swing's input panel and run list.
+**Why:** small, high-value power-user tools from a reference tool's input panel and run list.
 
 - [x] **Re-run / Regenerate**: a button on each Batch card (`batch-summary-console.tsx`) and the History
       batch group that re-submits that batch's exact URLs + options through the *existing*
@@ -855,7 +854,7 @@ storage.
       also retries errored rows.*
 - [x] **Crawl exclude-paths**: extend `DiscoverRequest` + `src/lib/crawl/discover.ts` with
       `excludePaths: string[]` (prefix / glob, same-origin), filtered during *both* the BFS crawl and
-      the sitemap merge; add an "exclude paths" textarea to `crawl-panel.tsx` (swing's "Don't crawl
+      the sitemap merge; add an "exclude paths" textarea to `crawl-panel.tsx` (a reference tool's "Don't crawl
       these links").
       *Done: `excludePaths` added to `DiscoverRequest`/`DiscoverInput`; a pure, unit-tested
       `compileExcludePathMatcher` (in `crawl/types.ts`, import-safe) matches against the URL **pathname**
@@ -886,7 +885,7 @@ storage.
       exclude-matcher/schema, `priorBatchId` pass-through, queue-lineage, and `HistoryRow.options` tests).*
 
 ### Phase 14 — Scheduled daily archive
-**Why:** swing's "Daily archive" / Archive tab — recurring re-runs with a browsable history. Largest
+**Why:** a reference tool's "Daily archive" / Archive tab — recurring re-runs with a browsable history. Largest
 effort; the only phase that adds architecture (a *local* scheduler, consistent with §5's "single-user,
 no Redis / cron" rationale).
 

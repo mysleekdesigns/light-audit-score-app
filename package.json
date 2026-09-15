@@ -1,10 +1,12 @@
 {
-  "name": "lightaudit",
+  "name": "lightaudit-score",
   "version": "0.1.0",
   "private": true,
-  "description": "LightAudit Score — Local-first Lighthouse auditing desktop app",
+  "description": "LightAudit Score — a local-first Lighthouse auditing web app you run from your own checkout",
+  "license": "Apache-2.0",
+  "homepage": "https://lightauditscore.com/",
   "author": {
-    "name": "LightAudit",
+    "name": "Simon",
     "email": "simon@crawlforge.dev"
   },
   "scripts": {

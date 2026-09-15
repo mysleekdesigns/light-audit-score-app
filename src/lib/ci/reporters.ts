@@ -642,7 +642,7 @@ function renderHtml(report: CiReport): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
-<title>LightAudit CI — ${escapeHtml(verdict)}</title>
+<title>LightAudit Score CI — ${escapeHtml(verdict)}</title>
 <style>${HTML_STYLE}</style>
 </head>
 <body>

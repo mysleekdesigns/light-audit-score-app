@@ -447,7 +447,7 @@ describe("discover — exclude paths", () => {
   });
 
   it("a /section/* exclude drops the bare section root from the sitemap", async () => {
-    // Mirrors the user's example.com setup: the sitemap lists section roots
+    // Mirrors a common real-world setup: the sitemap lists section roots
     // (/events, /clubs, …) AND their sub-pages; the user types `/events/*`
     // expecting BOTH to be dropped.
     stubRoutes({

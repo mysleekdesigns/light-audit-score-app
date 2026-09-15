@@ -23,8 +23,13 @@
 
 # Misc
 .DS_Store
-*.pem
 Thumbs.db
+
+# Keys / certificates — never commit, wherever they land
+*.pem
+*.key
+*.p12
+*.pfx
 
 # Debug logs
 npm-debug.log*
@@ -54,13 +59,30 @@ next-env.d.ts
 !.vscode/extensions.json
 *.swp
 
-# Local app data (SQLite DB + generated Lighthouse reports)
+# Local app data (SQLite DB + generated Lighthouse reports).
+# LH_DATA_DIR / LH_DB_PATH can relocate these anywhere, so the patterns below are
+# deliberately bare (not /data/-scoped) and cover the WAL/SHM sidecars too — a WAL
+# holds recently-written audit rows (real URLs, scores, analysis text).
 /data/
 *.sqlite
 *.sqlite3
 *.db
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+session-token
+
+# CI report artifacts — the docs show `--output lighthouse-ci.html` run from the
+# repo root, and the report embeds the audited URLs, scores and failure detail.
+lighthouse-ci.*
 
 # Claude Code (local cache + machine-local settings)
 /cache/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+**/.claude/.cc-writes/
+
+# Stray local run dirs (empty; git cannot commit empty dirs, but keep it that way)
+/jobs/
+/webhooks/

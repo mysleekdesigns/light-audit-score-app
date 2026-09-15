@@ -848,7 +848,7 @@ export function NewAuditForm({
                     <SelectTrigger
                       id={userAgentId}
                       className="w-full"
-                      title="Override the emulated page user agent — helps bot-sensitive sites (e.g. Cloudflare) serve the same content they serve a real browser."
+                      title="Override the emulated page user agent — helps sites behind a bot-protection layer serve the same content they serve a real browser."
                     >
                       <SelectValue />
                     </SelectTrigger>

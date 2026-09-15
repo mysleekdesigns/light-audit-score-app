@@ -106,7 +106,7 @@ export interface AuditOptions extends AuditCredentials {
   warmCache: boolean;
   /**
    * Optional override for the emulated page user agent — a parity lever for
-   * bot-sensitive sites (e.g. Cloudflare-fronted apps) that serve different
+   * sites behind a bot-protection layer that serve different
    * content to an automated/headless engine, which shifts environment-sensitive
    * Best Practices audits. When omitted (`undefined`), no flag is passed and
    * Lighthouse uses its config-default device UA. A string is passed straight

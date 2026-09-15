@@ -1,4 +1,6 @@
-# Local Lighthouse Auditing Tool
+# LightAudit Score
+
+[lightauditscore.com](https://lightauditscore.com/)
 
 A single-user, locally-run Next.js app for auditing the [Lighthouse](https://github.com/GoogleChrome/lighthouse)
 scores of one or many URLs. It runs the audits on your machine, streams live progress, persists
@@ -664,3 +666,13 @@ src/
 scripts/            # audit-cli.ts, mcp-server.ts, audit-worker.ts, alias-hooks.mjs
 drizzle/            # committed SQL migrations (applied at runtime)
 ```
+
+## Licence
+
+Licensed under the [Apache License 2.0](./LICENSE) — you may use, modify, and
+redistribute it, including commercially, provided you keep the notice and state
+your changes. It is provided "as is", without warranty.
+
+The agent tooling under `.claude/skills/` is vendored from upstream projects and
+stays under its own licences (see each skill's `LICENSE.txt`/`README.md`, and
+`skills-lock.json` for provenance).

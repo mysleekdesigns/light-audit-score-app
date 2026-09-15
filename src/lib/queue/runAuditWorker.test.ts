@@ -1,8 +1,8 @@
 /**
  * Tests for the process-isolated audit runner's failure handling.
  *
- * Two regressions are covered here, both motivated by a real packaged-app crash
- * where `https://www.example.com/` made the forked worker exit 1 and the recorded
+ * Two regressions are covered here, both motivated by a real crash where an
+ * audited site made the forked worker exit 1 and the recorded
  * error was the useless `"...: Node.js v22.15.1"` (the last line Node prints on
  * an uncaught crash — the real cause was thrown away):
  *

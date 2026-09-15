@@ -105,11 +105,11 @@ describe("getMigrationsDir", () => {
   });
 
   it("uses LH_MIGRATIONS_DIR when set (explicit override)", () => {
-    // In packaged mode, main.js sets this to the drizzle/ folder inside app.asar.
-    // We simulate it with a temp path here; the function just returns the string.
-    const packaged = "/Applications/LightAudit.app/Contents/Resources/app.asar/drizzle";
-    process.env.LH_MIGRATIONS_DIR = packaged;
-    expect(getMigrationsDir()).toBe(packaged);
+    // Set when the process runs from somewhere other than the repo root, so the
+    // cwd fallback would miss. The function just returns the string verbatim.
+    const elsewhere = "/opt/lightaudit-score/drizzle";
+    process.env.LH_MIGRATIONS_DIR = elsewhere;
+    expect(getMigrationsDir()).toBe(elsewhere);
   });
 
   it("uses LH_MIGRATIONS_DIR when set to a temp dir (test isolation)", () => {
