@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuditOptions } from "@/lib/lighthouse/types";
-import { runPsiAudit } from "@/lib/pagespeed/runPsiAudit";
+import { resetPsiRateLimiter } from "@/lib/pagespeed/rateLimiter";
+import { PsiQuotaError, runPsiAudit } from "@/lib/pagespeed/runPsiAudit";
 
 // Single-run baseline (one PSI API call). Multi-run median is covered separately.
 const OPTIONS: AuditOptions = {
@@ -60,9 +61,21 @@ function samplePsiResponse(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status });
+function jsonResponse(
+  body: unknown,
+  status = 200,
+  headers?: Record<string, string>,
+): Response {
+  return new Response(JSON.stringify(body), { status, headers });
 }
+
+/** Google's real 429 body for an exhausted per-minute quota. */
+const QUOTA_429 = {
+  error: {
+    message:
+      "Quota exceeded for quota metric 'Queries' and limit 'Queries per minute' of service 'pagespeedonline.googleapis.com' for consumer 'project_number:123'.",
+  },
+};
 
 /** A PSI response whose lab performance score is `score` (0–1), for median tests. */
 function psiResponseWithPerf(score: number) {
@@ -92,9 +105,15 @@ function psiResponseWithPerf(score: number) {
   });
 }
 
+beforeEach(() => {
+  // The limiter is process-wide: drop any cooldown a previous test left behind.
+  resetPsiRateLimiter();
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   vi.useRealTimers();
 });
 
@@ -159,21 +178,160 @@ describe("runPsiAudit", () => {
     expect(result.field).toBeUndefined();
   });
 
-  it("retries on 429 then succeeds (exponential backoff)", async () => {
+  it("retries a 5xx after the short transient backoff", async () => {
     vi.useFakeTimers();
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ error: { message: "rate limited" } }, 429))
+      .mockResolvedValueOnce(jsonResponse({ error: { message: "backend" } }, 503))
       .mockResolvedValueOnce(jsonResponse(samplePsiResponse()));
     vi.stubGlobal("fetch", fetchMock);
 
     const promise = runPsiAudit("https://example.com", OPTIONS);
-    // Let the backoff timer elapse (base 1000ms).
-    await vi.advanceTimersByTimeAsync(1500);
+    // Let the transient backoff (base 1000ms) elapse.
+    await vi.advanceTimersByTimeAsync(1_500);
     const result = await promise;
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result.source).toBe("psi");
+  });
+
+  it("waits for the quota window (15s, not 1s) before retrying a 429", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(QUOTA_429, 429))
+      .mockResolvedValueOnce(jsonResponse(samplePsiResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const promise = runPsiAudit("https://example.com", OPTIONS);
+    // The old 1–2s backoff would already have retried here; the window hasn't rolled.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // 15s quota backoff (+ up to 250ms jitter).
+    await vi.advanceTimersByTimeAsync(11_000);
+    const result = await promise;
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.source).toBe("psi");
+  });
+
+  it("honours Google's Retry-After header on a 429", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(QUOTA_429, 429, { "retry-after": "3" }))
+      .mockResolvedValueOnce(jsonResponse(samplePsiResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const promise = runPsiAudit("https://example.com", OPTIONS);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(2_000);
+    const result = await promise;
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.source).toBe("psi");
+  });
+
+  it("puts every concurrent job on cooldown after one 429", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(QUOTA_429, 429))
+      // A fresh Response per call — a body can only be read once.
+      .mockImplementation(async () => jsonResponse(samplePsiResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = runPsiAudit("https://example.com/a", OPTIONS);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // A second job starting 1s later must not fire into the exhausted window.
+    const second = runPsiAudit("https://example.com/b", OPTIONS);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Cooldown (15s from the 429) elapses → both go.
+    await vi.advanceTimersByTimeAsync(10_000);
+    await Promise.all([first, second]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("gives up after five 429s with a quota-specific error", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("PAGESPEED_API_KEY", "test-key");
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () => jsonResponse(QUOTA_429, 429));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const outcome = runPsiAudit("https://example.com", OPTIONS).catch((err) => err);
+    // 15s + 30s + 60s + 60s of waits (+ jitter).
+    await vi.advanceTimersByTimeAsync(200_000);
+    const err = (await outcome) as Error;
+
+    expect(err).toBeInstanceOf(PsiQuotaError);
+    expect(err.message).toMatch(/per-minute quota/);
+    expect(err.message).toMatch(/5 attempts over 165s/);
+    expect(err.message).toMatch(/Queries per minute/);
+    expect(err.message).toMatch(/PAGESPEED_REQUESTS_PER_MINUTE/);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
+  it("points a keyless caller at PAGESPEED_API_KEY when the quota is exhausted", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("PAGESPEED_API_KEY", "");
+    vi.stubEnv("GOOGLE_API_KEY", "");
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () => jsonResponse(QUOTA_429, 429));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const outcome = runPsiAudit("https://example.com", OPTIONS).catch((err) => err);
+    await vi.advanceTimersByTimeAsync(200_000);
+    const err = (await outcome) as Error;
+
+    expect(err).toBeInstanceOf(PsiQuotaError);
+    expect(err.message).toMatch(/Set PAGESPEED_API_KEY/);
+    expect(err.message).not.toMatch(/PAGESPEED_REQUESTS_PER_MINUTE/);
+  });
+
+  it("keeps completed runs when a later run is quota-rejected", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(psiResponseWithPerf(0.8)))
+      .mockResolvedValueOnce(jsonResponse(psiResponseWithPerf(0.92)))
+      .mockImplementation(async () => jsonResponse(QUOTA_429, 429));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const promise = runPsiAudit("https://example.com", { ...OPTIONS, runs: 3 });
+    await vi.advanceTimersByTimeAsync(200_000);
+    const result = await promise;
+
+    // 2 good runs + 5 rejected attempts for the third.
+    expect(fetchMock).toHaveBeenCalledTimes(7);
+    expect(result.runs).toBe(2);
+    expect(result.perRunScores.map((s) => s.performance)).toEqual([80, 92]);
+    expect(result.runWarnings).toEqual([
+      expect.stringMatching(/completed 2 of 3 runs .* on run 3/),
+    ]);
+  });
+
+  it("still fails the job when the first run is quota-rejected", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () => jsonResponse(QUOTA_429, 429));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const outcome = runPsiAudit("https://example.com", { ...OPTIONS, runs: 3 }).catch(
+      (err) => err,
+    );
+    await vi.advanceTimersByTimeAsync(200_000);
+
+    expect(await outcome).toBeInstanceOf(PsiQuotaError);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 
   it("throws a classified error on a non-retriable 4xx", async () => {

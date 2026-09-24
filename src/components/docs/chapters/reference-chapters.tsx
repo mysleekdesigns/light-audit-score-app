@@ -261,8 +261,17 @@ export function ReferenceChapters() {
             },
             {
               term: "Rate limited",
-              detail:
-                "Too many requests at once for Google’s per-minute burst. Lower runs per URL or concurrency, or split the batch. The counter on the form warns you before you start.",
+              detail: (
+                <>
+                  Google answered HTTP 429: the key’s project used up its “Queries per minute”
+                  quota. The engine waits for the minute to roll over (honouring Google’s
+                  Retry-After), pauses every other page in the batch meanwhile, and retries up to
+                  five times — so an error here means the quota stayed exhausted for two to three
+                  minutes. Check the project’s quota in Google Cloud Console: it can be lower than
+                  the 240/min the counter assumes, or shared with another app. Set{" "}
+                  <Code>PAGESPEED_REQUESTS_PER_MINUTE</Code> below it, or lower concurrency.
+                </>
+              ),
             },
             {
               term: "“Bring your own AI”",

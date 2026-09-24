@@ -15,6 +15,16 @@
  * `median.lhr`, with `source: "psi"` and optional `field` — so the queue,
  * persistence, reports, and results UI treat it identically.
  *
+ * Quota handling. Google enforces a per-project "Queries per minute" quota and
+ * answers HTTP 429 the moment it is exceeded. Every request goes through the
+ * process-wide {@link getPsiRateLimiter}: it paces calls under the configured
+ * per-minute ceiling, and a 429 puts EVERY concurrent job on cooldown (Google's
+ * `Retry-After`, else 15s doubling to 60s) so the batch stops feeding an
+ * exhausted window. A request gets {@link PSI_QUOTA_MAX_ATTEMPTS} such attempts;
+ * only then is it a {@link PsiQuotaError}, and if the job already has completed
+ * runs it keeps them (median of fewer runs, flagged in `runWarnings`) instead of
+ * discarding Google's finished work.
+ *
  * PSI's lab conditions are FIXED Google-side (no throttling / CPU-slowdown
  * parameter exists in the API), so `options` levers other than runs / formFactor /
  * categories / locale are nominal; cross-URL parallelism is the queue's
@@ -33,30 +43,24 @@ import { buildPsiUrl } from "@/lib/pagespeed/buildPsiUrl";
 import {
   getPsiApiKey,
   PSI_MAX_ATTEMPTS,
+  PSI_QUOTA_MAX_ATTEMPTS,
+  PSI_QUOTA_RETRY_BASE_MS,
+  PSI_QUOTA_RETRY_MAX_MS,
   PSI_REQUEST_TIMEOUT_MS,
   PSI_RETRY_BASE_MS,
 } from "@/lib/pagespeed/config";
 import { parseFieldData } from "@/lib/pagespeed/parseFieldData";
+import { abortableDelay, getPsiRateLimiter } from "@/lib/pagespeed/rateLimiter";
 
-/** Abortable sleep — rejects (so the retry loop unwinds) if `signal` fires mid-wait. */
-function delay(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(signal.reason ?? new Error("aborted"));
-      return;
-    }
-    const timer = setTimeout(() => {
-      cleanup();
-      resolve();
-    }, ms);
-    const onAbort = (): void => {
-      clearTimeout(timer);
-      cleanup();
-      reject(signal?.reason ?? new Error("aborted"));
-    };
-    const cleanup = (): void => signal?.removeEventListener("abort", onAbort);
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
+/**
+ * Google answered HTTP 429 to every quota attempt for one request. Distinct from
+ * a plain `Error` so {@link runPsiAudit} can keep the runs it already has.
+ */
+export class PsiQuotaError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PsiQuotaError";
+  }
 }
 
 /** Best-effort extraction of Google's JSON error message from a non-OK response. */
@@ -73,6 +77,34 @@ async function readErrorMessage(response: Response): Promise<string> {
   return response.statusText || `HTTP ${response.status}`;
 }
 
+/**
+ * `Retry-After` as milliseconds from now, when Google sends one (delta-seconds or
+ * an HTTP-date). Clamped to twice the quota ceiling so a bogus header cannot park
+ * a job for an hour; `undefined` when absent or unparseable.
+ */
+function retryAfterMs(response: Response): number | undefined {
+  const header = response.headers.get("retry-after")?.trim();
+  if (!header) return undefined;
+  let ms: number;
+  if (/^\d+$/.test(header)) {
+    ms = Number.parseInt(header, 10) * 1000;
+  } else {
+    const at = Date.parse(header);
+    if (Number.isNaN(at)) return undefined;
+    ms = at - Date.now();
+  }
+  return Math.min(Math.max(ms, 0), PSI_QUOTA_RETRY_MAX_MS * 2);
+}
+
+/** Wait before the next attempt after the n-th consecutive 429 with no
+ * `Retry-After`: 15s, 30s, 60s, 60s… — long enough for the minute to roll over. */
+function quotaBackoffMs(failures: number): number {
+  return Math.min(
+    PSI_QUOTA_RETRY_BASE_MS * 2 ** (failures - 1),
+    PSI_QUOTA_RETRY_MAX_MS,
+  );
+}
+
 /** Compose a user-facing error line for a non-retriable / exhausted PSI failure. */
 function psiHttpError(
   status: number,
@@ -81,23 +113,56 @@ function psiHttpError(
   keyless: boolean,
 ): string {
   const base = `PageSpeed Insights could not audit ${url} (HTTP ${status}): ${detail}`;
-  // 429/403 keyless → the most common fix is to add an API key.
-  if (keyless && (status === 429 || status === 403)) {
+  // 403 keyless → the most common fix is to add an API key.
+  if (keyless && status === 403) {
     return `${base}. Set PAGESPEED_API_KEY for higher rate limits.`;
   }
   return base;
 }
 
-/** Fetch + parse the PSI JSON with retry/backoff on 429 / 5xx / network errors. */
+/** User-facing line for a 429 that outlasted every quota attempt. */
+function psiQuotaExhausted(
+  detail: string,
+  url: string,
+  keyless: boolean,
+  attempts: number,
+  waitedMs: number,
+): string {
+  const waited = Math.round(waitedMs / 1000);
+  const base =
+    `PageSpeed Insights could not audit ${url}: Google's per-minute quota for ` +
+    `this API key's project stayed exhausted across ${attempts} attempts over ` +
+    `${waited}s (HTTP 429: ${detail}).`;
+  if (keyless) {
+    return `${base} Set PAGESPEED_API_KEY — keyless requests have no quota.`;
+  }
+  return (
+    `${base} Lower Concurrency or runs per URL, check the project's ` +
+    `"Queries per minute" quota in Google Cloud Console (another app may share ` +
+    `it), or set PAGESPEED_REQUESTS_PER_MINUTE to pace requests below it.`
+  );
+}
+
+/**
+ * Fetch + parse the PSI JSON through the shared limiter, retrying transient
+ * failures (5xx / network, short backoff) and quota rejections (429, long
+ * backoff shared with every other job) on separate budgets.
+ */
 async function fetchPsi(
   requestUrl: string,
   url: string,
   keyless: boolean,
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
-  let lastError: Error | undefined;
+  const limiter = getPsiRateLimiter();
+  let transientFailures = 0;
+  let quotaFailures = 0;
+  let quotaWaitedMs = 0;
 
-  for (let attempt = 1; attempt <= PSI_MAX_ATTEMPTS; attempt += 1) {
+  for (;;) {
+    // Shared pacing, plus any cooldown a 429 (ours or another job's) put in place.
+    await limiter.acquire(signal);
+
     const timeout = AbortSignal.timeout(PSI_REQUEST_TIMEOUT_MS);
     const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
 
@@ -112,7 +177,8 @@ async function fetchPsi(
       // (its `signal?.aborted` guard recognises it), never a recorded failure.
       if (signal?.aborted) throw err;
       // Timeout or network error → retry (with backoff) until attempts run out.
-      lastError = new Error(
+      transientFailures += 1;
+      const error = new Error(
         `PageSpeed Insights request failed for ${url}: ${
           timeout.aborted
             ? `timed out after ${PSI_REQUEST_TIMEOUT_MS / 1000}s`
@@ -121,11 +187,12 @@ async function fetchPsi(
               : String(err)
         }`,
       );
-      if (attempt < PSI_MAX_ATTEMPTS) {
-        await delay(PSI_RETRY_BASE_MS * 2 ** (attempt - 1), signal);
-        continue;
-      }
-      throw lastError;
+      if (transientFailures >= PSI_MAX_ATTEMPTS) throw error;
+      await abortableDelay(
+        PSI_RETRY_BASE_MS * 2 ** (transientFailures - 1),
+        signal,
+      );
+      continue;
     }
 
     if (response.ok) {
@@ -133,18 +200,44 @@ async function fetchPsi(
     }
 
     const detail = await readErrorMessage(response);
-    const retriable = response.status === 429 || response.status >= 500;
-    if (retriable && attempt < PSI_MAX_ATTEMPTS) {
-      lastError = new Error(psiHttpError(response.status, detail, url, keyless));
-      await delay(PSI_RETRY_BASE_MS * 2 ** (attempt - 1), signal);
+
+    if (response.status === 429) {
+      // Google's per-minute quota. A 1–2s wait cannot help — the window has to
+      // roll over — so wait `Retry-After` or 15s+, and pause EVERY job through
+      // the shared limiter so the others stop feeding the exhausted window and
+      // retrying in lockstep against it. `acquire()` above waits the cooldown out.
+      quotaFailures += 1;
+      const wait = Math.max(
+        retryAfterMs(response) ?? quotaBackoffMs(quotaFailures),
+        1_000,
+      );
+      limiter.cooldown(wait);
+      if (quotaFailures >= PSI_QUOTA_MAX_ATTEMPTS) {
+        throw new PsiQuotaError(
+          psiQuotaExhausted(detail, url, keyless, quotaFailures, quotaWaitedMs),
+        );
+      }
+      quotaWaitedMs += wait;
       continue;
     }
+
+    if (response.status >= 500) {
+      transientFailures += 1;
+      if (transientFailures >= PSI_MAX_ATTEMPTS) {
+        throw new Error(psiHttpError(response.status, detail, url, keyless));
+      }
+      await abortableDelay(
+        Math.max(
+          PSI_RETRY_BASE_MS * 2 ** (transientFailures - 1),
+          retryAfterMs(response) ?? 0,
+        ),
+        signal,
+      );
+      continue;
+    }
+
     throw new Error(psiHttpError(response.status, detail, url, keyless));
   }
-
-  // Unreachable in practice (the loop always returns or throws), but satisfies
-  // the type checker and guards against a future off-by-one.
-  throw lastError ?? new Error(`PageSpeed Insights failed for ${url}.`);
 }
 
 /** One completed PSI analysis: the raw LHR, its parsed projection, CrUX field
@@ -208,12 +301,27 @@ export async function runPsiAudit(
   // Sequential by design — one PSI API call per run (quota = runs × URLs).
   // Running a URL's calls one-at-a-time avoids PSI's short per-URL result cache
   // and rate-limit bursts; cross-URL parallelism is the queue's concurrency knob.
-  // No partial-success: if any run throws we let it propagate and fail the whole
-  // job (parity with the local engine). Transient 429/5xx are already absorbed by
-  // `fetchPsi`'s retry/backoff, so a hard failure is a persistent problem.
   const runs: PsiRun[] = [];
+  const warnings: string[] = [];
   for (let i = 0; i < options.runs; i += 1) {
-    runs.push(await runPsiOnce(url, options, signal));
+    try {
+      runs.push(await runPsiOnce(url, options, signal));
+    } catch (err) {
+      // A quota rejection AFTER at least one run completed: keep what we have
+      // (median of fewer runs, flagged in `runWarnings`) rather than throw away
+      // Google's finished work. Zero completed runs, and every other failure
+      // (page runtimeError, 4xx, exhausted transient retries), still fail the
+      // whole job — parity with the local engine.
+      if (err instanceof PsiQuotaError && runs.length > 0) {
+        warnings.push(
+          `PageSpeed Insights completed ${runs.length} of ${options.runs} runs ` +
+            `for this page: Google's per-minute quota stayed exhausted on run ` +
+            `${i + 1}, so the scores are the median of the completed runs.`,
+        );
+        break;
+      }
+      throw err;
+    }
   }
 
   // Each run is already parsed, so the median run carries its own projection and
@@ -237,7 +345,9 @@ export async function runPsiAudit(
     perRunEnvironments: runs.map((run) => run.parsed.environment),
     fetchTime: median.fetchTime,
     lighthouseVersion: parsed.lighthouseVersion,
-    runWarnings: Array.from(new Set(runs.flatMap((run) => run.parsed.runWarnings))),
+    runWarnings: Array.from(
+      new Set([...runs.flatMap((run) => run.parsed.runWarnings), ...warnings]),
+    ),
     environment: parsed.environment,
     source: "psi",
     field: median.field,
