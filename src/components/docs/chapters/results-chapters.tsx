@@ -106,6 +106,12 @@ export function ResultsChapters() {
             data, for feeding into something else.
           </LI>
           <LI>
+            <strong className="font-medium text-foreground">Export</strong> downloads that one
+            audit on its own as <UiLabel>JSON</UiLabel> or <UiLabel>CSV</UiLabel> — the same flat
+            record the bulk export below produces, without the rest of the archive. The file is
+            named after the page and device, so a folder of them stays readable.
+          </LI>
+          <LI>
             <strong className="font-medium text-foreground">Delete</strong> removes that audit and
             its stored reports, after a confirmation.
           </LI>
@@ -114,8 +120,14 @@ export function ResultsChapters() {
         <H3>Bulk actions</H3>
         <P>
           The strip at the bottom of the control panel counts what is currently in view and acts on
-          it: <UiLabel>JSON</UiLabel> and <UiLabel>CSV</UiLabel> download the visible rows, and{" "}
-          <UiLabel>Open all</UiLabel> opens every visible report in its own tab.
+          it: <UiLabel>JSON</UiLabel> and <UiLabel>CSV</UiLabel> download every visible row in one
+          file, and <UiLabel>Open all</UiLabel> opens every visible report in its own tab.
+        </P>
+        <P>
+          Each website header has an Export of its own, too. It downloads every page currently
+          shown under that site — the whole crawl — as one <UiLabel>JSON</UiLabel> or{" "}
+          <UiLabel>CSV</UiLabel> file, leaving the other sites in view out of it. It respects the
+          filter box, so narrow the list first if you only want part of a site.
         </P>
         <Callout tone="warn" label="Clear history is permanent">
           <UiLabel>Clear history</UiLabel> deletes every stored audit and report, not just the ones

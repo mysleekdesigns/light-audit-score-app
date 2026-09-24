@@ -92,6 +92,64 @@ export function rowsToJson(rows: HistoryRow[]): string {
   return JSON.stringify(rows.map(toExportRecord), null, 2);
 }
 
+/** Host part of a run slug: dots survive (`example.com`), everything else is a separator. */
+const HOST_SEPARATORS = /[^a-z0-9.]+/g;
+/** Path part of a run slug: strictly `[a-z0-9]`, so `/`, `?`, `=`, `%` all become dashes. */
+const PATH_SEPARATORS = /[^a-z0-9]+/g;
+/** Longest path segment a run slug keeps, so a long query string can't break a filename. */
+const PATH_SLUG_MAX = 40;
+
+/** Lower-case, turn every run of `separators` into one dash, trim dashes off both ends. */
+function slugify(text: string, separators: RegExp): string {
+  return text.toLowerCase().replace(separators, "-").replace(/^-+|-+$/g, "");
+}
+
+/** `decodeURIComponent` that hands back its input on a malformed escape. */
+function safeDecode(text: string): string {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return text;
+  }
+}
+
+/**
+ * A filesystem-safe name stem for ONE run's export — `<host>-<path>-<device>`,
+ * e.g. `example.com-pricing-mobile` — so a folder of per-run downloads sorts by
+ * site and reads without opening anything. The host keeps its dots and drops a
+ * leading `www.` to match the History page's site grouping; the path (with its
+ * query string, percent-escapes decoded so `a%20b` reads `a-b`) is reduced to
+ * `[a-z0-9]` with dashes between, and capped at {@link PATH_SLUG_MAX} characters.
+ * A bare origin contributes no path part, and a string that won't parse as a URL
+ * is slugged whole in the host's place. Never throws.
+ */
+export function runExportSlug(row: Pick<HistoryRow, "url" | "formFactor">): string {
+  let host = row.url;
+  let path = "";
+  try {
+    const parsed = new URL(row.url);
+    host = parsed.hostname.replace(/^www\./, "");
+    path = safeDecode(`${parsed.pathname}${parsed.search}`);
+  } catch {
+    // Not a URL — the raw string stands in for the host part.
+  }
+  const hostSlug = slugify(host, HOST_SEPARATORS);
+  const pathSlug = slugify(path, PATH_SEPARATORS)
+    .slice(0, PATH_SLUG_MAX)
+    .replace(/-+$/, "");
+  return [hostSlug, pathSlug, row.formFactor].filter(Boolean).join("-");
+}
+
+/**
+ * The name stem for a whole-site export: the hostname as the History page groups
+ * it, treated the way {@link runExportSlug} treats a host — `www.` dropped, dots
+ * kept, anything else a dash. A hostname is ASCII by the time `URL` has parsed
+ * it, so this mostly guards the fallback where the "host" is a raw non-URL string.
+ */
+export function siteExportSlug(host: string): string {
+  return slugify(host.replace(/^www\./i, ""), HOST_SEPARATORS);
+}
+
 /**
  * Ordered CSV columns: the scalar fields first, then the category scores (in
  * `LIGHTHOUSE_CATEGORIES` order, so a new category appends rather than

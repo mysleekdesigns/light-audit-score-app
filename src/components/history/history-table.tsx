@@ -17,6 +17,7 @@ import {
   ChevronDown,
   ChevronUp,
   ChevronsUpDown,
+  Download,
   ExternalLink,
   FileJson,
   Filter,
@@ -61,6 +62,13 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
   Table,
@@ -100,7 +108,12 @@ import { collapseRuns, type CollapsedRun } from "@/lib/history/collapse";
 import { safeHttpHref } from "@/lib/redactUrl";
 import type { DevicePair } from "@/lib/pairing/devicePairs";
 import { hasBothDevices, pairByDevice } from "@/lib/pairing/devicePairs";
-import { rowsToCsv, rowsToJson } from "@/lib/export/exporters";
+import {
+  rowsToCsv,
+  rowsToJson,
+  runExportSlug,
+  siteExportSlug,
+} from "@/lib/export/exporters";
 import { rowClearsThresholds } from "@/lib/batch-summary/summary";
 import type { FormFactor, LighthouseCategory } from "@/lib/lighthouse/types";
 import type { Batch } from "@/lib/queue/types";
@@ -779,10 +792,128 @@ function RerunTrackingProvider({ children }: { children: ReactNode }) {
 }
 
 /**
+ * The export control the row cluster and the site header both use: a `Download`
+ * trigger opening a two-item JSON / CSV menu over one set of runs. Callers say
+ * WHAT is exported (`rows`), how the file is named (`fileStem`, called at click
+ * time so the timestamp is fresh and two exports a minute apart don't collide)
+ * and the words — `label` previews the scope inside the menu, `ariaLabel` and
+ * `tooltip` name the trigger. Serialization runs in the item handler, never on
+ * render, through the same `rowsToJson` / `rowsToCsv` the toolbar's bulk export
+ * uses, so all three exports share one record shape. One trigger with a menu
+ * rather than two icon buttons keeps the row cluster to five glyphs and keeps
+ * `FileJson` from meaning both "open the raw report" and "export" side by side.
+ */
+function ExportMenu({
+  rows,
+  fileStem,
+  label,
+  ariaLabel,
+  tooltip,
+  size = "icon-xs",
+  className,
+}: {
+  rows: HistoryRow[];
+  fileStem: () => string;
+  label: string;
+  ariaLabel: string;
+  tooltip: string;
+  size?: "icon-xs" | "icon-sm";
+  className?: string;
+}) {
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size={size}
+              aria-label={ariaLabel}
+              className={className}
+            >
+              <Download />
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent>{tooltip}</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent
+        align="end"
+        // The zoom/fade is decorative; a reduced-motion user gets the menu at once.
+        className="min-w-48 max-w-72 motion-reduce:animate-none motion-reduce:duration-0"
+      >
+        {/* What the download covers, in the file's own lower-case mono — so the
+            menu doubles as a preview of what lands in the Downloads folder. */}
+        <DropdownMenuLabel className="truncate font-mono text-[0.625rem] font-normal tracking-[0.04em] text-muted-foreground/80">
+          {label}
+        </DropdownMenuLabel>
+        <DropdownMenuItem
+          onSelect={() => downloadJson(`${fileStem()}.json`, rowsToJson(rows))}
+        >
+          <FileJson aria-hidden />
+          JSON
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={() => downloadCsv(`${fileStem()}.csv`, rowsToCsv(rows))}
+        >
+          <Sheet aria-hidden />
+          CSV
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * Per-run export: THIS run alone — for when one page's numbers need to go into
+ * a ticket or a spreadsheet without dragging the archive along. Available for
+ * failed runs too: the record carries `status` + `errorMessage`, which is
+ * exactly what you'd hand on.
+ */
+function ExportRunMenu({ row }: { row: HistoryRow }) {
+  return (
+    <ExportMenu
+      rows={[row]}
+      fileStem={() =>
+        `lighthouse-run-${runExportSlug(row)}-${timestampSlug()}`
+      }
+      label={runExportSlug(row)}
+      ariaLabel={`Export run for ${row.url}`}
+      tooltip="Export this run"
+    />
+  );
+}
+
+/**
+ * Per-website export: every run shown under one host section — each visible
+ * page's latest run, both devices in the paired layout — as one JSON or CSV.
+ * This is the "give me the whole crawl of this site" export, sitting between the
+ * toolbar's (every site in view) and the row's (one run). It honours the active
+ * filter exactly as the toolbar does, so what you download is what the section
+ * shows; narrow the filter first to export part of a site.
+ */
+function ExportSiteMenu({ host, rows }: { host: string; rows: HistoryRow[] }) {
+  const runs = `${rows.length} ${rows.length === 1 ? "run" : "runs"}`;
+  return (
+    <ExportMenu
+      rows={rows}
+      fileStem={() =>
+        `lighthouse-site-${siteExportSlug(host)}-${timestampSlug()}`
+      }
+      label={`${host} · ${runs}`}
+      ariaLabel={`Export all runs for ${host}`}
+      tooltip={`Export this site · ${runs}`}
+      size="icon-sm"
+      className="shrink-0 text-muted-foreground hover:text-foreground"
+    />
+  );
+}
+
+/**
  * Per-run action cluster: re-run this single page on this device (PRD §6 Phase
- * 13) without leaving the archive, delete it, plus the report links. Re-run and
- * delete are available even for errored rows, so they sit outside the report
- * links (which collapse to `—` for failures).
+ * 13) without leaving the archive, export just this run, delete it, plus the
+ * report links. Re-run, export and delete are available even for errored rows,
+ * so they sit outside the report links (which collapse to `—` for failures).
  */
 function RowActions({ row }: { row: HistoryRow }) {
   const { pending, start } = useContext(RerunTrackingContext);
@@ -800,6 +931,7 @@ function RowActions({ row }: { row: HistoryRow }) {
         onCreated={(batch) => start(row, batch)}
       />
       <ReportLinks row={row} />
+      <ExportRunMenu row={row} />
       <DeleteRunButton row={row} />
     </div>
   );
@@ -1535,20 +1667,43 @@ function groupByHost<T>(
 }
 
 /**
+ * The latest run of each present side of every pair — what a paired layout
+ * exports, whether for the whole view or one website's section.
+ */
+function latestRunsOfPairs(
+  pairs: readonly DevicePair<CollapsedRun>[],
+): HistoryRow[] {
+  return pairs.flatMap((pair) =>
+    [pair.mobile, pair.desktop]
+      .filter((entry): entry is CollapsedRun => entry != null)
+      .map((entry) => entry.latest),
+  );
+}
+
+/**
  * One website's collapsible section: an accordion header carrying the hostname
  * and a compact telemetry strip (pages audited + how many still need work), over
  * a body — that site's table or cards — supplied as children. Mirrors the live
  * Audit results' per-host accordion so the two surfaces read the same way.
+ *
+ * The site export sits BESIDE the accordion trigger, not inside it: the trigger
+ * is a `<button>`, so an action within it would nest interactive controls (and
+ * every click on the export would also toggle the section). Radix renders the
+ * header as an `<h3>`, which the wrapper stretches to take the remaining width
+ * so the trigger's hit target is as wide as before, minus one icon.
  */
 function HostSection({
   host,
   pageCount,
   needsWorkCount,
+  rows,
   children,
 }: {
   host: string;
   pageCount: number;
   needsWorkCount: number;
+  /** The runs this section shows — what its export downloads. */
+  rows: HistoryRow[];
   children: React.ReactNode;
 }) {
   return (
@@ -1556,28 +1711,31 @@ function HostSection({
       value={host}
       className="rounded-lg border border-border/60 bg-card/40 px-4"
     >
-      <AccordionTrigger className="items-center hover:no-underline">
-        <span className="flex flex-1 flex-wrap items-center justify-between gap-x-4 gap-y-1 pr-3">
-          <span className="flex items-center gap-2">
-            <Globe aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="font-mono text-sm text-foreground">{host}</span>
-          </span>
-          <span className="flex items-center gap-4 font-mono text-[0.7rem] uppercase tracking-[0.16em] tabular-nums">
-            {needsWorkCount > 0 ? (
+      <div className="flex items-center gap-1 [&>h3]:min-w-0 [&>h3]:flex-1">
+        <AccordionTrigger className="items-center hover:no-underline">
+          <span className="flex flex-1 flex-wrap items-center justify-between gap-x-4 gap-y-1 pr-3">
+            <span className="flex items-center gap-2">
+              <Globe aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="font-mono text-sm text-foreground">{host}</span>
+            </span>
+            <span className="flex items-center gap-4 font-mono text-[0.7rem] uppercase tracking-[0.16em] tabular-nums">
+              {needsWorkCount > 0 ? (
+                <span className="text-muted-foreground">
+                  <span className="text-score-average">{needsWorkCount}</span> need
+                  work
+                </span>
+              ) : (
+                <span className="text-score-good">All pass</span>
+              )}
               <span className="text-muted-foreground">
-                <span className="text-score-average">{needsWorkCount}</span> need
-                work
+                <span className="text-foreground">{pageCount}</span>{" "}
+                {pageCount === 1 ? "page" : "pages"}
               </span>
-            ) : (
-              <span className="text-score-good">All pass</span>
-            )}
-            <span className="text-muted-foreground">
-              <span className="text-foreground">{pageCount}</span>{" "}
-              {pageCount === 1 ? "page" : "pages"}
             </span>
           </span>
-        </span>
-      </AccordionTrigger>
+        </AccordionTrigger>
+        <ExportSiteMenu host={host} rows={rows} />
+      </div>
       <AccordionContent>{children}</AccordionContent>
     </AccordionItem>
   );
@@ -1721,12 +1879,26 @@ function HistoryTableView({ rows }: HistoryTableProps) {
   // Built from the already-sorted entries/pairs, so sites come out in the same
   // grouped order and pages keep their order within each site. Only the active
   // layout's layer is populated (flat vs. paired).
+  // Each group also carries `rows` — the latest runs it shows — which is what
+  // its header's site export downloads.
   const flatHostGroups = useMemo(
-    () => (paired ? [] : groupByHost(flatRows, (entry) => entry.latest.url)),
+    () =>
+      paired
+        ? []
+        : groupByHost(flatRows, (entry) => entry.latest.url).map((group) => ({
+            ...group,
+            rows: group.items.map((entry) => entry.latest),
+          })),
     [paired, flatRows],
   );
   const pairedHostGroups = useMemo(
-    () => (paired ? groupByHost(pairs, (pair) => pair.url) : []),
+    () =>
+      paired
+        ? groupByHost(pairs, (pair) => pair.url).map((group) => ({
+            ...group,
+            rows: latestRunsOfPairs(group.items),
+          }))
+        : [],
     [paired, pairs],
   );
 
@@ -1758,13 +1930,7 @@ function HistoryTableView({ rows }: HistoryTableProps) {
   // flat list in single-device mode, or both present sides of every visible pair.
   const exportRows = useMemo<HistoryRow[]>(
     () =>
-      paired
-        ? pairs.flatMap((pair) =>
-            [pair.mobile, pair.desktop]
-              .filter((entry): entry is CollapsedRun => entry != null)
-              .map((entry) => entry.latest),
-          )
-        : flatRows.map((entry) => entry.latest),
+      paired ? latestRunsOfPairs(pairs) : flatRows.map((entry) => entry.latest),
     [paired, pairs, flatRows],
   );
 
@@ -2023,6 +2189,7 @@ function HistoryTableView({ rows }: HistoryTableProps) {
                 host={group.host}
                 pageCount={group.items.length}
                 needsWorkCount={group.items.filter(pairNeedsWork).length}
+                rows={group.rows}
               >
                 {view === "cards" ? (
                   <PairedCardsBody pairs={group.items} />
@@ -2050,6 +2217,7 @@ function HistoryTableView({ rows }: HistoryTableProps) {
                 needsWorkCount={
                   group.items.filter((entry) => rowNeedsWork(entry.latest)).length
                 }
+                rows={group.rows}
               >
                 {view === "cards" ? (
                   <CardsBody entries={group.items} />

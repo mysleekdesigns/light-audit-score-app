@@ -5,6 +5,8 @@ import {
   csvCell,
   rowsToCsv,
   rowsToJson,
+  runExportSlug,
+  siteExportSlug,
   toExportRecord,
 } from "@/lib/export/exporters";
 
@@ -118,6 +120,52 @@ describe("rowsToJson", () => {
     expect(parsed).toHaveLength(1);
     expect(parsed[0].url).toBe("https://example.com/");
     expect(json).toContain("\n"); // pretty-printed
+  });
+});
+
+describe("runExportSlug", () => {
+  it("names a run <host>-<path>-<device>, dropping www.", () => {
+    expect(runExportSlug(makeRow({ url: "https://www.example.com/pricing/" }))).toBe(
+      "example.com-pricing-mobile",
+    );
+  });
+
+  it("omits the path part for a bare origin", () => {
+    expect(
+      runExportSlug(makeRow({ url: "https://example.com/", formFactor: "desktop" })),
+    ).toBe("example.com-desktop");
+  });
+
+  it("lower-cases, decodes escapes, and flattens the query string into single dashes", () => {
+    expect(runExportSlug(makeRow({ url: "https://Example.com/Search?q=a%20b&x=1" }))).toBe(
+      "example.com-search-q-a-b-x-1-mobile",
+    );
+  });
+
+  it("caps a long path so the filename stays OS-safe, with no trailing dash", () => {
+    const slug = runExportSlug(
+      makeRow({ url: `https://example.com/${"segment/".repeat(20)}` }),
+    );
+    expect(slug.startsWith("example.com-")).toBe(true);
+    expect(slug.endsWith("-mobile")).toBe(true);
+    const path = slug.slice("example.com-".length, -"-mobile".length);
+    expect(path.length).toBeLessThanOrEqual(40);
+    expect(path.endsWith("-")).toBe(false);
+  });
+
+  it("slugs a string that is not a URL instead of throwing", () => {
+    expect(runExportSlug(makeRow({ url: "not a url" }))).toBe("not-a-url-mobile");
+  });
+});
+
+describe("siteExportSlug", () => {
+  it("keeps a hostname's dots and drops a leading www.", () => {
+    expect(siteExportSlug("crawlforge.dev")).toBe("crawlforge.dev");
+    expect(siteExportSlug("www.example.com")).toBe("example.com");
+  });
+
+  it("lower-cases and dashes anything that is not a hostname character", () => {
+    expect(siteExportSlug("Not A Host")).toBe("not-a-host");
   });
 });
 
